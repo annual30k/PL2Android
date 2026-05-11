@@ -1,0 +1,87 @@
+# PL2Android 中文说明
+
+PL2Android 是 PatrolLink 执法耳机 App 的 Android 原生实现版本，用于验证移动端核心业务流程、硬件接入边界、后台服务能力和未来后端接口契约。
+
+技术栈：
+
+- Kotlin
+- Jetpack Compose + Material 3
+- MVVM 风格状态管理
+- 面向未来 REST、WebSocket、BLE、Wi-Fi 文件传输接口的 Mock 数据层
+
+使用方式：用 Android Studio 打开当前目录，选择 `app` 配置运行即可。
+
+## 已实现功能范围
+
+- 登录和会话启动流程，当前使用接近真实 token 响应结构的 Mock 数据。
+- 设备扫描、绑定、拍照指令、录音开关和对讲开关。
+- 告警监听、确认、关闭、误报和请求增援处理路径。
+- 媒体列表、SHA-256 校验状态、下载/上传进度状态机和删除操作。
+- 类 WebSocket 连接与心跳确认流程。
+- 低延迟、均衡、证据质量三种模式的流转发状态机。
+- SOS 激活和取消流程，包含位置、录音和增援 ETA 状态。
+- Spring Boot 风格 REST Mock 契约，统一使用 `code/message/data/traceId/timestamp`。
+- 分页列表契约，统一使用 `items/page/pageSize/total/hasMore`。
+- 安全 token 存储、Android 权限规划、后台任务队列、证据完整性哈希等平台边界。
+- 基于 OkHttp 的真实 REST 客户端和 REST-backed gateway 实现。
+- 基于 OkHttp WebSocket 的实时通道骨架，用于心跳和告警推送。
+- Android BLE 扫描 gateway 骨架和 BLE 指令编码器。
+- 设备热点 Wi-Fi 文件服务客户端，用于文件列表、下载和上传。
+- Android Keystore 加密会话存储。
+- BLE、定位、相机、录音、通知等运行时权限入口。
+- SOS、流传输、对讲、心跳保活相关前台服务和通知通道。
+- 基于 `ConnectivityManager` 的网络监测。
+- 版本检查 gateway 和离线同步引擎。
+
+硬件和网络边界定义在 `domain/Contracts.kt` 中。当前实现以确定性 Mock 为主，因此在没有执法耳机硬件、没有真实后端服务的情况下也可以运行和测试。
+
+## Mock REST 数据契约
+
+Android Mock 层按照未来 Spring Boot 后端接口形态设计。Redis、MySQL、国产数据库等后端存储选型属于服务端内部实现细节，App 侧只依赖稳定的 REST DTO。
+
+统一响应结构：
+
+```json
+{
+  "code": 200,
+  "message": "OK",
+  "data": {},
+  "traceId": "mock-trace-0001",
+  "timestamp": 1715832000
+}
+```
+
+分页响应结构：
+
+```json
+{
+  "items": [],
+  "page": 1,
+  "pageSize": 20,
+  "total": 0,
+  "hasMore": false
+}
+```
+
+DTO 和映射逻辑位于 `app/src/main/java/com/patrollink/data/remote`。
+
+## 真实集成切换点
+
+- 后端 REST：`data/remote/OkHttpPatrolRestApi.kt`
+- 后端接入 gateway：`data/RestBackedGateways.kt`
+- WebSocket：`data/realtime/OkHttpWebSocketRealtimeGateway.kt`
+- BLE：`data/ble/AndroidBleDeviceGateway.kt`
+- Wi-Fi 文件传输：`data/file/WifiFileServiceClient.kt`
+- 安全会话存储：`data/local/AndroidKeystoreSecureStore.kt`
+- 离线任务持久化：`data/local/JsonFileBackgroundTaskGateway.kt`
+- 前台保活服务：`service/PatrolForegroundService.kt`
+
+后续生产化需要补齐真实后端 URL 和接口契约、耳机 GATT UUID、指令确认协议、Wi-Fi 热点文件 API 细节以及音视频流 SDK 接入点。
+
+## 验证方式
+
+```bash
+./gradlew clean testDebugUnitTest assembleDebug
+```
+
+当前工作区验证结果：构建成功，JVM 单元测试全部通过。由于没有连接模拟器或真机，尚未执行安装和启动冒烟测试。

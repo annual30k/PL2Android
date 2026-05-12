@@ -60,3 +60,13 @@ data class BackgroundTaskReceipt(
     val task: BackgroundTask,
     val queued: Boolean
 )
+
+data class VersionCheckResult(
+    val latestVersionCode: Int,
+    val latestVersionName: String,
+    val forceUpdate: Boolean,
+    val changelog: List<String>,
+    val downloadUrl: String?
+) {
+    val hasUpdate: Boolean get() = latestVersionCode > 1
+}

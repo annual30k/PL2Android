@@ -67,3 +67,7 @@ interface EvidenceIntegrityGateway {
     fun sha256(bytes: ByteArray): String
     fun watermarkToken(fileId: String, officerBadgeNo: String, timestamp: Long): String
 }
+
+interface VersionGateway {
+    suspend fun check(currentVersionCode: Int): VersionCheckResult
+}

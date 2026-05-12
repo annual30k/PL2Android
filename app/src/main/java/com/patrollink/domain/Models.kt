@@ -4,6 +4,8 @@ enum class AlertLevel { Critical, Warning, Info }
 enum class AlertStatus { Pending, Handling, Closed }
 enum class MediaKind { Video, Photo, Audio }
 enum class TransferStatus { Idle, Hashing, Uploading, Verifying, Done, Failed }
+enum class FontSizeMode { Compact, Standard, Large }
+enum class DisplayThemeMode { System, Light, Dark }
 
 data class UserProfile(
     val name: String,
@@ -55,13 +57,32 @@ data class MediaFile(
     val progress: Float
 )
 
+enum class VersionUpdatePhase { Idle, Checking, Available, Downloading, Ready, UpToDate, Failed }
+
+data class VersionUpdateUiState(
+    val phase: VersionUpdatePhase = VersionUpdatePhase.Idle,
+    val currentVersionName: String = "1.2.4",
+    val latestVersionName: String? = null,
+    val changelog: List<String> = emptyList(),
+    val downloadUrl: String? = null,
+    val progress: Float = 0f,
+    val message: String? = null
+)
+
 data class AppUiState(
     val isLoggedIn: Boolean = false,
     val networkOnline: Boolean = true,
     val loginLoading: Boolean = false,
     val selectedAlertTab: AlertStatus = AlertStatus.Pending,
     val selectedMediaLocal: Boolean = false,
+    val selectedMediaFileId: String? = null,
+    val previewMediaFile: MediaFile? = null,
+    val streamState: StreamRelayState = StreamRelayState.Idle,
     val sosActive: Boolean = false,
+    val fontSizeMode: FontSizeMode = FontSizeMode.Standard,
+    val displayThemeMode: DisplayThemeMode = DisplayThemeMode.System,
+    val versionUpdate: VersionUpdateUiState = VersionUpdateUiState(),
+    val operationMessage: String? = null,
     val device: DeviceStatus,
     val alerts: List<AlertItem>,
     val mediaFiles: List<MediaFile>,

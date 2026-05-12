@@ -33,7 +33,7 @@ class PatrolViewModelTest {
         viewModel.toggleTalk()
         advanceUntilIdle()
 
-        assertFalse(viewModel.uiState.value.device.isRecording)
+        assertTrue(viewModel.uiState.value.device.isRecording)
         assertTrue(viewModel.uiState.value.device.isTalking)
     }
 

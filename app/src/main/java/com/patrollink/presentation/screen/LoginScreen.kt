@@ -2,7 +2,6 @@ package com.patrollink.presentation.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,13 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -45,11 +48,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
+import com.patrollink.presentation.component.SystemBars
 import com.patrollink.presentation.theme.Muted
+import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.TechBlue
 
 @Composable
 fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit) {
+    val colors = PatrolDisplay.colors
+    SystemBars(
+        statusBarColor = colors.page,
+        navigationBarColor = colors.page,
+        lightStatusBar = !colors.dark,
+        lightNavigationBar = !colors.dark
+    )
     var account by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var agreed by remember { mutableStateOf(false) }
@@ -61,9 +73,9 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
             .background(
                 Brush.verticalGradient(
                     listOf(
-                        Color(0xFFF7FAFF),
-                        Color(0xFFEAF1FB),
-                        Color(0xFFF6FAFF)
+                        colors.page,
+                        if (colors.dark) Color(0xFF0B1326) else Color(0xFFEAF1FB),
+                        colors.page
                     )
                 )
             )
@@ -99,14 +111,19 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
                         .background(TechBlue),
                     contentAlignment = Alignment.Center
                 ) {
-                    ShieldMark()
+                    Icon(
+                        imageVector = Icons.Filled.Security,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(44.dp)
+                    )
                 }
                 Spacer(Modifier.height(21.dp))
-                Text("智能执法协同平台", fontSize = 26.sp, color = Color(0xFF101419), fontWeight = FontWeight.Black)
+                Text("智能执法协同平台", fontSize = 26.sp, color = colors.text, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "I N T E L L I G E N T   L A W   E N F O R C E M E N T",
-                    color = Color(0xFF8D96A6),
+                    color = colors.textSubtle,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -118,7 +135,7 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
                     .fillMaxWidth()
                     .shadow(18.dp, RoundedCornerShape(16.dp), ambientColor = Color(0xFF94A3B8).copy(alpha = 0.10f), spotColor = Color(0xFF94A3B8).copy(alpha = 0.13f))
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color.White)
+                    .background(colors.surface)
                     .padding(horizontal = 26.dp, vertical = 27.dp)
             ) {
                 Column {
@@ -141,7 +158,8 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
                         leadingIcon = { LockIcon() },
                         trailingIcon = {
                             EyeOffIcon(
-                                modifier = Modifier.clickable { passwordVisible = !passwordVisible }
+                                modifier = Modifier.clickable { passwordVisible = !passwordVisible },
+                                visible = passwordVisible
                             )
                         }
                     )
@@ -179,11 +197,11 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
                 Spacer(Modifier.width(13.dp))
                 Text(
                     buildAnnotatedString {
-                        withStyle(SpanStyle(color = Color(0xFF6F7D8F))) { append("我已阅读并同意 ") }
+                        withStyle(SpanStyle(color = colors.textMuted)) { append("我已阅读并同意 ") }
                         withStyle(SpanStyle(color = TechBlue, fontWeight = FontWeight.Black)) { append("《服务协议》") }
-                        withStyle(SpanStyle(color = Color(0xFF6F7D8F))) { append(" 与 ") }
+                        withStyle(SpanStyle(color = colors.textMuted)) { append(" 与 ") }
                         withStyle(SpanStyle(color = TechBlue, fontWeight = FontWeight.Black)) { append("《隐私政策》") }
-                        withStyle(SpanStyle(color = Color(0xFF6F7D8F))) { append("，并授权\n系统获取必要的执法权限。") }
+                        withStyle(SpanStyle(color = colors.textMuted)) { append("，并授权\n系统获取必要的执法权限。") }
                     },
                     fontSize = 13.sp,
                     lineHeight = 22.sp,
@@ -208,7 +226,7 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
 
 @Composable
 private fun LoginLabel(text: String) {
-    Text(text, color = Color(0xFF111827), fontSize = 17.sp, fontWeight = FontWeight.Black)
+    Text(text, color = PatrolDisplay.colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
 }
 
 @Composable
@@ -221,12 +239,13 @@ private fun LoginInput(
     visualTransformation: VisualTransformation = VisualTransformation.None,
     trailingIcon: (@Composable () -> Unit)? = null
 ) {
+    val colors = PatrolDisplay.colors
     Row(
         modifier
             .fillMaxWidth()
             .height(52.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFF3F6FA))
+            .background(colors.control)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -234,7 +253,7 @@ private fun LoginInput(
         Spacer(Modifier.width(14.dp))
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (value.isEmpty()) {
-                Text(placeholder, color = Color(0xFFADB5C1), fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                Text(placeholder, color = colors.textSubtle, fontSize = 17.sp, fontWeight = FontWeight.Medium)
             }
             BasicTextField(
                 value = value,
@@ -242,7 +261,7 @@ private fun LoginInput(
                 singleLine = true,
                 visualTransformation = visualTransformation,
                 textStyle = androidx.compose.ui.text.TextStyle(
-                    color = Color(0xFF111827),
+                    color = colors.text,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Medium
                 ),
@@ -272,134 +291,69 @@ private fun LoginButton(loading: Boolean, onClick: () -> Unit) {
         Text(if (loading) "登录中..." else "安全登录", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
         if (!loading) {
             Spacer(Modifier.width(10.dp))
-            Text("→", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(22.dp)
+            )
         }
     }
 }
 
 @Composable
 private fun ConsentCheck(checked: Boolean, onClick: () -> Unit) {
+    val colors = PatrolDisplay.colors
     Box(
         Modifier
             .padding(top = 3.dp)
             .size(16.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(if (checked) TechBlue else Color.White)
-            .border(1.dp, Color(0xFFDCE3EC), RoundedCornerShape(4.dp))
+            .background(if (checked) TechBlue else colors.surface)
+            .border(1.dp, colors.border, RoundedCornerShape(4.dp))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         if (checked) {
-            Canvas(Modifier.size(10.dp)) {
-                drawLine(
-                    Color.White,
-                    Offset(size.width * 0.16f, size.height * 0.52f),
-                    Offset(size.width * 0.42f, size.height * 0.76f),
-                    strokeWidth = 2.4f,
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    Color.White,
-                    Offset(size.width * 0.42f, size.height * 0.76f),
-                    Offset(size.width * 0.86f, size.height * 0.22f),
-                    strokeWidth = 2.4f,
-                    cap = StrokeCap.Round
-                )
-            }
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(12.dp)
+            )
         }
-    }
-}
-
-@Composable
-private fun ShieldMark() {
-    Canvas(Modifier.size(40.dp)) {
-        val white = Color.White
-        val shield = Path().apply {
-            moveTo(size.width * 0.5f, size.height * 0.03f)
-            lineTo(size.width * 0.92f, size.height * 0.2f)
-            lineTo(size.width * 0.92f, size.height * 0.58f)
-            quadraticTo(size.width * 0.72f, size.height * 0.82f, size.width * 0.58f, size.height * 0.96f)
-            lineTo(size.width * 0.58f, size.height * 0.62f)
-            lineTo(size.width * 0.42f, size.height * 0.62f)
-            lineTo(size.width * 0.42f, size.height * 0.96f)
-            quadraticTo(size.width * 0.23f, size.height * 0.82f, size.width * 0.08f, size.height * 0.58f)
-            lineTo(size.width * 0.08f, size.height * 0.2f)
-            close()
-        }
-        drawPath(shield, white)
-        val cut = Path().apply {
-            moveTo(size.width * 0.12f, size.height * 0.56f)
-            lineTo(size.width * 0.5f, size.height * 0.28f)
-            lineTo(size.width * 0.88f, size.height * 0.56f)
-            lineTo(size.width * 0.78f, size.height * 0.69f)
-            lineTo(size.width * 0.5f, size.height * 0.48f)
-            lineTo(size.width * 0.22f, size.height * 0.69f)
-            close()
-        }
-        drawPath(cut, TechBlue)
     }
 }
 
 @Composable
 private fun UserIcon() {
-    Canvas(Modifier.size(18.dp)) {
-        val color = Color(0xFF6B7584)
-        drawCircle(color, radius = size.width * 0.22f, center = Offset(size.width * 0.5f, size.height * 0.28f))
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(size.width * 0.08f, size.height * 0.6f),
-            size = Size(size.width * 0.84f, size.height * 0.28f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(7f, 7f)
-        )
-    }
+    val colors = PatrolDisplay.colors
+    Icon(
+        imageVector = Icons.Filled.Person,
+        contentDescription = null,
+        tint = colors.textMuted,
+        modifier = Modifier.size(20.dp)
+    )
 }
 
 @Composable
 private fun LockIcon() {
-    Canvas(Modifier.size(19.dp)) {
-        val color = Color(0xFF6B7584)
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(size.width * 0.12f, size.height * 0.42f),
-            size = Size(size.width * 0.76f, size.height * 0.48f),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(7f, 7f)
-        )
-        drawArc(
-            color = color,
-            startAngle = 180f,
-            sweepAngle = 180f,
-            useCenter = false,
-            topLeft = Offset(size.width * 0.27f, size.height * 0.06f),
-            size = Size(size.width * 0.46f, size.height * 0.58f),
-            style = Stroke(width = 3.0f, cap = StrokeCap.Round)
-        )
-        drawCircle(Color.White.copy(alpha = 0.85f), radius = size.width * 0.055f, center = Offset(size.width * 0.5f, size.height * 0.66f))
-    }
+    val colors = PatrolDisplay.colors
+    Icon(
+        imageVector = Icons.Filled.Lock,
+        contentDescription = null,
+        tint = colors.textMuted,
+        modifier = Modifier.size(20.dp)
+    )
 }
 
 @Composable
-private fun EyeOffIcon(modifier: Modifier = Modifier) {
-    Canvas(modifier.size(22.dp)) {
-        val color = Color(0xFF6B7584)
-        drawArc(
-            color = color,
-            startAngle = 200f,
-            sweepAngle = 140f,
-            useCenter = false,
-            topLeft = Offset(size.width * 0.12f, size.height * 0.2f),
-            size = Size(size.width * 0.76f, size.height * 0.56f),
-            style = Stroke(width = 3.0f, cap = StrokeCap.Round)
-        )
-        drawArc(
-            color = color,
-            startAngle = 20f,
-            sweepAngle = 140f,
-            useCenter = false,
-            topLeft = Offset(size.width * 0.12f, size.height * 0.24f),
-            size = Size(size.width * 0.76f, size.height * 0.56f),
-            style = Stroke(width = 3.0f, cap = StrokeCap.Round)
-        )
-        drawCircle(color, radius = size.width * 0.12f, center = Offset(size.width * 0.5f, size.height * 0.5f))
-        drawLine(color, Offset(size.width * 0.15f, size.height * 0.1f), Offset(size.width * 0.86f, size.height * 0.9f), strokeWidth = 3.4f, cap = StrokeCap.Round)
-    }
+private fun EyeOffIcon(modifier: Modifier = Modifier, visible: Boolean = false) {
+    val colors = PatrolDisplay.colors
+    Icon(
+        imageVector = if (visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+        contentDescription = null,
+        tint = colors.textMuted,
+        modifier = modifier.size(22.dp)
+    )
 }

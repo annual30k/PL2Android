@@ -2,127 +2,177 @@ package com.patrollink.presentation.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AlertLevel
-import com.patrollink.presentation.theme.Border
 import com.patrollink.presentation.theme.Danger
-import com.patrollink.presentation.theme.Ink
-import com.patrollink.presentation.theme.Muted
-import com.patrollink.presentation.theme.Navy
+import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
-import com.patrollink.presentation.theme.SurfaceWhite
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
 
 @Composable
-fun PatrolTopBar(title: String, onSos: () -> Unit, trailing: @Composable (() -> Unit)? = null) {
+fun ForceTopBar(
+    title: String? = null,
+    dark: Boolean = true,
+    onSos: () -> Unit,
+    leading: @Composable (() -> Unit)? = null,
+    trailing: @Composable (() -> Unit)? = null
+) {
+    val colors = PatrolDisplay.colors
+    val bg = colors.topBar
+    val main = colors.text
+    val sub = colors.textSubtle
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Navy)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .height(64.dp)
+            .background(bg)
+            .drawBehind {
+                val stroke = 1.dp.toPx()
+                drawLine(
+                    color = colors.border.copy(alpha = 0.45f),
+                    start = Offset(0f, size.height - stroke / 2f),
+                    end = Offset(size.width, size.height - stroke / 2f),
+                    strokeWidth = stroke
+                )
+            }
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column {
-            Text("PatrolLink", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
-            Text(title, color = Color(0xFFC3C5D9), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            leading?.invoke()
+            Icon(Icons.Filled.Security, contentDescription = null, tint = Danger, modifier = Modifier.size(22.dp))
+            Column {
+                Text("ForceLink", color = main, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                if (title != null) Text(title, color = sub, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             trailing?.invoke()
-            Button(
-                onClick = onSos,
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Danger),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Text("SOS", fontWeight = FontWeight.Black, fontSize = 12.sp)
-            }
+            Text(
+                "SOS",
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFFDC2626))
+                    .clickable(onClick = onSos)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            )
         }
     }
 }
 
 @Composable
-fun PatrolCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+fun PatrolCard(
+    modifier: Modifier = Modifier,
+    radius: Int = 16,
+    dark: Boolean = false,
+    padding: PaddingValues = PaddingValues(16.dp),
+    content: @Composable () -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    val container = if (dark) colors.surfaceHigh else colors.surface
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceWhite),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        content = { Box(Modifier.padding(16.dp)) { content() } }
+        shape = RoundedCornerShape(radius.dp),
+        colors = CardDefaults.cardColors(containerColor = container),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (dark) 0.dp else 2.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.border),
+        content = { Box(Modifier.padding(padding)) { content() } }
     )
 }
 
 @Composable
-fun StatusTag(text: String, color: Color) {
+fun StatusTag(text: String, color: Color, filled: Boolean = false) {
     Text(
         text = text,
-        color = color,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
+        color = if (filled) Color.White else color,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Black,
+        maxLines = 1,
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(color.copy(alpha = 0.12f))
-            .border(1.dp, color.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .background(if (filled) color else color.copy(alpha = 0.11f))
+            .border(1.dp, color.copy(alpha = if (filled) 0f else 0.16f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
     )
 }
 
 @Composable
 fun AlertLevelTag(level: AlertLevel) {
     val color = when (level) {
-        AlertLevel.Critical -> Danger
-        AlertLevel.Warning -> Warning
+        AlertLevel.Critical -> Color(0xFFDC2626)
+        AlertLevel.Warning -> Color(0xFFF97316)
         AlertLevel.Info -> TechBlue
     }
     val text = when (level) {
-        AlertLevel.Critical -> "高危"
+        AlertLevel.Critical -> "紧急"
         AlertLevel.Warning -> "预警"
         AlertLevel.Info -> "提示"
     }
-    StatusTag(text, color)
+    StatusTag(text, color, filled = true)
 }
 
 @Composable
 fun MetricTile(label: String, value: String, accent: Color = TechBlue, progress: Float? = null) {
+    val colors = PatrolDisplay.colors
     PatrolCard {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(accent))
-                Text(label, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(accent))
+                    Text(label, color = colors.textSubtle, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                }
+                Text(value, color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text(value, color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (progress != null) {
                 LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(99.dp)),
                     color = accent,
-                    trackColor = Border
+                    trackColor = colors.control
                 )
             }
         }
@@ -134,10 +184,11 @@ fun PrimaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
     Button(
         onClick = onClick,
         modifier = modifier.height(48.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = if (danger) Danger else TechBlue)
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = if (danger) Color(0xFFDC2626) else TechBlue),
+        contentPadding = PaddingValues(horizontal = 12.dp)
     ) {
-        Text(text, fontWeight = FontWeight.Bold)
+        Text(text, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
     }
 }
 
@@ -145,16 +196,166 @@ fun PrimaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
 fun OfflineBanner(online: Boolean) {
     if (!online) {
         Row(
-            Modifier.fillMaxWidth().background(Danger.copy(alpha = 0.1f)).padding(10.dp),
-            horizontalArrangement = Arrangement.Center
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFFFF1F2))
+                .padding(9.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("网络已断开，处置记录将离线缓存", color = Danger, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFDC2626)))
+            Spacer(Modifier.width(8.dp))
+            Text("网络已断开", color = Color(0xFFDC2626), fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
         }
     }
 }
 
 @Composable
-fun SectionTitle(text: String) {
-    Text(text, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Black)
+fun SectionTitle(text: String, color: Color? = null) {
+    Text(text, color = color ?: PatrolDisplay.colors.text, fontSize = 14.sp, fontWeight = FontWeight.Black)
     Spacer(Modifier.height(10.dp))
+}
+
+@Composable
+fun SegmentedTabs(
+    left: String,
+    right: String,
+    leftSelected: Boolean,
+    onLeft: () -> Unit,
+    onRight: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = PatrolDisplay.colors
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.control)
+            .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        SegmentButton(left, leftSelected, onLeft, Modifier.weight(1f))
+        SegmentButton(right, !leftSelected, onRight, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun SegmentButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    val colors = PatrolDisplay.colors
+    Text(
+        text,
+        color = if (selected) colors.text else colors.textMuted,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Black,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (selected) colors.controlSelected else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(top = 9.dp)
+    )
+}
+
+@Composable
+fun ActionTile(label: String, glyph: String, active: Boolean = false, danger: Boolean = false, onClick: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    val accent = when {
+        danger || active && label.contains("录像") -> Danger
+        active -> Success
+        else -> TechBlue
+    }
+    PatrolCard(
+        modifier = Modifier
+            .height(128.dp)
+            .clickable(onClick = onClick),
+        padding = PaddingValues(0.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().height(128.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                Modifier
+                    .size(54.dp)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center
+            ) {
+                ActionGlyph(glyph = glyph, color = accent)
+            }
+            Spacer(Modifier.height(18.dp))
+            Text(
+                label,
+                color = colors.textMuted,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActionGlyph(glyph: String, color: Color) {
+    val imageVector = when (glyph) {
+        "video" -> Icons.Filled.Videocam
+        "stop" -> Icons.Filled.Stop
+        "talk" -> Icons.Filled.Mic
+        else -> Icons.Filled.CameraAlt
+    }
+    Icon(
+        imageVector = imageVector,
+        contentDescription = null,
+        tint = color,
+        modifier = Modifier.size(28.dp)
+    )
+}
+
+@Composable
+fun MediaThumbBackground(kind: String, modifier: Modifier = Modifier) {
+    val brush = when (kind) {
+        "PHOTO" -> Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF0891B2)))
+        "AUDIO" -> Brush.linearGradient(listOf(Color(0xFF0F172A), Color(0xFF334155)))
+        else -> Brush.linearGradient(listOf(Color(0xFF111827), Color(0xFF1D4ED8), Color(0xFFEA580C)))
+    }
+    Box(modifier.background(brush)) {
+        Text(
+            when (kind) {
+                "PHOTO" -> "IMG"
+                "AUDIO" -> "WAV"
+                else -> "REC"
+            },
+            color = Color.White.copy(alpha = 0.24f),
+            fontSize = 34.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.align(Alignment.Center)
+        )
+    }
+}
+
+@Composable
+fun SmallInfo(label: String, value: String, modifier: Modifier = Modifier, dark: Boolean = false) {
+    val colors = PatrolDisplay.colors
+    Column(modifier) {
+        Text(label, color = colors.textSubtle, fontSize = 9.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(3.dp))
+        Text(value, color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+fun DeviceStatPill(text: String, color: Color) {
+    val colors = PatrolDisplay.colors
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Text(text, color = colors.textMuted, fontSize = 10.sp, fontWeight = FontWeight.Black)
+    }
 }

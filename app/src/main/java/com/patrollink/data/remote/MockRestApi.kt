@@ -11,7 +11,7 @@ class MockRestApi {
         storageUsedGb = 42.5f,
         storageTotalGb = 128f,
         firmwareVersion = "v1.2.4",
-        recordingStatus = "RECORDING",
+        recordingStatus = "IDLE",
         talking = false,
         cloudConnected = true
     )

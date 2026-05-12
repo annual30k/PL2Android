@@ -4,6 +4,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,10 +26,12 @@ import androidx.core.content.ContextCompat
 import com.patrollink.data.AndroidPermissionPlanner
 import com.patrollink.presentation.component.PatrolCard
 import com.patrollink.presentation.component.PrimaryAction
-import com.patrollink.presentation.theme.Muted
+import com.patrollink.presentation.component.SystemBars
+import com.patrollink.presentation.theme.PatrolDisplay
 
 @Composable
 fun PermissionGate(content: @Composable () -> Unit) {
+    val colors = PatrolDisplay.colors
     val context = LocalContext.current
     val planner = remember { AndroidPermissionPlanner() }
     val permissions = remember {
@@ -54,15 +57,16 @@ fun PermissionGate(content: @Composable () -> Unit) {
     if (missing.isEmpty()) {
         content()
     } else {
+        SystemBars(statusBarColor = colors.page, navigationBarColor = colors.page, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
         Column(
-            Modifier.fillMaxSize().padding(24.dp),
+            Modifier.fillMaxSize().background(colors.page).padding(24.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             PatrolCard {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text("需要授权", fontWeight = FontWeight.Black)
-                    Text("执法耳机接入、录像、对讲、定位和通知需要系统权限。未授权时，相关硬件能力会保持不可用。", color = Muted)
+                    Text("执法耳机接入、录像、对讲、定位和通知需要系统权限。未授权时，相关硬件能力会保持不可用。", color = colors.textMuted)
                     PrimaryAction("继续授权", onClick = { launcher.launch(missing) }, modifier = Modifier.fillMaxWidth())
                 }
             }

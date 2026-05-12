@@ -1,14 +1,19 @@
 package com.patrollink.presentation.navigation
 
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -84,16 +89,17 @@ fun PatrolApp(viewModel: PatrolViewModel) {
                 bottomBar = { if (showBottomBar) PatrolBottomBar(navController) },
                 containerColor = PatrolDisplay.colors.page
             ) { padding ->
-                Box(Modifier.padding(padding).background(PatrolDisplay.colors.page)) {
+                val contentPadding = if (currentRoute == Route.Sos.path) PaddingValues(0.dp) else padding
+                Box(Modifier.padding(contentPadding).background(PatrolDisplay.colors.page)) {
                     NavHost(navController = navController, startDestination = Route.Device.path) {
                         composable(Route.Device.path) {
-                            DeviceScreen(uiState, viewModel, onSos = { navController.navigate(Route.Sos.path) })
+                            DeviceScreen(uiState, viewModel, onSos = { navController.navigateToSos() })
                         }
                         composable(Route.Alert.path) {
                             AlertListScreen(
                                 uiState = uiState,
                                 viewModel = viewModel,
-                                onSos = { navController.navigate(Route.Sos.path) },
+                                onSos = { navController.navigateToSos() },
                                 onOpenDetail = { id -> navController.navigate("alertDetail/$id") }
                             )
                         }
@@ -104,24 +110,30 @@ fun PatrolApp(viewModel: PatrolViewModel) {
                                 uiState = uiState,
                                 viewModel = viewModel,
                                 onBack = { navController.popBackStack() },
-                                onSos = { navController.navigate(Route.Sos.path) }
+                                onSos = { navController.navigateToSos() }
                             )
                         }
                         composable(Route.Media.path) {
-                            MediaScreen(uiState, viewModel, onSos = { navController.navigate(Route.Sos.path) })
+                            MediaScreen(uiState, viewModel, onSos = { navController.navigateToSos() })
                         }
                         composable(Route.Profile.path) {
                             ProfileScreen(
                                 uiState = uiState,
                                 viewModel = viewModel,
-                                onSos = { navController.navigate(Route.Sos.path) },
+                                onSos = { navController.navigateToSos() },
                                 onOpenVersionInfo = { navController.navigate(Route.VersionInfo.path) }
                             )
                         }
                         composable(Route.VersionInfo.path) {
                             VersionInfoScreen(uiState = uiState, viewModel = viewModel, onBack = { navController.popBackStack() })
                         }
-                        composable(Route.Sos.path) {
+                        composable(
+                            Route.Sos.path,
+                            enterTransition = { fadeIn(animationSpec = tween(durationMillis = 160)) },
+                            exitTransition = { fadeOut(animationSpec = tween(durationMillis = 160)) },
+                            popEnterTransition = { fadeIn(animationSpec = tween(durationMillis = 120)) },
+                            popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 180)) }
+                        ) {
                             SosScreen(uiState, viewModel, onClose = { navController.popBackStack() })
                         }
                     }
@@ -131,6 +143,12 @@ fun PatrolApp(viewModel: PatrolViewModel) {
                 }
             }
         }
+    }
+}
+
+private fun NavHostController.navigateToSos() {
+    navigate(Route.Sos.path) {
+        launchSingleTop = true
     }
 }
 
@@ -168,7 +186,6 @@ private fun PatrolBottomBar(navController: NavHostController) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(68.dp)
             .background(barBg)
             .drawBehind {
                 val stroke = 1.dp.toPx()
@@ -179,7 +196,9 @@ private fun PatrolBottomBar(navController: NavHostController) {
                     strokeWidth = stroke
                 )
             }
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .navigationBarsPadding()
+            .height(72.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 0.dp),
         horizontalArrangement = Arrangement.SpaceAround
     ) {
         tabs.forEach { tab ->
@@ -196,7 +215,7 @@ private fun PatrolBottomBar(navController: NavHostController) {
                             launchSingleTop = true
                         }
                     }
-                    .padding(horizontal = 17.dp, vertical = 5.dp)
+                    .padding(horizontal = 17.dp, vertical = 6.dp)
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(

@@ -52,7 +52,7 @@ fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> 
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     val user = uiState.user
     Column(Modifier.fillMaxSize().background(colors.page)) {
-        ForceTopBar(title = "个人信息", dark = true, onSos = onSos)
+        ForceTopBar(title = null, dark = true, onSos = onSos)
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
             contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),

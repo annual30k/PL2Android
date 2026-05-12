@@ -17,16 +17,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,7 +57,7 @@ import kotlin.math.roundToInt
 
 @Composable
 fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Unit) {
-    SystemBars(statusBarColor = Color(0xFF111827), navigationBarColor = Color(0xFF0B0203), lightStatusBar = false, lightNavigationBar = false)
+    SystemBars(statusBarColor = Color(0xFF991B1B), navigationBarColor = Color(0xFF0B0203), lightStatusBar = false, lightNavigationBar = false)
     val context = LocalContext.current
     var seconds by remember { mutableIntStateOf(3) }
 
@@ -80,28 +78,10 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
     ) {
         Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color(0xFFEF4444).copy(alpha = 0.38f), Color.Transparent))))
         Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(64.dp)
-                    .background(Color(0xFF111827))
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Security, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
-                    Text("ForceLink", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(Icons.Filled.FiberManualRecord, contentDescription = null, tint = Color(0xFF22C55E), modifier = Modifier.size(10.dp))
-                    Text("SECURE", color = Color(0xFF22C55E), fontSize = 10.sp, fontWeight = FontWeight.Black)
-                }
-            }
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(top = 52.dp, start = 22.dp, end = 22.dp),
+                    .padding(top = 96.dp, start = 22.dp, end = 22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(if (activated) "紧急上报已激活" else "正在上报位置与录音...", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center)
@@ -128,30 +108,19 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
                 Spacer(Modifier.height(38.dp))
                 SlideToCancel(
                     onCancel = {
+                        onClose()
                         viewModel.cancelSos()
                         PatrolForegroundService.stop(context)
-                        onClose()
                     }
                 )
             }
             Spacer(Modifier.weight(1f))
-            Column(Modifier.padding(horizontal = 28.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color.Black.copy(alpha = 0.42f))
-                        .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
-                        .padding(15.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Icon(Icons.Filled.Sync, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(22.dp))
-                    Column {
-                        Text("音频证据同步中: CH-01-SECURE...", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                        Text("Cloud Secure · Backup ETA 4M", color = Color.White.copy(alpha = 0.55f), fontSize = 11.sp)
-                    }
-                }
+            Column(
+                Modifier
+                    .navigationBarsPadding()
+                    .padding(horizontal = 28.dp, vertical = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
                     Column {
                         Text("当前位置 (GPS)", color = Color.White.copy(alpha = 0.60f), fontSize = 10.sp, fontWeight = FontWeight.Black)

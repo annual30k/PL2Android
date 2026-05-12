@@ -87,7 +87,26 @@ data class AlertDto(
 data class AlertCloseRequestDto(
     val result: String,
     val note: String,
-    val operatorId: String
+    val operatorId: String,
+    val attachments: List<UploadAttachmentDto> = emptyList()
+)
+
+data class AlertDraftRequestDto(
+    val alertId: String,
+    val result: String,
+    val note: String,
+    val operatorId: String,
+    val attachments: List<UploadAttachmentDto>
+)
+
+data class UploadAttachmentDto(
+    val clientFileId: String,
+    val fileName: String,
+    val mimeType: String,
+    val sizeBytes: Long?,
+    val source: String,
+    val localUri: String?,
+    val uploadIntent: String = "SUBMIT_WITH_FORM"
 )
 
 data class MediaFileDto(

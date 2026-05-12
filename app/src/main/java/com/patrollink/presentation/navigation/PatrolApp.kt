@@ -1,5 +1,7 @@
 package com.patrollink.presentation.navigation
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +29,8 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -33,6 +38,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +58,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.delay
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.permission.PermissionGate
+import com.patrollink.presentation.screen.AddDeviceScreen
 import com.patrollink.presentation.screen.AlertDetailScreen
 import com.patrollink.presentation.screen.AlertListScreen
 import com.patrollink.presentation.screen.DeviceScreen
@@ -60,6 +69,8 @@ import com.patrollink.presentation.screen.SosScreen
 import com.patrollink.presentation.screen.VersionInfoScreen
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.PatrolTheme
+import com.patrollink.presentation.theme.PatrolTextStyle
+import com.patrollink.presentation.theme.Danger
 import com.patrollink.presentation.theme.TechBlue
 
 private enum class Route(val path: String, val label: String) {
@@ -68,6 +79,7 @@ private enum class Route(val path: String, val label: String) {
     Media("media", "媒体"),
     Profile("profile", "我的"),
     VersionInfo("versionInfo", "版本"),
+    AddDevice("addDevice", "添加设备"),
     Sos("sos", "SOS")
 }
 
@@ -89,17 +101,36 @@ fun PatrolApp(viewModel: PatrolViewModel) {
             val backStack by navController.currentBackStackEntryAsState()
             val currentRoute = backStack?.destination?.route.orEmpty()
             val showBottomBar = currentRoute !in setOf(Route.Sos.path, Route.VersionInfo.path) && !currentRoute.startsWith("alertDetail")
+            val lowBattery = uiState.device.battery < 15
+            var dismissedLowBatteryReminder by rememberSaveable(uiState.device.id, lowBattery) { mutableStateOf(false) }
 
             Scaffold(
                 bottomBar = { if (showBottomBar) PatrolBottomBar(navController) },
                 containerColor = PatrolDisplay.colors.page
             ) { padding ->
-                val contentPadding = if (currentRoute == Route.Sos.path) PaddingValues(0.dp) else padding
+                val contentPadding = when (currentRoute) {
+                    Route.Sos.path -> PaddingValues(0.dp)
+                    Route.AddDevice.path -> PaddingValues(bottom = padding.calculateBottomPadding())
+                    else -> padding
+                }
                 Box(Modifier.fillMaxSize().background(PatrolDisplay.colors.page)) {
                     Box(Modifier.padding(contentPadding).background(PatrolDisplay.colors.page)) {
                         NavHost(navController = navController, startDestination = Route.Device.path) {
                             composable(Route.Device.path) {
-                                DeviceScreen(uiState, viewModel, onSos = { navController.navigateToSos() })
+                                DeviceScreen(
+                                    uiState = uiState,
+                                    viewModel = viewModel,
+                                    onSos = { navController.navigateToSos() },
+                                    onAddDevice = { navController.navigate(Route.AddDevice.path) }
+                                )
+                            }
+                            composable(Route.AddDevice.path) {
+                                AddDeviceScreen(
+                                    uiState = uiState,
+                                    viewModel = viewModel,
+                                    onBack = { navController.popBackStack() },
+                                    onSos = { navController.navigateToSos() }
+                                )
                             }
                             composable(Route.Alert.path) {
                                 AlertListScreen(
@@ -109,7 +140,13 @@ fun PatrolApp(viewModel: PatrolViewModel) {
                                     onOpenDetail = { id -> navController.navigate("alertDetail/$id") }
                                 )
                             }
-                            composable("alertDetail/{id}") { entry ->
+                            composable(
+                                "alertDetail/{id}",
+                                enterTransition = { EnterTransition.None },
+                                exitTransition = { ExitTransition.None },
+                                popEnterTransition = { EnterTransition.None },
+                                popExitTransition = { ExitTransition.None }
+                            ) { entry ->
                                 val id = entry.arguments?.getString("id").orEmpty()
                                 AlertDetailScreen(
                                     alertId = id,
@@ -150,11 +187,17 @@ fun PatrolApp(viewModel: PatrolViewModel) {
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
                                 .windowInsetsBottomHeight(WindowInsets.navigationBars)
-                                .background(Color.White)
+                                .background(PatrolDisplay.colors.bottomBar)
                         )
                     }
                     uiState.operationMessage?.let { message ->
                         AppMessage(message = message, onShown = viewModel::clearMessage)
+                    }
+                    if (lowBattery && !dismissedLowBatteryReminder && currentRoute != Route.Sos.path) {
+                        EquipmentReminderDialog(
+                            battery = uiState.device.battery,
+                            onDismiss = { dismissedLowBatteryReminder = true }
+                        )
                     }
                 }
             }
@@ -165,6 +208,55 @@ fun PatrolApp(viewModel: PatrolViewModel) {
 private fun NavHostController.navigateToSos() {
     navigate(Route.Sos.path) {
         launchSingleTop = true
+    }
+}
+
+@Composable
+private fun EquipmentReminderDialog(battery: Int, onDismiss: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = if (colors.dark) 0.46f else 0.28f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 28.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(colors.surface)
+                .border(1.dp, colors.border, RoundedCornerShape(18.dp))
+                .clickable(onClick = {})
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    Modifier.size(42.dp).clip(RoundedCornerShape(99.dp)).background(Danger.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.Warning, contentDescription = null, tint = Danger, modifier = Modifier.size(24.dp))
+                }
+                Column {
+                    Text("系统提醒", color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 17.sp, lineHeight = 22.sp))
+                    Text("装备电量低", color = Danger, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Black))
+                }
+            }
+            Text(
+                "您的个人装备（单警执法记录仪）当前电量为 ${battery.coerceIn(0, 100)}%，请及时充电。",
+                color = colors.textMuted,
+                style = PatrolTextStyle.Body.copy(fontWeight = FontWeight.Bold)
+            )
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Danger)
+            ) {
+                Text("知道了", color = Color.White, style = PatrolTextStyle.BodyStrong)
+            }
+        }
     }
 }
 
@@ -213,12 +305,14 @@ private fun PatrolBottomBar(navController: NavHostController) {
                 )
             }
             .navigationBarsPadding()
-            .height(72.dp)
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 0.dp),
+            .height(76.dp)
+            .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 0.dp),
         horizontalArrangement = Arrangement.SpaceAround
     ) {
         tabs.forEach { tab ->
-            val selected = current == tab.path || current.startsWith("alertDetail") && tab == Route.Alert
+            val selected = current == tab.path ||
+                current == Route.AddDevice.path && tab == Route.Device ||
+                current.startsWith("alertDetail") && tab == Route.Alert
             val color = if (selected) TechBlue else inactive
             val bg = if (selected) TechBlue.copy(alpha = 0.12f) else Color.Transparent
             Box(
@@ -231,7 +325,7 @@ private fun PatrolBottomBar(navController: NavHostController) {
                             launchSingleTop = true
                         }
                     }
-                    .padding(horizontal = 17.dp, vertical = 6.dp)
+                    .padding(horizontal = 15.dp, vertical = 7.dp)
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
@@ -241,12 +335,14 @@ private fun PatrolBottomBar(navController: NavHostController) {
                             Route.Media -> Icons.Filled.Folder
                             Route.Profile -> Icons.Filled.Person
                             Route.VersionInfo -> Icons.Filled.Folder
+                            Route.AddDevice -> Icons.Filled.Devices
                             Route.Sos -> Icons.Filled.Warning
                         },
                         contentDescription = tab.label,
-                        tint = color
+                        tint = color,
+                        modifier = Modifier.size(28.dp)
                     )
-                    Text(tab.label, fontWeight = FontWeight.Bold, color = color, fontSize = 10.sp)
+                    Text(tab.label, fontWeight = FontWeight.Bold, color = color, fontSize = 12.sp, lineHeight = 16.sp)
                 }
             }
         }

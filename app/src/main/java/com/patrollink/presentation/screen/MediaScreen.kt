@@ -74,12 +74,10 @@ import com.patrollink.presentation.component.ForceTopBar
 import com.patrollink.presentation.component.MediaThumbBackground
 import com.patrollink.presentation.component.StatusTag
 import com.patrollink.presentation.component.SystemBars
-import com.patrollink.presentation.theme.Danger
 import com.patrollink.presentation.theme.Muted
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
-import com.patrollink.presentation.theme.Warning
 
 @Composable
 fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Unit) {
@@ -92,7 +90,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Un
     val selected = files.firstOrNull { it.id == uiState.selectedMediaFileId } ?: files.firstOrNull()
     var pendingDelete by remember { mutableStateOf<MediaFile?>(null) }
     Column(Modifier.fillMaxSize().background(colors.page)) {
-        ForceTopBar(title = null, dark = true, onSos = onSos)
+        ForceTopBar(title = null, dark = colors.dark, onSos = onSos)
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             LazyColumn(
                 modifier = Modifier.weight(1f),
@@ -593,20 +591,13 @@ private fun MediaKind.toKindCode() = when (this) {
 }
 
 private fun transferLabel(status: TransferStatus) = when (status) {
-    TransferStatus.Idle -> "待同步"
-    TransferStatus.Hashing -> "校验中"
-    TransferStatus.Uploading -> "上传中"
-    TransferStatus.Verifying -> "验证中"
-    TransferStatus.Done -> "已同步"
-    TransferStatus.Failed -> "失败"
+    TransferStatus.Done -> "已上传"
+    else -> "待同步"
 }
 
 private fun transferColor(status: TransferStatus) = when (status) {
     TransferStatus.Done -> Success
-    TransferStatus.Failed -> Danger
-    TransferStatus.Idle -> Muted
-    TransferStatus.Hashing -> Warning
-    else -> TechBlue
+    else -> Muted
 }
 
 private enum class MediaFilter(val label: String) {

@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AlertLevel
 import com.patrollink.presentation.theme.Danger
+import com.patrollink.presentation.theme.Navy
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
@@ -58,9 +59,9 @@ fun ForceTopBar(
     trailing: @Composable (() -> Unit)? = null
 ) {
     val colors = PatrolDisplay.colors
-    val bg = colors.topBar
-    val main = colors.text
-    val sub = colors.textSubtle
+    val bg = if (dark) Navy else colors.topBar
+    val main = if (dark) Color.White else colors.text
+    val sub = if (dark) Color(0xFF94A3B8) else colors.textSubtle
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -81,10 +82,10 @@ fun ForceTopBar(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             leading?.invoke()
-            Icon(Icons.Filled.Security, contentDescription = null, tint = Danger, modifier = Modifier.size(22.dp))
+            Icon(Icons.Filled.Security, contentDescription = null, tint = Danger, modifier = Modifier.size(24.dp))
             Column {
-                Text("ForceLink", color = main, fontSize = 20.sp, fontWeight = FontWeight.Black)
-                if (title != null) Text(title, color = sub, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("ForceLink", color = main, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Black)
+                if (title != null) Text(title, color = sub, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -92,13 +93,13 @@ fun ForceTopBar(
             Text(
                 "SOS",
                 color = Color.White,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Black,
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
                     .background(Color(0xFFDC2626))
                     .clickable(onClick = onSos)
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 17.dp, vertical = 9.dp)
             )
         }
     }
@@ -129,14 +130,15 @@ fun StatusTag(text: String, color: Color, filled: Boolean = false) {
     Text(
         text = text,
         color = if (filled) Color.White else color,
-        fontSize = 10.sp,
+        fontSize = 12.sp,
+        lineHeight = 17.sp,
         fontWeight = FontWeight.Black,
         maxLines = 1,
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
             .background(if (filled) color else color.copy(alpha = 0.11f))
             .border(1.dp, color.copy(alpha = if (filled) 0f else 0.16f), RoundedCornerShape(4.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .padding(horizontal = 9.dp, vertical = 4.dp)
     )
 }
 
@@ -183,12 +185,12 @@ fun MetricTile(label: String, value: String, accent: Color = TechBlue, progress:
 fun PrimaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, danger: Boolean = false) {
     Button(
         onClick = onClick,
-        modifier = modifier.height(48.dp),
+        modifier = modifier.height(52.dp),
         shape = RoundedCornerShape(10.dp),
         colors = ButtonDefaults.buttonColors(containerColor = if (danger) Color(0xFFDC2626) else TechBlue),
         contentPadding = PaddingValues(horizontal = 12.dp)
     ) {
-        Text(text, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+        Text(text, fontWeight = FontWeight.Black, fontSize = 16.sp, maxLines = 1)
     }
 }
 
@@ -212,8 +214,13 @@ fun OfflineBanner(online: Boolean) {
 
 @Composable
 fun SectionTitle(text: String, color: Color? = null) {
-    Text(text, color = color ?: PatrolDisplay.colors.text, fontSize = 14.sp, fontWeight = FontWeight.Black)
-    Spacer(Modifier.height(10.dp))
+    Text(
+        text,
+        color = color ?: PatrolDisplay.colors.text,
+        fontSize = 20.sp,
+        lineHeight = 25.sp,
+        fontWeight = FontWeight.Black
+    )
 }
 
 @Composable
@@ -342,9 +349,9 @@ fun MediaThumbBackground(kind: String, modifier: Modifier = Modifier) {
 fun SmallInfo(label: String, value: String, modifier: Modifier = Modifier, dark: Boolean = false) {
     val colors = PatrolDisplay.colors
     Column(modifier) {
-        Text(label, color = colors.textSubtle, fontSize = 9.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(3.dp))
-        Text(value, color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = colors.textSubtle, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(4.dp))
+        Text(value, color = colors.text, fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Bold)
     }
 }
 

@@ -59,18 +59,21 @@ import kotlin.math.roundToInt
 fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Unit) {
     SystemBars(statusBarColor = Color(0xFF991B1B), navigationBarColor = Color(0xFF0B0203), lightStatusBar = false, lightNavigationBar = false)
     val context = LocalContext.current
-    var seconds by remember { mutableIntStateOf(3) }
+    var seconds by remember { mutableIntStateOf(5) }
+    var activationStarted by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        PatrolForegroundService.start(context, "SOS 上报与音频采集中")
-        viewModel.activateSos()
         while (seconds > 0) {
             delay(1000)
             seconds -= 1
         }
+        activationStarted = true
+        PatrolForegroundService.start(context, "SOS 上报与音频采集中")
+        viewModel.activateSos()
     }
 
-    val activated = seconds == 0 || uiState.sosActive
+    val activated = activationStarted && uiState.sosActive
+    val activating = activationStarted && !activated
     Box(
         Modifier
             .fillMaxSize()
@@ -84,8 +87,23 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
                     .padding(top = 96.dp, start = 22.dp, end = 22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(if (activated) "紧急上报已激活" else "正在上报位置与录音...", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center)
-                Text("您的位置和环境音频正在被实时监控", color = Color(0xFFFFCDD2), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    when {
+                        activated -> "紧急上报已激活"
+                        activating -> "正在发起紧急上报"
+                        else -> "即将发起紧急上报"
+                    },
+                    color = Color.White,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    if (activated || activating) "您的位置和环境音频正在被实时监控" else "倒计时结束前可右滑取消",
+                    color = Color(0xFFFFCDD2),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
                 Spacer(Modifier.height(42.dp))
                 Box(Modifier.size(256.dp), contentAlignment = Alignment.Center) {
                     Box(
@@ -102,14 +120,16 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
                     )
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(if (activated) "SOS" else seconds.toString(), color = Color.White, fontSize = 76.sp, fontWeight = FontWeight.Black)
-                        Text(if (activated) "ACTIVE" else "长按 3S 激活", color = Color.White.copy(alpha = 0.80f), fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text(if (activated) "ACTIVE" else "5秒后自动上报", color = Color.White.copy(alpha = 0.80f), fontSize = 10.sp, fontWeight = FontWeight.Black)
                     }
                 }
                 Spacer(Modifier.height(38.dp))
                 SlideToCancel(
                     onCancel = {
                         onClose()
-                        viewModel.cancelSos()
+                        if (activationStarted || uiState.sosActive) {
+                            viewModel.cancelSos()
+                        }
                         PatrolForegroundService.stop(context)
                     }
                 )

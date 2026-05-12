@@ -6,10 +6,13 @@ import com.patrollink.data.MockVersionGateway
 import com.patrollink.data.MockPatrolRepository
 import com.patrollink.data.ServiceFactory
 import com.patrollink.data.local.UiSettingsStore
+import com.patrollink.data.remote.AlertDraftRequestDto
+import com.patrollink.data.remote.UploadAttachmentDto
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DisplayThemeMode
+import com.patrollink.domain.DeviceType
 import com.patrollink.domain.FontSizeMode
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.MediaFile
@@ -78,13 +81,13 @@ class PatrolViewModel(
     fun toggleRecord() = viewModelScope.launch {
         val device = _uiState.value.device
         val next = coordinator.setRecording(device, !device.isRecording)
-        _uiState.update { it.copy(device = next) }
+        updateCurrentDevice(next)
     }
 
     fun toggleTalk() = viewModelScope.launch {
         val device = _uiState.value.device
         val next = coordinator.setTalk(device, !device.isTalking)
-        _uiState.update { it.copy(device = next) }
+        updateCurrentDevice(next)
     }
 
     fun setAlertTab(status: AlertStatus) = _uiState.update { it.copy(selectedAlertTab = status) }
@@ -101,22 +104,66 @@ class PatrolViewModel(
         _uiState.update { it.copy(displayThemeMode = mode, operationMessage = "主题模式已保存") }
     }
 
-    fun closeAlert(alertId: String, result: AlertResult = AlertResult.Resolved, note: String = "") = viewModelScope.launch {
+    fun closeAlert(
+        alertId: String,
+        result: AlertResult = AlertResult.Resolved,
+        note: String = "",
+        attachments: List<UploadAttachmentDto> = emptyList()
+    ) = viewModelScope.launch {
+        val payload = alertSubmitPayload(alertId, result, note, attachments)
         coordinator.handleAlert(alertId, result, note)
         _uiState.update {
             it.copy(alerts = it.alerts.map { alert ->
                 if (alert.id == alertId) alert.copy(status = AlertStatus.Closed) else alert
-            }, operationMessage = "处置结果已上传")
+            }, operationMessage = "处置结果已上传：${payload.attachments.size} 个附件")
         }
     }
 
-    fun saveAlertDraft(alertId: String, result: AlertResult, note: String) {
+    fun saveAlertDraft(
+        alertId: String,
+        result: AlertResult,
+        note: String,
+        attachments: List<UploadAttachmentDto> = emptyList()
+    ) {
+        val payload = alertDraftPayload(alertId, result, note, attachments)
         val resultLabel = when (result) {
             AlertResult.Resolved -> "已处置"
             AlertResult.FalseAlarm -> "误报"
             AlertResult.RequestBackup -> "请求增援"
         }
-        _uiState.update { it.copy(operationMessage = "草稿已保存：$resultLabel${if (note.isBlank()) "" else "，含备注"}") }
+        _uiState.update { it.copy(operationMessage = "草稿已保存：$resultLabel，${payload.attachments.size} 个附件待提交") }
+    }
+
+    private fun alertDraftPayload(
+        alertId: String,
+        result: AlertResult,
+        note: String,
+        attachments: List<UploadAttachmentDto>
+    ) = AlertDraftRequestDto(
+        alertId = alertId,
+        result = result.toApiValue(),
+        note = note,
+        operatorId = "POLICE_9527",
+        attachments = attachments
+    )
+
+    private fun alertSubmitPayload(
+        alertId: String,
+        result: AlertResult,
+        note: String,
+        attachments: List<UploadAttachmentDto>
+    ) = AlertDraftRequestDto(
+        alertId = alertId,
+        result = result.toApiValue(),
+        note = note,
+        operatorId = "POLICE_9527",
+        attachments = attachments.map { it.copy(uploadIntent = "UPLOAD_NOW") }
+    )
+
+    private fun AlertResult.toApiValue(): String = when (this) {
+        AlertResult.FalseAlarm -> "FALSE_ALARM"
+        AlertResult.Resolved -> "RESOLVED"
+        AlertResult.RequestBackup -> "REQUEST_BACKUP"
     }
 
     fun activateSos() = viewModelScope.launch {
@@ -154,6 +201,7 @@ class PatrolViewModel(
         _uiState.update { state ->
             state.copy(
                 device = next,
+                connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
                 mediaFiles = listOf(photo) + state.mediaFiles,
                 selectedMediaFileId = photo.id,
                 selectedMediaLocal = false,
@@ -172,6 +220,48 @@ class PatrolViewModel(
     fun stopStream() = viewModelScope.launch {
         runCatching { coordinator.stopStream() }
         _uiState.update { it.copy(streamState = StreamRelayState.Idle, operationMessage = "实时画面已关闭") }
+    }
+
+    fun connectDiscoveredDevice(id: String, name: String, mac: String, signalBars: Int, type: DeviceType) = _uiState.update { state ->
+        val next = state.device.copy(
+            id = id,
+            name = name,
+            online = true,
+            battery = 100,
+            signalBars = signalBars.coerceIn(1, 5),
+            onlineDuration = "刚刚连接",
+            storageUsedGb = if (type == DeviceType.Recorder) state.device.storageUsedGb else 0f,
+            storageTotalGb = if (type == DeviceType.Recorder) state.device.storageTotalGb else 0f,
+            isRecording = false,
+            isTalking = false,
+            cloudConnected = type != DeviceType.Sensor,
+            type = type
+        )
+        val connected = (state.connectedDevices.filterNot { it.type == next.type } + next)
+        state.copy(
+            device = next,
+            connectedDevices = connected,
+            selectedDeviceId = next.id,
+            operationMessage = "$name 已连接"
+        )
+    }
+
+    fun selectConnectedDevice(deviceId: String) = _uiState.update { state ->
+        val selected = state.connectedDevices.firstOrNull { it.id == deviceId } ?: return@update state
+        state.copy(
+            device = selected,
+            selectedDeviceId = selected.id,
+            streamState = StreamRelayState.Idle
+        )
+    }
+
+    private fun updateCurrentDevice(next: com.patrollink.domain.DeviceStatus) {
+        _uiState.update { state ->
+            state.copy(
+                device = next,
+                connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it }
+            )
+        }
     }
 
     fun downloadMedia(fileId: String) = viewModelScope.launch {

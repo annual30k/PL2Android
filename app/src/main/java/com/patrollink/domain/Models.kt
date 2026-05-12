@@ -6,6 +6,7 @@ enum class MediaKind { Video, Photo, Audio }
 enum class TransferStatus { Idle, Hashing, Uploading, Verifying, Done, Failed }
 enum class FontSizeMode { Compact, Standard, Large }
 enum class DisplayThemeMode { System, Light, Dark }
+enum class DeviceType { Headset, Recorder, Sensor }
 
 data class UserProfile(
     val name: String,
@@ -29,7 +30,8 @@ data class DeviceStatus(
     val firmware: String,
     val isRecording: Boolean,
     val isTalking: Boolean,
-    val cloudConnected: Boolean
+    val cloudConnected: Boolean,
+    val type: DeviceType = DeviceType.Headset
 )
 
 data class AlertItem(
@@ -85,6 +87,8 @@ data class AppUiState(
     val versionUpdate: VersionUpdateUiState = VersionUpdateUiState(),
     val operationMessage: String? = null,
     val device: DeviceStatus,
+    val connectedDevices: List<DeviceStatus> = emptyList(),
+    val selectedDeviceId: String? = null,
     val alerts: List<AlertItem>,
     val mediaFiles: List<MediaFile>,
     val user: UserProfile

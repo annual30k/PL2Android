@@ -5,6 +5,7 @@ import com.patrollink.domain.AlertLevel
 import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DeviceStatus
+import com.patrollink.domain.DeviceType
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.MediaFile
@@ -33,7 +34,8 @@ fun DeviceStatusDto.toDomain() = DeviceStatus(
     firmware = firmwareVersion,
     isRecording = recordingStatus == "RECORDING",
     isTalking = talking,
-    cloudConnected = cloudConnected
+    cloudConnected = cloudConnected,
+    type = DeviceType.Headset
 )
 
 fun ScannedDeviceDto.toDomain() = ScannedDevice(deviceId, deviceName, signalBars, serviceUuid, bonded)

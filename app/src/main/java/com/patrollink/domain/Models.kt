@@ -74,7 +74,7 @@ data class AppUiState(
     val networkOnline: Boolean = true,
     val loginLoading: Boolean = false,
     val selectedAlertTab: AlertStatus = AlertStatus.Pending,
-    val selectedMediaLocal: Boolean = false,
+    val selectedMediaLocal: Boolean = true,
     val selectedMediaFileId: String? = null,
     val previewMediaFile: MediaFile? = null,
     val streamState: StreamRelayState = StreamRelayState.Idle,

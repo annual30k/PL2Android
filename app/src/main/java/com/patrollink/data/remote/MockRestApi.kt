@@ -98,7 +98,7 @@ class MockRestApi {
 
     fun transferMedia(fileId: String, request: TransferRequestDto): List<ApiEnvelope<MediaFileDto>> {
         val original = media.first { it.fileId == fileId }
-        val side = if (request.target == "PHONE_SANDBOX") "PHONE" else "DEVICE"
+        val side = if (request.target == "PHONE_SANDBOX") "PHONE" else original.storageSide
         return listOf(
             original.copy(storageSide = side, transferStatus = "HASHING", progress = 0.1f),
             original.copy(storageSide = side, transferStatus = "UPLOADING", progress = 0.55f),

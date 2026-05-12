@@ -18,7 +18,7 @@ fun SystemBars(
     val view = LocalView.current
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
-        window.decorView.setBackgroundColor(statusBarColor.toArgb())
+        window.decorView.setBackgroundColor(navigationBarColor.toArgb())
         @Suppress("DEPRECATION")
         window.statusBarColor = statusBarColor.toArgb()
         @Suppress("DEPRECATION")

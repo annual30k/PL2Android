@@ -1,5 +1,9 @@
 package com.patrollink.presentation.screen
 
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,9 +28,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Save
@@ -47,11 +51,15 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import com.patrollink.domain.AlertLevel
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
@@ -73,6 +81,7 @@ import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
+import java.io.File
 
 @Composable
 fun AlertListScreen(
@@ -82,7 +91,7 @@ fun AlertListScreen(
     onOpenDetail: (String) -> Unit
 ) {
     val colors = PatrolDisplay.colors
-    SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
+    SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.surface, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     Column(Modifier.fillMaxSize().background(colors.page)) {
         ForceTopBar(dark = false, onSos = onSos)
         OfflineBanner(uiState.networkOnline)
@@ -137,20 +146,7 @@ fun AlertListScreen(
                             Text("位置 ${alert.location}", color = colors.textMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             Text("来源 ${alert.source}", color = colors.textMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PrimaryAction("处置", onClick = { onOpenDetail(alert.id) }, modifier = Modifier.weight(1f))
-                            Box(
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(colors.control)
-                                    .clickable { onOpenDetail(alert.id) }
-                                    .padding(horizontal = 17.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Filled.MoreHoriz, contentDescription = null, tint = colors.textMuted)
-                            }
-                        }
+                        PrimaryAction("处置", onClick = { onOpenDetail(alert.id) }, modifier = Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -167,11 +163,20 @@ fun AlertDetailScreen(
     onSos: () -> Unit
 ) {
     val colors = PatrolDisplay.colors
-    SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
+    SystemBars(statusBarColor = colors.topBar, navigationBarColor = Color.White, lightStatusBar = !colors.dark, lightNavigationBar = true)
     val alert = uiState.alerts.firstOrNull { it.id == alertId } ?: uiState.alerts.first()
+    val context = LocalContext.current
     var selectedResult by remember { mutableStateOf("已处置") }
     var note by remember { mutableStateOf("") }
     var captured by remember { mutableStateOf(false) }
+    var showEvidenceSourceDialog by remember { mutableStateOf(false) }
+    var pendingCaptureUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        captured = success || pendingCaptureUri != null
+    }
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) captured = true
+    }
 
     Column(Modifier.fillMaxSize().background(colors.page)) {
         AlertDetailTopBar(onBack = onBack, onSettings = onSos)
@@ -186,7 +191,7 @@ fun AlertDetailScreen(
                 CriticalAlertCard(alert)
             }
             item {
-                EvidenceSection(captured = captured, onCapture = { captured = true })
+                EvidenceSection(captured = captured, onCapture = { showEvidenceSourceDialog = true })
             }
             item {
                 ProcessingCard(
@@ -203,8 +208,16 @@ fun AlertDetailScreen(
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(colors.surface)
-                .border(1.dp, colors.border)
+                .background(Color.White)
+                .drawBehind {
+                    val stroke = 1.dp.toPx()
+                    drawLine(
+                        color = colors.border,
+                        start = Offset(0f, stroke / 2f),
+                        end = Offset(size.width, stroke / 2f),
+                        strokeWidth = stroke
+                    )
+                }
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -239,7 +252,105 @@ fun AlertDetailScreen(
                 }
             }
         }
+        if (showEvidenceSourceDialog) {
+            EvidenceSourceDialog(
+                onDismiss = { showEvidenceSourceDialog = false },
+                onCamera = {
+                    showEvidenceSourceDialog = false
+                    val uri = createEvidenceImageUri(context)
+                    pendingCaptureUri = uri
+                    cameraLauncher.launch(uri)
+                },
+                onGallery = {
+                    showEvidenceSourceDialog = false
+                    galleryLauncher.launch("image/*")
+                }
+            )
+        }
     }
+}
+
+@Composable
+private fun EvidenceSourceDialog(onDismiss: () -> Unit, onCamera: () -> Unit, onGallery: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                Modifier
+                    .fillMaxWidth(0.82f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(colors.surface)
+                    .border(1.dp, colors.border.copy(alpha = 0.8f), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 18.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text("添加现场证据", color = colors.text, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                Text("选择取证来源，照片会加入本次处置材料。", color = colors.textMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                EvidenceSourceAction(
+                    title = "调用相机拍照",
+                    subtitle = "立即拍摄现场画面",
+                    icon = Icons.Filled.AddAPhoto,
+                    onClick = onCamera
+                )
+                EvidenceSourceAction(
+                    title = "打开本地相册",
+                    subtitle = "从手机选择已有图片",
+                    icon = Icons.Filled.Image,
+                    onClick = onGallery
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable(onClick = onDismiss),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("取消", color = TechBlue, fontSize = 15.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EvidenceSourceAction(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surfaceHigh)
+            .border(1.dp, colors.border, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(TechBlue.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = TechBlue, modifier = Modifier.size(25.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.Black)
+            Text(subtitle, color = colors.textSubtle, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun createEvidenceImageUri(context: Context): Uri {
+    val dir = File(context.cacheDir, "evidence").apply { mkdirs() }
+    val file = File(dir, "evidence-${System.currentTimeMillis()}.jpg")
+    return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }
 
 @Composable
@@ -248,8 +359,8 @@ private fun AlertDetailTopBar(onBack: () -> Unit, onSettings: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(56.dp)
             .background(colors.topBar)
+            .height(56.dp)
             .drawBehind {
                 val stroke = 1.dp.toPx()
                 drawLine(

@@ -79,7 +79,8 @@ fun MediaFileDto.toDomain() = MediaFile(
         "FAILED" -> TransferStatus.Failed
         else -> TransferStatus.Idle
     },
-    progress = progress
+    progress = progress,
+    contentUri = contentUri
 )
 
 fun HeartbeatAckDto.toDomain() = HeartbeatAck(accepted, serverTime)

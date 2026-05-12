@@ -11,10 +11,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Devices
@@ -90,52 +95,63 @@ fun PatrolApp(viewModel: PatrolViewModel) {
                 containerColor = PatrolDisplay.colors.page
             ) { padding ->
                 val contentPadding = if (currentRoute == Route.Sos.path) PaddingValues(0.dp) else padding
-                Box(Modifier.padding(contentPadding).background(PatrolDisplay.colors.page)) {
-                    NavHost(navController = navController, startDestination = Route.Device.path) {
-                        composable(Route.Device.path) {
-                            DeviceScreen(uiState, viewModel, onSos = { navController.navigateToSos() })
+                Box(Modifier.fillMaxSize().background(PatrolDisplay.colors.page)) {
+                    Box(Modifier.padding(contentPadding).background(PatrolDisplay.colors.page)) {
+                        NavHost(navController = navController, startDestination = Route.Device.path) {
+                            composable(Route.Device.path) {
+                                DeviceScreen(uiState, viewModel, onSos = { navController.navigateToSos() })
+                            }
+                            composable(Route.Alert.path) {
+                                AlertListScreen(
+                                    uiState = uiState,
+                                    viewModel = viewModel,
+                                    onSos = { navController.navigateToSos() },
+                                    onOpenDetail = { id -> navController.navigate("alertDetail/$id") }
+                                )
+                            }
+                            composable("alertDetail/{id}") { entry ->
+                                val id = entry.arguments?.getString("id").orEmpty()
+                                AlertDetailScreen(
+                                    alertId = id,
+                                    uiState = uiState,
+                                    viewModel = viewModel,
+                                    onBack = { navController.popBackStack() },
+                                    onSos = { navController.navigateToSos() }
+                                )
+                            }
+                            composable(Route.Media.path) {
+                                MediaScreen(uiState, viewModel, onSos = { navController.navigateToSos() })
+                            }
+                            composable(Route.Profile.path) {
+                                ProfileScreen(
+                                    uiState = uiState,
+                                    viewModel = viewModel,
+                                    onSos = { navController.navigateToSos() },
+                                    onOpenVersionInfo = { navController.navigate(Route.VersionInfo.path) }
+                                )
+                            }
+                            composable(Route.VersionInfo.path) {
+                                VersionInfoScreen(uiState = uiState, viewModel = viewModel, onBack = { navController.popBackStack() })
+                            }
+                            composable(
+                                Route.Sos.path,
+                                enterTransition = { fadeIn(animationSpec = tween(durationMillis = 160)) },
+                                exitTransition = { fadeOut(animationSpec = tween(durationMillis = 160)) },
+                                popEnterTransition = { fadeIn(animationSpec = tween(durationMillis = 120)) },
+                                popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 180)) }
+                            ) {
+                                SosScreen(uiState, viewModel, onClose = { navController.popBackStack() })
+                            }
                         }
-                        composable(Route.Alert.path) {
-                            AlertListScreen(
-                                uiState = uiState,
-                                viewModel = viewModel,
-                                onSos = { navController.navigateToSos() },
-                                onOpenDetail = { id -> navController.navigate("alertDetail/$id") }
-                            )
-                        }
-                        composable("alertDetail/{id}") { entry ->
-                            val id = entry.arguments?.getString("id").orEmpty()
-                            AlertDetailScreen(
-                                alertId = id,
-                                uiState = uiState,
-                                viewModel = viewModel,
-                                onBack = { navController.popBackStack() },
-                                onSos = { navController.navigateToSos() }
-                            )
-                        }
-                        composable(Route.Media.path) {
-                            MediaScreen(uiState, viewModel, onSos = { navController.navigateToSos() })
-                        }
-                        composable(Route.Profile.path) {
-                            ProfileScreen(
-                                uiState = uiState,
-                                viewModel = viewModel,
-                                onSos = { navController.navigateToSos() },
-                                onOpenVersionInfo = { navController.navigate(Route.VersionInfo.path) }
-                            )
-                        }
-                        composable(Route.VersionInfo.path) {
-                            VersionInfoScreen(uiState = uiState, viewModel = viewModel, onBack = { navController.popBackStack() })
-                        }
-                        composable(
-                            Route.Sos.path,
-                            enterTransition = { fadeIn(animationSpec = tween(durationMillis = 160)) },
-                            exitTransition = { fadeOut(animationSpec = tween(durationMillis = 160)) },
-                            popEnterTransition = { fadeIn(animationSpec = tween(durationMillis = 120)) },
-                            popExitTransition = { fadeOut(animationSpec = tween(durationMillis = 180)) }
-                        ) {
-                            SosScreen(uiState, viewModel, onClose = { navController.popBackStack() })
-                        }
+                    }
+                    if (currentRoute.startsWith("alertDetail")) {
+                        Spacer(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .windowInsetsBottomHeight(WindowInsets.navigationBars)
+                                .background(Color.White)
+                        )
                     }
                     uiState.operationMessage?.let { message ->
                         AppMessage(message = message, onShown = viewModel::clearMessage)

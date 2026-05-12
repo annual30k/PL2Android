@@ -100,7 +100,8 @@ data class MediaFileDto(
     val sha256Verified: Boolean,
     val storageSide: String,
     val transferStatus: String,
-    val progress: Float
+    val progress: Float,
+    val contentUri: String? = null
 )
 
 data class TransferRequestDto(

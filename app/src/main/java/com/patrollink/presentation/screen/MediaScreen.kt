@@ -1,5 +1,9 @@
 package com.patrollink.presentation.screen
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +15,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,6 +32,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
@@ -36,6 +43,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,10 +58,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
@@ -379,35 +390,41 @@ private fun MediaArtwork(file: MediaFile, modifier: Modifier) {
 
 @Composable
 private fun MediaActionBar(onUpload: () -> Unit, onPlay: () -> Unit, onDelete: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    val barColor = if (colors.dark) Color(0xFF0C1427) else colors.surface
+    val borderColor = if (colors.dark) Color.Transparent else colors.border.copy(alpha = 0.9f)
+    val dividerColor = if (colors.dark) Color.White.copy(alpha = 0.20f) else colors.border
+    val textColor = if (colors.dark) Color.White else colors.text
     Row(
         Modifier
             .fillMaxWidth()
             .height(76.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xFF0C1427))
+            .background(barColor)
+            .border(1.dp, borderColor, RoundedCornerShape(18.dp))
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ActionBarItem("上传云端", Icons.Filled.CloudUpload, Color(0xFF63A8FF), onUpload, Modifier.weight(1f))
-        ActionDivider()
-        ActionBarItem("本地回放", Icons.Filled.PlayCircleFilled, Color.White, onPlay, Modifier.weight(1f))
-        ActionDivider()
-        ActionBarItem("删除", Icons.Filled.Delete, Color(0xFFFF5E7C), onDelete, Modifier.weight(1f))
+        ActionBarItem("上传云端", Icons.Filled.CloudUpload, Color(0xFF2F80ED), textColor, onUpload, Modifier.weight(1f))
+        ActionDivider(dividerColor)
+        ActionBarItem("本地回放", Icons.Filled.PlayCircleFilled, if (colors.dark) Color.White else colors.text, textColor, onPlay, Modifier.weight(1f))
+        ActionDivider(dividerColor)
+        ActionBarItem("删除", Icons.Filled.Delete, Color(0xFFFF4F73), textColor, onDelete, Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun ActionDivider() {
+private fun ActionDivider(color: Color) {
     Box(
         Modifier
             .height(42.dp)
             .width(1.dp)
-            .background(Color.White.copy(alpha = 0.20f))
+            .background(color)
     )
 }
 
 @Composable
-private fun ActionBarItem(text: String, icon: ImageVector, color: Color, onClick: () -> Unit, modifier: Modifier) {
+private fun ActionBarItem(text: String, icon: ImageVector, iconColor: Color, textColor: Color, onClick: () -> Unit, modifier: Modifier) {
     Column(
         modifier
             .fillMaxSize()
@@ -416,57 +433,157 @@ private fun ActionBarItem(text: String, icon: ImageVector, color: Color, onClick
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(26.dp))
+        Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(26.dp))
         Spacer(Modifier.height(6.dp))
-        Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Black)
+        Text(text, color = textColor, fontSize = 12.sp, fontWeight = FontWeight.Black)
     }
 }
 
 @Composable
 private fun MediaPreviewDialog(file: MediaFile, onDismiss: () -> Unit) {
     val colors = PatrolDisplay.colors
-    AlertDialog(
+    val context = LocalContext.current
+    var fullScreen by remember(file.id) { mutableStateOf(false) }
+    val canFullscreen = file.kind == MediaKind.Video || file.kind == MediaKind.Photo
+    Dialog(
         onDismissRequest = onDismiss,
-        title = {
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        if (fullScreen) {
+            FullscreenMediaPlayer(
+                file = file,
+                onExitFullscreen = { fullScreen = false },
+                onDismiss = onDismiss
+            )
+            return@Dialog
+        }
+        Column(
+            Modifier
+                .fillMaxWidth(0.78f)
+                .clip(RoundedCornerShape(26.dp))
+                .background(colors.surface)
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(file.name, color = colors.text, fontWeight = FontWeight.Black)
-                Icon(Icons.Filled.Close, contentDescription = null, tint = colors.textMuted, modifier = Modifier.clickable(onClick = onDismiss))
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(12.dp))
-                ) {
-                    MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
-                    Icon(
-                        imageVector = when (file.kind) {
-                            MediaKind.Photo -> Icons.Filled.Image
-                            MediaKind.Audio -> Icons.AutoMirrored.Filled.VolumeUp
-                            MediaKind.Video -> Icons.Filled.PlayArrow
+                Text(file.name, color = colors.text, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                if (canFullscreen) {
+                    IconButton(
+                        onClick = {
+                            if (!openSystemMediaViewer(context, file)) fullScreen = true
                         },
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.align(Alignment.Center)
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Fullscreen,
+                            contentDescription = null,
+                            tint = colors.textMuted,
+                            modifier = Modifier.size(30.dp)
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Filled.Close, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(30.dp))
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(18.dp))
+            ) {
+                MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
+                Icon(
+                    imageVector = when (file.kind) {
+                        MediaKind.Photo -> Icons.Filled.Image
+                        MediaKind.Audio -> Icons.AutoMirrored.Filled.VolumeUp
+                        MediaKind.Video -> Icons.Filled.PlayArrow
+                    },
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.align(Alignment.Center).size(72.dp)
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("时间：${file.time}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("大小：${file.size}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("同步状态：${transferLabel(file.transferStatus)}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                if (file.progress > 0f && file.progress < 1f) {
+                    LinearProgressIndicator(
+                        progress = { file.progress },
+                        color = TechBlue,
+                        trackColor = colors.control,
+                        modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(99.dp))
                     )
                 }
-                Text("时间：${file.time}", color = colors.textMuted)
-                Text("大小：${file.size}", color = colors.textMuted)
-                Text("同步状态：${transferLabel(file.transferStatus)}", color = colors.textMuted)
-                if (file.progress > 0f && file.progress < 1f) {
-                    LinearProgressIndicator(progress = { file.progress }, color = TechBlue, trackColor = colors.control, modifier = Modifier.fillMaxWidth())
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) {
+                    Text("关闭", fontWeight = FontWeight.Black)
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭")
+        }
+    }
+}
+
+private fun openSystemMediaViewer(context: Context, file: MediaFile): Boolean {
+    val uri = file.contentUri?.let(Uri::parse) ?: return false
+    val mimeType = when (file.kind) {
+        MediaKind.Video -> "video/*"
+        MediaKind.Photo -> "image/*"
+        MediaKind.Audio -> return false
+    }
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    return try {
+        context.startActivity(intent)
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    } catch (_: SecurityException) {
+        false
+    }
+}
+
+@Composable
+private fun FullscreenMediaPlayer(file: MediaFile, onExitFullscreen: () -> Unit, onDismiss: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
+        Icon(
+            imageVector = when (file.kind) {
+                MediaKind.Photo -> Icons.Filled.Image
+                MediaKind.Audio -> Icons.AutoMirrored.Filled.VolumeUp
+                MediaKind.Video -> Icons.Filled.PlayArrow
+            },
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.align(Alignment.Center).size(88.dp)
+        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .background(Color.Black.copy(alpha = 0.42f))
+                .padding(horizontal = 18.dp, vertical = 18.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(file.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            IconButton(onClick = onExitFullscreen, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Filled.FullscreenExit, contentDescription = null, tint = Color.White, modifier = Modifier.size(34.dp))
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(34.dp))
             }
         }
-    )
+    }
 }
 
 private fun MediaKind.toKindCode() = when (this) {

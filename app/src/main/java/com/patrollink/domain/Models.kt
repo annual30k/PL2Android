@@ -54,7 +54,8 @@ data class MediaFile(
     val verified: Boolean,
     val local: Boolean,
     val transferStatus: TransferStatus,
-    val progress: Float
+    val progress: Float,
+    val contentUri: String? = null
 )
 
 enum class VersionUpdatePhase { Idle, Checking, Available, Downloading, Ready, UpToDate, Failed }

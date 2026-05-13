@@ -68,7 +68,30 @@ data class VersionCheckResult(
     val latestVersionName: String,
     val forceUpdate: Boolean,
     val changelog: List<String>,
-    val downloadUrl: String?
+    val downloadUrl: String?,
+    val sha256: String? = null
 ) {
     val hasUpdate: Boolean get() = latestVersionCode > 1
 }
+
+data class SosRecording(
+    val sessionId: String,
+    val filePath: String,
+    val startedAt: Long,
+    val stoppedAt: Long?,
+    val sizeBytes: Long
+)
+
+data class VersionInstallPackage(
+    val versionName: String,
+    val filePath: String,
+    val sha256: String,
+    val verified: Boolean
+)
+
+data class EmergencyContact(
+    val id: String,
+    val name: String,
+    val role: String,
+    val phone: String
+)

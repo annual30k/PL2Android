@@ -71,3 +71,27 @@ interface EvidenceIntegrityGateway {
 interface VersionGateway {
     suspend fun check(currentVersionCode: Int): VersionCheckResult
 }
+
+interface LocationGateway {
+    suspend fun currentLocation(): GpsLocation
+}
+
+interface SosEvidenceRecorder {
+    suspend fun start(sessionId: String): SosRecording
+    suspend fun stop(): SosRecording?
+}
+
+interface VersionInstaller {
+    suspend fun prepare(update: VersionCheckResult, expectedSha256: String? = null): VersionInstallPackage
+    fun launchInstall(packageInfo: VersionInstallPackage): Boolean
+}
+
+interface EmergencyContactGateway {
+    suspend fun contacts(): List<EmergencyContact>
+    suspend fun notifyContacts(sosId: String, location: GpsLocation): Boolean
+}
+
+interface PatrolNotificationGateway {
+    fun notifySosActive(location: GpsLocation)
+    fun notifyAlert(title: String, body: String)
+}

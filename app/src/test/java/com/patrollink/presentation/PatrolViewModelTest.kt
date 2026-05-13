@@ -3,6 +3,8 @@ package com.patrollink.presentation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import com.patrollink.domain.TransferTarget
+import com.patrollink.domain.VersionUpdatePhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -55,7 +57,9 @@ class PatrolViewModelTest {
 
         viewModel.downloadMedia(fileId)
         advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.mediaFiles.first { it.id == fileId }.local)
+        val downloaded = viewModel.uiState.value.mediaFiles.first { it.id == fileId }
+        assertTrue(downloaded.local)
+        assertEquals(TransferTarget.PhoneSandbox, downloaded.lastTransferTarget)
 
         viewModel.deleteMedia(fileId)
         advanceUntilIdle()
@@ -73,5 +77,18 @@ class PatrolViewModelTest {
         viewModel.cancelSos()
         advanceUntilIdle()
         assertFalse(viewModel.uiState.value.sosActive)
+    }
+
+    @Test
+    fun mockVersionUpdateCompletesWithoutRealInstallerDownload() = runTest {
+        val viewModel = PatrolViewModel()
+
+        viewModel.checkVersionUpdate()
+        advanceUntilIdle()
+        viewModel.installVersionUpdate()
+        advanceUntilIdle()
+
+        assertEquals(VersionUpdatePhase.Ready, viewModel.uiState.value.versionUpdate.phase)
+        assertEquals("1.3.0", viewModel.uiState.value.versionUpdate.currentVersionName)
     }
 }

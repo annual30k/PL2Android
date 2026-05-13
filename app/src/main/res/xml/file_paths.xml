@@ -3,4 +3,13 @@
     <cache-path
         name="evidence"
         path="evidence/" />
+    <cache-path
+        name="updates"
+        path="updates/" />
+    <files-path
+        name="patrol_media"
+        path="patrol_media/" />
+    <files-path
+        name="sos_audio"
+        path="sos_audio/" />
 </paths>

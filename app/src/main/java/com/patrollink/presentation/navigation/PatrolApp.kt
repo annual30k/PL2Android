@@ -84,7 +84,11 @@ private enum class Route(val path: String, val label: String) {
 }
 
 @Composable
-fun PatrolApp(viewModel: PatrolViewModel) {
+fun PatrolApp(
+    viewModel: PatrolViewModel,
+    bluetoothEnabled: Boolean,
+    onToggleBluetooth: () -> Unit
+) {
     val uiState by viewModel.uiState.collectAsState()
     val navController = rememberNavController()
 
@@ -128,6 +132,8 @@ fun PatrolApp(viewModel: PatrolViewModel) {
                                 AddDeviceScreen(
                                     uiState = uiState,
                                     viewModel = viewModel,
+                                    bluetoothEnabled = bluetoothEnabled,
+                                    onToggleBluetooth = onToggleBluetooth,
                                     onBack = { navController.popBackStack() },
                                     onSos = { navController.navigateToSos() }
                                 )
@@ -267,17 +273,17 @@ private fun AppMessage(message: String, onShown: () -> Unit) {
         delay(1800)
         onShown()
     }
-    Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.TopCenter) {
+    Box(Modifier.fillMaxSize().padding(horizontal = 42.dp), contentAlignment = Alignment.Center) {
         Text(
             text = message,
             color = colors.text,
-            fontSize = 13.sp,
+            fontSize = 15.sp,
             fontWeight = FontWeight.Black,
             modifier = Modifier
-                .clip(RoundedCornerShape(99.dp))
+                .clip(RoundedCornerShape(18.dp))
                 .background(colors.surfaceHigh)
-                .border(1.dp, colors.border, RoundedCornerShape(99.dp))
-                .padding(horizontal = 16.dp, vertical = 9.dp)
+                .border(1.dp, colors.border.copy(alpha = 0.86f), RoundedCornerShape(18.dp))
+                .padding(horizontal = 22.dp, vertical = 16.dp)
         )
     }
 }

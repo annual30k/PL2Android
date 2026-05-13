@@ -3,6 +3,7 @@ package com.patrollink.data
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.DeviceCommand
+import com.patrollink.domain.DeviceType
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.RealtimeConnection
 import com.patrollink.domain.SosPhase
@@ -36,6 +37,7 @@ class MockGatewayTest {
         val talking = gateway.sendCommand(bound.id, DeviceCommand.StartTalk)
 
         assertEquals("HEADSET_001", bound.id)
+        assertTrue(scanned.any { it.type == DeviceType.Glasses && it.name == "ForceLink-G1" })
         assertTrue(recording.isRecording)
         assertTrue(talking.isTalking)
     }

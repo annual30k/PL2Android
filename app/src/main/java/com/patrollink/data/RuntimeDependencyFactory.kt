@@ -5,11 +5,21 @@ import com.patrollink.data.local.AndroidKeystoreSecureStore
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.SecureStore
+import com.patrollink.domain.LocationGateway
+import com.patrollink.domain.EmergencyContactGateway
+import com.patrollink.domain.PatrolNotificationGateway
+import com.patrollink.domain.SosEvidenceRecorder
+import com.patrollink.domain.VersionInstaller
 
 data class RuntimeDependencies(
     val coordinator: PatrolCoordinator,
     val secureStore: SecureStore,
     val settingsStore: UiSettingsStore,
+    val locationGateway: LocationGateway,
+    val sosEvidenceRecorder: SosEvidenceRecorder,
+    val emergencyContactGateway: EmergencyContactGateway,
+    val notificationGateway: PatrolNotificationGateway,
+    val versionInstaller: VersionInstaller,
     val tokenStore: RuntimeTokenStore,
     val config: RuntimeConfig
 )
@@ -32,6 +42,11 @@ object RuntimeDependencyFactory {
             coordinator = coordinator,
             secureStore = secureStore,
             settingsStore = UiSettingsStore(appContext),
+            locationGateway = ServiceFactory.createLocationGateway(appContext, fallbackState),
+            sosEvidenceRecorder = ServiceFactory.createSosEvidenceRecorder(appContext),
+            emergencyContactGateway = ServiceFactory.createEmergencyContactGateway(),
+            notificationGateway = ServiceFactory.createNotificationGateway(appContext),
+            versionInstaller = ServiceFactory.createVersionInstaller(appContext),
             tokenStore = tokenStore,
             config = config
         )

@@ -23,9 +23,9 @@ class MockRestApi {
     )
 
     private var media = listOf(
-        MediaFileDto("VID-042", "CAM_04_A", "VIDEO", "14:22:05", "84.1 MB", "04:12", true, "DEVICE", "UPLOADING", 0.68f),
+        MediaFileDto("VID-042", "CAM_04_A", "VIDEO", "14:22:05", "84.1 MB", "04:12", true, "DEVICE", "IDLE", 0f),
         MediaFileDto("IMG-8821", "IMG_8821", "PHOTO", "14:45:12", "2.4 MB", null, true, "DEVICE", "DONE", 1f),
-        MediaFileDto("AUD-318", "VOICE_318", "AUDIO", "14:50:02", "8.6 MB", "03:55", true, "PHONE", "HASHING", 0.18f),
+        MediaFileDto("AUD-318", "VOICE_318", "AUDIO", "14:50:02", "8.6 MB", "03:55", true, "PHONE", "IDLE", 0f),
         MediaFileDto("VID-051", "PATROL_051", "VIDEO", "15:02:18", "126 MB", "08:12", false, "PHONE", "IDLE", 0f)
     )
 
@@ -59,7 +59,8 @@ class MockRestApi {
         listOf(
             ScannedDeviceDto("HEADSET_001", "ForceLink-H1", 4, "0000-pl2-ble-control", true, "2C:4A:91:3F:8B:02", "HEADSET"),
             ScannedDeviceDto("RECORDER_A5", "ForceLink-A5", 3, "0000-pl2-ble-control", false, "4F:02:8C:76:A1:19", "RECORDER"),
-            ScannedDeviceDto("SENSOR_S9", "ForceLink-S9", 2, "0000-pl2-ble-control", false, "1E:BD:55:0A:44:71", "SENSOR")
+            ScannedDeviceDto("SENSOR_S9", "ForceLink-S9", 2, "0000-pl2-ble-control", false, "1E:BD:55:0A:44:71", "SENSOR"),
+            ScannedDeviceDto("GLASSES_G1", "ForceLink-G1", 4, "0000-pl2-ble-control", false, "6B:13:9E:41:D7:50", "GLASSES")
         )
     )
 

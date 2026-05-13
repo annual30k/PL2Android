@@ -29,6 +29,7 @@ class AndroidPermissionPlanner : PermissionGateway {
         val base = mutableListOf(
             AppPermission.Internet,
             AppPermission.NetworkState,
+            AppPermission.FineLocation,
             AppPermission.Camera,
             AppPermission.RecordAudio,
             AppPermission.ForegroundService
@@ -37,8 +38,6 @@ class AndroidPermissionPlanner : PermissionGateway {
             base += AppPermission.BluetoothScan
             base += AppPermission.BluetoothConnect
             base += AppPermission.BluetoothAdvertise
-        } else {
-            base += AppPermission.FineLocation
         }
         if (androidApi >= 33) {
             base += AppPermission.PostNotifications

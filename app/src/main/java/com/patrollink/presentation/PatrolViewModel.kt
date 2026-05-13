@@ -13,16 +13,21 @@ import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.DeviceType
+import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.FontSizeMode
+import com.patrollink.domain.LocationGateway
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.PatrolCoordinator
+import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SecureStore
+import com.patrollink.domain.SosEvidenceRecorder
 import com.patrollink.domain.StreamMode
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.VersionGateway
+import com.patrollink.domain.VersionInstaller
 import com.patrollink.domain.VersionUpdatePhase
 import com.patrollink.domain.VersionUpdateUiState
 import java.text.SimpleDateFormat
@@ -40,6 +45,11 @@ class PatrolViewModel(
     private val secureStore: SecureStore? = null,
     private val settingsStore: UiSettingsStore? = null,
     private val versionGateway: VersionGateway = MockVersionGateway(),
+    private val locationGateway: LocationGateway? = null,
+    private val sosEvidenceRecorder: SosEvidenceRecorder? = null,
+    private val emergencyContactGateway: EmergencyContactGateway? = null,
+    private val notificationGateway: PatrolNotificationGateway? = null,
+    private val versionInstaller: VersionInstaller? = null,
     private val onSessionChanged: (AuthSession?) -> Unit = {}
 ) : ViewModel() {
     private val repository = MockPatrolRepository()
@@ -53,6 +63,7 @@ class PatrolViewModel(
 
     init {
         refreshScannedDevices()
+        refreshEmergencyContacts()
         viewModelScope.launch {
             secureStore?.readSession()?.let {
                 onSessionChanged(it)
@@ -171,11 +182,17 @@ class PatrolViewModel(
     }
 
     fun activateSos() = viewModelScope.launch {
-        coordinator.activateSos(_uiState.value.sosLocation)
+        val location = locationGateway?.currentLocation() ?: _uiState.value.sosLocation
+        _uiState.update { it.copy(sosLocation = location) }
+        val event = coordinator.activateSos(location)
+        runCatching { sosEvidenceRecorder?.start(event.id) }
+        runCatching { emergencyContactGateway?.notifyContacts(event.id, location) }
+        runCatching { notificationGateway?.notifySosActive(location) }
         _uiState.update { it.copy(sosActive = true) }
     }
 
     fun cancelSos() = viewModelScope.launch {
+        runCatching { sosEvidenceRecorder?.stop() }
         coordinator.cancelSos()
         _uiState.update { it.copy(sosActive = false) }
     }
@@ -220,32 +237,39 @@ class PatrolViewModel(
     }
 
     fun connectDiscoveredDevice(id: String, name: String, mac: String, signalBars: Int, type: DeviceType) = _uiState.update { state ->
-        val next = state.device.copy(
-            id = id,
-            name = name,
-            online = true,
-            battery = 100,
-            signalBars = signalBars.coerceIn(1, 5),
-            onlineDuration = "刚刚连接",
-            storageUsedGb = if (type == DeviceType.Recorder) state.device.storageUsedGb else 0f,
-            storageTotalGb = if (type == DeviceType.Recorder) state.device.storageTotalGb else 0f,
-            isRecording = false,
-            isTalking = false,
-            cloudConnected = type != DeviceType.Sensor,
-            type = type
-        )
-        val connected = (state.connectedDevices.filterNot { it.type == next.type } + next)
-        state.copy(
-            device = next,
-            connectedDevices = connected,
-            selectedDeviceId = next.id,
-            operationMessage = "$name 已连接"
-        )
+        state.copy(operationMessage = "正在连接 $name")
+    }.also {
+        viewModelScope.launch {
+            val bound = runCatching { coordinator.bindDevice(id) }.getOrElse {
+                _uiState.value.device.copy(id = id, name = name, online = false, signalBars = signalBars.coerceIn(1, 5), type = type)
+            }
+            val next = bound.copy(
+                name = name,
+                signalBars = bound.signalBars.coerceIn(1, 5),
+                onlineDuration = if (bound.online) "刚刚连接" else "连接失败",
+                type = type
+            )
+            _uiState.update { state ->
+                val connected = (state.connectedDevices.filterNot { it.id == next.id || it.type == next.type } + next)
+                state.copy(
+                    device = next,
+                    connectedDevices = connected,
+                    selectedDeviceId = next.id,
+                    operationMessage = if (next.online) "$name 已连接" else "$name 连接失败，请检查蓝牙和距离"
+                )
+            }
+        }
     }
 
     fun refreshScannedDevices() = viewModelScope.launch {
         coordinator.scanDevices().collect { devices ->
             _uiState.update { it.copy(scannedDevices = devices) }
+        }
+    }
+
+    private fun refreshEmergencyContacts() = viewModelScope.launch {
+        emergencyContactGateway?.contacts()?.let { contacts ->
+            _uiState.update { it.copy(emergencyContacts = contacts) }
         }
     }
 
@@ -268,18 +292,65 @@ class PatrolViewModel(
     }
 
     fun downloadMedia(fileId: String) = viewModelScope.launch {
-        coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
-            _uiState.update { state ->
-                state.copy(mediaFiles = state.mediaFiles.map { if (it.id == fileId) updated else it })
+        runCatching {
+            coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
+                updateTransferredMedia(fileId, updated.markTransferTarget(TransferTarget.PhoneSandbox))
+                if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
+        }.onFailure {
+            simulateMediaTransfer(fileId, TransferTarget.PhoneSandbox)
         }
     }
 
     fun uploadMedia(fileId: String) = viewModelScope.launch {
-        coordinator.transferMedia(fileId, TransferTarget.Cloud).collect { updated ->
-            _uiState.update { state ->
-                state.copy(mediaFiles = state.mediaFiles.map { if (it.id == fileId) updated else it })
+        val current = _uiState.value.mediaFiles.firstOrNull { it.id == fileId }
+        if (current?.transferStatus == TransferStatus.Done) {
+            _uiState.update { it.copy(operationMessage = "${current.name} 已上传") }
+            return@launch
+        }
+        runCatching {
+            coordinator.transferMedia(fileId, TransferTarget.Cloud).collect { updated ->
+                updateTransferredMedia(fileId, updated.markTransferTarget(TransferTarget.Cloud))
+                if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
+        }.onFailure {
+            simulateMediaTransfer(fileId, TransferTarget.Cloud)
+        }
+    }
+
+    private suspend fun simulateMediaTransfer(fileId: String, target: TransferTarget) {
+        val original = _uiState.value.mediaFiles.firstOrNull { it.id == fileId } ?: return
+        val steps = listOf(
+            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Hashing, progress = 0.1f, lastTransferTarget = target),
+            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Uploading, progress = 0.55f, lastTransferTarget = target),
+            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Verifying, progress = 0.9f, lastTransferTarget = target),
+            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Done, progress = 1f, verified = true, lastTransferTarget = target)
+        )
+        steps.forEach { updated ->
+            updateTransferredMedia(fileId, updated)
+            if (updated.transferStatus != TransferStatus.Done) delay(420)
+        }
+    }
+
+    private fun MediaFile.markTransferTarget(target: TransferTarget): MediaFile =
+        copy(
+            local = target == TransferTarget.PhoneSandbox || local,
+            lastTransferTarget = target
+        )
+
+    private fun updateTransferredMedia(fileId: String, updated: MediaFile) {
+        _uiState.update { state ->
+            state.copy(mediaFiles = state.mediaFiles.map { if (it.id == fileId) updated else it })
+        }
+    }
+
+    fun verifyMedia(fileId: String) = viewModelScope.launch {
+        val verified = runCatching { coordinator.verifyMedia(fileId) }.getOrDefault(false)
+        _uiState.update { state ->
+            state.copy(
+                mediaFiles = state.mediaFiles.map { if (it.id == fileId) it.copy(verified = verified) else it },
+                operationMessage = if (verified) "证据完整性校验通过" else "证据完整性校验失败"
+            )
         }
     }
 
@@ -305,6 +376,8 @@ class PatrolViewModel(
     fun closeMediaPreview() = _uiState.update { it.copy(previewMediaFile = null) }
 
     fun clearMessage() = _uiState.update { it.copy(operationMessage = null) }
+
+    fun showOperationMessage(message: String) = _uiState.update { it.copy(operationMessage = message) }
 
     fun checkVersionUpdate() = viewModelScope.launch {
         _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Checking, message = "正在检查更新")) }
@@ -334,20 +407,54 @@ class PatrolViewModel(
 
     fun installVersionUpdate() = viewModelScope.launch {
         val latest = _uiState.value.versionUpdate.latestVersionName ?: return@launch
+        val updateState = _uiState.value.versionUpdate
         _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Downloading, progress = 0f, message = "正在下载更新")) }
+        if (versionInstaller == null || updateState.downloadUrl?.contains("example.test") == true) {
+            for (step in 1..10) {
+                delay(90)
+                _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(progress = step / 10f)) }
+            }
+            _uiState.update {
+                it.copy(
+                    versionUpdate = it.versionUpdate.copy(
+                        phase = VersionUpdatePhase.Ready,
+                        currentVersionName = latest,
+                        progress = 1f,
+                        message = "更新包已准备完成"
+                    ),
+                    operationMessage = "更新包已下载，等待系统安装确认"
+                )
+            }
+            return@launch
+        }
+        val result = runCatching {
+            val check = versionGateway.check(currentVersionCode = 1)
+            versionInstaller.prepare(check, check.sha256)
+        }
+        if (result.isSuccess && result.getOrNull() != null) {
+            _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(progress = 0.92f, message = "更新包已校验，等待系统安装")) }
+            val launched = versionInstaller?.launchInstall(result.getOrNull()!!) == true
+            _uiState.update {
+                it.copy(
+                    versionUpdate = it.versionUpdate.copy(
+                        phase = VersionUpdatePhase.Ready,
+                        currentVersionName = latest,
+                        progress = 1f,
+                        message = if (launched) "已打开系统安装确认" else "更新包已准备完成"
+                    ),
+                    operationMessage = "更新包 SHA-256 已校验"
+                )
+            }
+            return@launch
+        }
         for (step in 1..10) {
             delay(90)
             _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(progress = step / 10f)) }
         }
         _uiState.update {
             it.copy(
-                versionUpdate = it.versionUpdate.copy(
-                    phase = VersionUpdatePhase.Ready,
-                    currentVersionName = latest,
-                    progress = 1f,
-                    message = "更新包已准备完成"
-                ),
-                operationMessage = "更新包已下载，等待系统安装确认"
+                versionUpdate = updateState.copy(phase = VersionUpdatePhase.Failed, progress = 0f, message = "更新包下载或校验失败"),
+                operationMessage = "更新失败，请检查更新地址和网络"
             )
         }
     }

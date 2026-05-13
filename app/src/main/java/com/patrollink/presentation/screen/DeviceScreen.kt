@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -29,18 +30,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -114,15 +113,31 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> U
                     }
                 }
                 DeviceType.Headset -> {
+                    item { RecorderLiveFeed(uiState, viewModel, device) }
                     item { HeadsetCapabilityCard(device) }
                     item { HeadsetActions(device, viewModel) }
                     item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
                     item { MetricTile("耳机电量", "${device.battery}%", Success, device.battery / 100f) }
+                    item {
+                        MetricTile(
+                            "本机存储",
+                            "${device.storageUsedGb}GB / ${device.storageTotalGb.toInt()}GB",
+                            Warning,
+                            device.storageUsedGb / device.storageTotalGb
+                        )
+                    }
                 }
                 DeviceType.Sensor -> {
                     item { SensorCapabilityCard(device) }
                     item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
                     item { MetricTile("状态稳定度", "96%", Success, 0.96f) }
+                }
+                DeviceType.Glasses -> {
+                    item { RecorderLiveFeed(uiState, viewModel, device) }
+                    item { GlassesCapabilityCard(device) }
+                    item { GlassesActions(device, viewModel) }
+                    item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
+                    item { MetricTile("眼镜电量", "${device.battery}%", Success, device.battery / 100f) }
                 }
             }
         }
@@ -188,7 +203,7 @@ private fun ConnectedDeviceChip(device: DeviceStatus, selected: Boolean, onClick
         horizontalArrangement = Arrangement.spacedBy(9.dp)
     ) {
         Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(accent.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
-            Icon(device.type.icon(), contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
+            DeviceTypeIcon(type = device.type, tint = accent, modifier = Modifier.size(30.dp), fontSize = 23.sp)
         }
         Column(Modifier.weight(1f)) {
             Text(device.name, color = colors.text, style = PatrolTextStyle.BodyStrong.copy(fontSize = 14.sp, lineHeight = 18.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -281,7 +296,11 @@ private fun HeadsetCapabilityCard(device: DeviceStatus) {
     CapabilitySummaryCard(
         title = device.name,
         type = device.type,
-        rows = listOf("语音对讲" to if (device.isTalking) "通道占用中" else "待机", "蓝牙音频" to "低延迟", "电量" to "${device.battery}%")
+        rows = listOf(
+            "摄像头" to if (device.isRecording) "录像中" else "待机",
+            "语音对讲" to if (device.isTalking) "通道占用中" else "待机",
+            "电量" to "${device.battery}%"
+        )
     )
 }
 
@@ -296,8 +315,16 @@ private fun HeadsetActions(device: DeviceStatus, viewModel: PatrolViewModel) {
                 onClick = viewModel::toggleTalk
             )
         }
-        Box(Modifier.weight(1f)) { CapabilityTile("音频链路", "已加密", Success) }
-        Box(Modifier.weight(1f)) { CapabilityTile("佩戴状态", "正常", TechBlue) }
+        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) {
+            ActionTile(
+                if (device.isRecording) "停止录像" else "执法录像",
+                if (device.isRecording) "stop" else "video",
+                active = device.isRecording,
+                danger = device.isRecording,
+                onClick = viewModel::toggleRecord
+            )
+        }
     }
 }
 
@@ -311,6 +338,32 @@ private fun SensorCapabilityCard(device: DeviceStatus) {
 }
 
 @Composable
+private fun GlassesCapabilityCard(device: DeviceStatus) {
+    CapabilitySummaryCard(
+        title = device.name,
+        type = device.type,
+        rows = listOf("第一视角" to "低延迟预览", "AR 提示" to "待命", "电量" to "${device.battery}%")
+    )
+}
+
+@Composable
+private fun GlassesActions(device: DeviceStatus, viewModel: PatrolViewModel) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.weight(1f)) { ActionTile("抓拍", "camera", onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) {
+            ActionTile(
+                if (device.isRecording) "停止录像" else "执法录像",
+                if (device.isRecording) "stop" else "video",
+                active = device.isRecording,
+                danger = device.isRecording,
+                onClick = viewModel::toggleRecord
+            )
+        }
+        Box(Modifier.weight(1f)) { CapabilityTile("AR 取证", "已就绪", device.type.accent()) }
+    }
+}
+
+@Composable
 private fun CapabilitySummaryCard(title: String, type: DeviceType, rows: List<Pair<String, String>>) {
     val colors = PatrolDisplay.colors
     val accent = type.accent()
@@ -318,7 +371,7 @@ private fun CapabilitySummaryCard(title: String, type: DeviceType, rows: List<Pa
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(accent.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
-                    Icon(type.icon(), contentDescription = null, tint = accent, modifier = Modifier.size(24.dp))
+                    DeviceTypeIcon(type = type, tint = accent, modifier = Modifier.size(32.dp), fontSize = 25.sp)
                 }
                 Column {
                     Text(title, color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 17.sp, lineHeight = 22.sp))
@@ -351,10 +404,17 @@ private fun CapabilityTile(label: String, value: String, accent: Color) {
 }
 
 @Composable
-fun AddDeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () -> Unit, onSos: () -> Unit) {
+fun AddDeviceScreen(
+    uiState: AppUiState,
+    viewModel: PatrolViewModel,
+    bluetoothEnabled: Boolean,
+    onToggleBluetooth: () -> Unit,
+    onBack: () -> Unit,
+    onSos: () -> Unit
+) {
     val colors = PatrolDisplay.colors
     val palette = addDevicePalette(colors.dark)
-    val devices = uiState.scannedDevices
+    val devices = remember(uiState.scannedDevices) { uiState.scannedDevices.distinctByDeviceIdentity() }
     val connectedKeys = uiState.connectedDevices
         .ifEmpty { listOf(uiState.device) }
         .flatMap { listOf(it.id, it.name) }
@@ -389,7 +449,15 @@ fun AddDeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () 
             modifier = Modifier.fillMaxSize().background(palette.page),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            item { ScanHeader(palette = palette, devices = devices, connectedKeys = connectedKeys) }
+            item {
+                ScanHeader(
+                    palette = palette,
+                    devices = devices,
+                    connectedKeys = connectedKeys,
+                    bluetoothEnabled = bluetoothEnabled,
+                    onToggleBluetooth = onToggleBluetooth
+                )
+            }
             item {
                 Row(
                     Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp),
@@ -404,9 +472,13 @@ fun AddDeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () 
                             .padding(horizontal = 11.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(Modifier.size(9.dp).clip(RoundedCornerShape(99.dp)).background(Success))
+                        Box(Modifier.size(9.dp).clip(RoundedCornerShape(99.dp)).background(if (bluetoothEnabled) Success else Warning))
                         Spacer(Modifier.width(8.dp))
-                        Text("搜索中", color = palette.muted, style = PatrolTextStyle.BodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Black))
+                        Text(
+                            if (bluetoothEnabled) "搜索中" else "蓝牙关闭",
+                            color = palette.muted,
+                            style = PatrolTextStyle.BodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Black)
+                        )
                     }
                 }
             }
@@ -436,7 +508,13 @@ fun AddDeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () 
 }
 
 @Composable
-private fun ScanHeader(palette: AddDevicePalette, devices: List<ScannedDevice>, connectedKeys: Set<String>) {
+private fun ScanHeader(
+    palette: AddDevicePalette,
+    devices: List<ScannedDevice>,
+    connectedKeys: Set<String>,
+    bluetoothEnabled: Boolean,
+    onToggleBluetooth: () -> Unit
+) {
     val transition = rememberInfiniteTransition(label = "device-scan")
     val pulse = transition.animateFloat(
         initialValue = 0f,
@@ -475,25 +553,39 @@ private fun ScanHeader(palette: AddDevicePalette, devices: List<ScannedDevice>, 
                         .border(1.dp, Color(0xFF3B82F6), RoundedCornerShape(999.dp))
                 )
             }
-            Box(
+            Column(
                 Modifier
-                    .size(74.dp)
+                    .size(86.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xFF3B82F6)),
-                contentAlignment = Alignment.Center
+                    .background(if (bluetoothEnabled) Color(0xFF3B82F6) else palette.iconMuted)
+                    .clickable(onClick = onToggleBluetooth),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Icon(Icons.Filled.Bluetooth, contentDescription = null, tint = Color.White, modifier = Modifier.size(36.dp))
+                Icon(Icons.Filled.Bluetooth, contentDescription = "蓝牙开关", tint = Color.White, modifier = Modifier.size(36.dp))
+                Text(
+                    if (bluetoothEnabled) "已开启" else "点击开启",
+                    color = Color.White,
+                    style = PatrolTextStyle.Caption.copy(fontSize = 9.sp, lineHeight = 12.sp),
+                    maxLines = 1
+                )
             }
         }
-        Box(Modifier.align(Alignment.Center).fillMaxWidth().height(300.dp).padding(horizontal = 18.dp)) {
-            devices.take(3).forEachIndexed { index, device ->
+        BoxWithConstraints(Modifier.align(Alignment.Center).fillMaxWidth().height(300.dp).padding(horizontal = 18.dp)) {
+            val chipSize = 104.dp
+            val placements = radarChipPlacements(devices)
+            devices.take(4).forEachIndexed { index, device ->
+                val placement = placements[device.id] ?: RadarChipPlacement(0.5f, 0.5f)
                 HeaderDeviceChip(
                     device = device,
                     palette = palette,
                     connected = device.isConnected(connectedKeys),
                     modifier = Modifier
-                        .align(deviceChipAlignment(index))
-                        .offset(x = deviceChipOffsetX(index), y = deviceChipOffsetY(index))
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = (maxWidth - chipSize) * placement.x,
+                            y = (300.dp - chipSize) * placement.y
+                        )
                 )
             }
         }
@@ -514,7 +606,7 @@ private fun HeaderDeviceChip(
     }
     Box(
         modifier
-            .size(if (connected) 94.dp else 84.dp)
+            .size(if (connected) 104.dp else 96.dp)
             .clip(RoundedCornerShape(999.dp))
             .background(ringColor.copy(alpha = if (connected) 0.18f else 0.12f))
             .border(1.dp, ringColor.copy(alpha = 0.46f), RoundedCornerShape(999.dp))
@@ -526,51 +618,56 @@ private fun HeaderDeviceChip(
                 .fillMaxSize()
                 .clip(RoundedCornerShape(999.dp))
                 .background(if (connected) palette.headerChipActive else palette.headerChip)
-                .padding(horizontal = 7.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Icon(
-                device.type.icon(),
-                contentDescription = null,
+            DeviceTypeIcon(
+                type = device.type,
                 tint = if (device.bonded || connected) Color(0xFF60A5FA) else palette.iconMuted,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(34.dp),
+                fontSize = 25.sp
             )
-            Spacer(Modifier.height(3.dp))
+            Spacer(Modifier.height(1.dp))
             Text(
                 device.name.removePrefix("ForceLink-"),
                 color = palette.headerChipText,
-                style = PatrolTextStyle.Caption.copy(fontSize = 10.sp, lineHeight = 13.sp),
+                style = PatrolTextStyle.Caption.copy(fontSize = 10.sp, lineHeight = 15.sp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
                 if (connected) "已连" else device.type.shortLabel,
                 color = if (connected) Success else palette.headerChipSubtext,
-                style = PatrolTextStyle.Caption.copy(fontSize = 9.sp, lineHeight = 12.sp),
+                style = PatrolTextStyle.Caption.copy(fontSize = 9.sp, lineHeight = 15.sp),
                 maxLines = 1
             )
         }
     }
 }
 
-private fun deviceChipAlignment(index: Int): Alignment = when (index % 3) {
-    0 -> Alignment.TopStart
-    1 -> Alignment.CenterEnd
-    else -> Alignment.BottomStart
+private data class RadarChipPlacement(val x: Float, val y: Float)
+
+private fun radarChipPlacements(devices: List<ScannedDevice>): Map<String, RadarChipPlacement> {
+    val candidates = listOf(
+        RadarChipPlacement(0.05f, 0.18f),
+        RadarChipPlacement(0.78f, 0.12f),
+        RadarChipPlacement(0.10f, 0.72f),
+        RadarChipPlacement(0.84f, 0.72f)
+    )
+    return devices.take(4).mapIndexed { index, device ->
+        device.id to candidates[index % candidates.size]
+    }.toMap()
 }
 
-private fun deviceChipOffsetX(index: Int) = when (index % 3) {
-    0 -> 36.dp
-    1 -> (-28).dp
-    else -> 86.dp
-}
-
-private fun deviceChipOffsetY(index: Int) = when (index % 3) {
-    0 -> 24.dp
-    1 -> (-26).dp
-    else -> (-26).dp
-}
+private fun List<ScannedDevice>.distinctByDeviceIdentity(): List<ScannedDevice> =
+    distinctBy { device ->
+        when {
+            device.macAddress.isNotBlank() -> device.macAddress.uppercase()
+            device.id.isNotBlank() -> device.id
+            else -> device.name
+        }
+    }
 
 @Composable
 private fun DiscoveredDeviceCard(
@@ -597,7 +694,12 @@ private fun DiscoveredDeviceCard(
                 .background(if (device.bonded) palette.iconActiveBg else palette.iconBg),
             contentAlignment = Alignment.Center
         ) {
-            Icon(device.type.icon(), contentDescription = null, tint = if (device.bonded) TechBlue else palette.iconMuted, modifier = Modifier.size(28.dp))
+            DeviceTypeIcon(
+                type = device.type,
+                tint = if (device.bonded) TechBlue else palette.iconMuted,
+                modifier = Modifier.size(38.dp),
+                fontSize = 28.sp
+            )
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -616,22 +718,24 @@ private fun DiscoveredDeviceCard(
             )
         }
         SignalBars(device.signalBars, active = device.bonded, palette = palette)
-        Spacer(Modifier.width(14.dp))
-        Button(
-            onClick = onConnect,
-            enabled = !connected,
-            shape = RoundedCornerShape(10.dp),
-            contentPadding = PaddingValues(horizontal = 14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (device.bonded) Color(0xFF2F7DF6) else Color(0xFF5B91F4),
-                disabledContainerColor = palette.disabledButton
-            ),
-            modifier = Modifier.width(86.dp).height(48.dp)
+        Spacer(Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .width(72.dp)
+                .height(40.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(
+                    if (connected) palette.disabledButton
+                    else if (device.bonded) Color(0xFF2F7DF6)
+                    else Color(0xFF4D8DF6)
+                )
+                .then(if (connected) Modifier else Modifier.clickable(onClick = onConnect)),
+            contentAlignment = Alignment.Center
         ) {
             Text(
                 if (connected) "已连接" else "连接",
                 color = Color.White,
-                style = PatrolTextStyle.BodyStrong.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                style = PatrolTextStyle.BodyStrong.copy(fontSize = 12.sp, lineHeight = 16.sp),
                 maxLines = 1
             )
         }
@@ -689,30 +793,54 @@ private fun ScanTipsCard(palette: AddDevicePalette) {
 private fun ScannedDevice.isConnected(connectedKeys: Set<String>) =
     id in connectedKeys || macAddress in connectedKeys || name in connectedKeys
 
+@Composable
+private fun DeviceTypeIcon(
+    type: DeviceType,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 22.sp
+) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Text(type.emojiIcon, fontSize = fontSize, lineHeight = (fontSize.value * 1.25f).sp, maxLines = 1)
+    }
+}
+
 private val DeviceType.label: String
     get() = when (this) {
-        DeviceType.Headset -> "执法耳机"
+        DeviceType.Headset -> "摄录耳机"
         DeviceType.Recorder -> "记录仪"
         DeviceType.Sensor -> "传感器"
+        DeviceType.Glasses -> "智能眼镜"
     }
 
 private val DeviceType.shortLabel: String
     get() = when (this) {
-        DeviceType.Headset -> "耳机"
+        DeviceType.Headset -> "摄录"
         DeviceType.Recorder -> "记录"
         DeviceType.Sensor -> "传感"
+        DeviceType.Glasses -> "眼镜"
     }
 
 private fun DeviceType.icon() = when (this) {
-    DeviceType.Headset -> Icons.Filled.Headphones
+    DeviceType.Headset -> Icons.Filled.Videocam
     DeviceType.Recorder -> Icons.Filled.Videocam
     DeviceType.Sensor -> Icons.Filled.Sensors
+    DeviceType.Glasses -> Icons.Filled.Videocam
 }
+
+private val DeviceType.emojiIcon: String
+    get() = when (this) {
+        DeviceType.Headset -> "🎧"
+        DeviceType.Recorder -> "📹"
+        DeviceType.Sensor -> "📟"
+        DeviceType.Glasses -> "👓"
+    }
 
 private fun DeviceType.accent() = when (this) {
     DeviceType.Headset -> TechBlue
     DeviceType.Recorder -> Color(0xFF8B5CF6)
     DeviceType.Sensor -> Success
+    DeviceType.Glasses -> Color(0xFF14B8A6)
 }
 
 private data class AddDevicePalette(

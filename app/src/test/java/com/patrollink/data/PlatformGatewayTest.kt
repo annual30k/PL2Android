@@ -24,10 +24,10 @@ class PlatformGatewayTest {
             listOf(
                 AppPermission.Internet,
                 AppPermission.NetworkState,
+                AppPermission.FineLocation,
                 AppPermission.Camera,
                 AppPermission.RecordAudio,
-                AppPermission.ForegroundService,
-                AppPermission.FineLocation
+                AppPermission.ForegroundService
             ),
             api30
         )
@@ -36,7 +36,7 @@ class PlatformGatewayTest {
         assertTrue(AppPermission.BluetoothScan in api31)
         assertTrue(AppPermission.BluetoothConnect in api31)
         assertTrue(AppPermission.BluetoothAdvertise in api31)
-        assertFalse(AppPermission.FineLocation in api31)
+        assertTrue(AppPermission.FineLocation in api31)
         assertFalse(AppPermission.PostNotifications in api31)
         assertTrue(AppPermission.PostNotifications in api33)
     }
@@ -47,6 +47,7 @@ class PlatformGatewayTest {
         val granted = setOf(
             AppPermission.Internet,
             AppPermission.NetworkState,
+            AppPermission.FineLocation,
             AppPermission.Camera,
             AppPermission.RecordAudio,
             AppPermission.ForegroundService,

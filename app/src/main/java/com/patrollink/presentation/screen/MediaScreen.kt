@@ -7,6 +7,8 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -22,23 +24,29 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -69,6 +77,7 @@ import com.patrollink.domain.AppUiState
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.TransferStatus
+import com.patrollink.domain.TransferTarget
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.ForceTopBar
 import com.patrollink.presentation.component.MediaThumbBackground
@@ -78,7 +87,9 @@ import com.patrollink.presentation.theme.Muted
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
+import com.patrollink.presentation.theme.Warning
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Unit) {
     val colors = PatrolDisplay.colors
@@ -88,56 +99,115 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Un
         .filter { it.local == uiState.selectedMediaLocal }
         .filter { filter.matches(it.kind) }
     val selected = files.firstOrNull { it.id == uiState.selectedMediaFileId } ?: files.firstOrNull()
+    val primaryAction = selected?.mediaPrimaryAction(uiState.selectedMediaLocal)
     var pendingDelete by remember { mutableStateOf<MediaFile?>(null) }
-    Column(Modifier.fillMaxSize().background(colors.page)) {
-        ForceTopBar(title = null, dark = colors.dark, onSos = onSos)
-        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
-            ) {
+    var showIntegrityHelp by remember { mutableStateOf(false) }
+    var dismissedTransferFileId by remember { mutableStateOf<String?>(null) }
+    Box(Modifier.fillMaxSize().background(colors.page)) {
+        Column(Modifier.fillMaxSize()) {
+            ForceTopBar(title = null, dark = colors.dark, onSos = onSos)
+            Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    item {
+                        MediaEndpointSwitch(
+                            phoneSelected = uiState.selectedMediaLocal,
+                            onPhone = { viewModel.setMediaLocal(true) },
+                            onDevice = { viewModel.setMediaLocal(false) }
+                        )
+                    }
+                    item {
+                        StorageSummaryCard(
+                            title = if (uiState.selectedMediaLocal) "手机存储" else "设备存储",
+                            usedGb = uiState.device.storageUsedGb,
+                            totalGb = uiState.device.storageTotalGb,
+                            onHelp = { showIntegrityHelp = true }
+                        )
+                    }
+                    item {
+                        MediaFilterRow(selected = filter, onSelected = { filter = it })
+                    }
                 item {
-                    MediaEndpointSwitch(
-                        phoneSelected = uiState.selectedMediaLocal,
-                        onPhone = { viewModel.setMediaLocal(true) },
-                        onDevice = { viewModel.setMediaLocal(false) }
-                    )
-                }
-                item {
-                    StorageSummaryCard(
-                        title = if (uiState.selectedMediaLocal) "手机存储" else "设备存储",
-                        usedGb = uiState.device.storageUsedGb,
-                        totalGb = uiState.device.storageTotalGb
-                    )
-                }
-                item {
-                    MediaFilterRow(selected = filter, onSelected = { filter = it })
-                }
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                        files.chunked(2).forEach { row ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                row.forEach { file ->
-                                    MediaGridCard(
-                                        file = file,
-                                        selected = selected?.id == file.id,
-                                        onClick = { viewModel.selectMedia(file.id) },
-                                        modifier = Modifier.weight(1f)
-                                    )
+                    if (files.isEmpty()) {
+                        MediaEmptyState(filter = filter, phoneSelected = uiState.selectedMediaLocal)
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                            files.chunked(2).forEach { row ->
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    row.forEach { file ->
+                                        MediaGridCard(
+                                            file = file,
+                                            selected = selected?.id == file.id,
+                                            onClick = { viewModel.selectMedia(file.id) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (row.size == 1) Box(Modifier.weight(1f))
                                 }
-                                if (row.size == 1) Box(Modifier.weight(1f))
                             }
                         }
                     }
+                    }
                 }
+                MediaActionBar(
+                    primaryText = primaryAction?.label ?: if (uiState.selectedMediaLocal) "上传云端" else "下载沙盒",
+                    primaryIcon = primaryAction?.icon ?: if (uiState.selectedMediaLocal) Icons.Filled.UploadFile else Icons.Filled.Inventory2,
+                    onPrimary = {
+                        selected?.let {
+                            when (it.mediaPrimaryAction(uiState.selectedMediaLocal)) {
+                                MediaPrimaryAction.Upload -> {
+                                    dismissedTransferFileId = null
+                                    viewModel.uploadMedia(it.id)
+                                }
+                                MediaPrimaryAction.Download -> {
+                                    dismissedTransferFileId = null
+                                    viewModel.downloadMedia(it.id)
+                                }
+                                MediaPrimaryAction.Uploaded -> viewModel.showOperationMessage("${it.name} 已上传")
+                                MediaPrimaryAction.Downloaded -> viewModel.showOperationMessage("${it.name} 已下载到沙盒")
+                                MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${it.name} ${transferLabel(it.transferStatus)}，请稍候")
+                            }
+                        }
+                    },
+                    onPlay = {
+                        selected?.let {
+                            if (it.kind == MediaKind.Audio) {
+                                viewModel.showOperationMessage("${it.name} 暂不支持本地音频预览")
+                            } else {
+                                viewModel.openMediaPreview(it.id)
+                            }
+                        }
+                    },
+                    onVerify = {
+                        selected?.let {
+                            if (it.verified) viewModel.showOperationMessage("${it.name} 已完成证据校验") else viewModel.verifyMedia(it.id)
+                        }
+                    },
+                    onDelete = {
+                        selected?.let {
+                            if (it.transferStatus.inProgress) viewModel.showOperationMessage("${it.name} 正在处理，完成后再删除") else pendingDelete = it
+                        }
+                    }
+                )
+                Spacer(Modifier.height(12.dp))
             }
-            MediaActionBar(
-                onUpload = { selected?.let { viewModel.uploadMedia(it.id) } },
-                onPlay = { selected?.let { viewModel.openMediaPreview(it.id) } },
-                onDelete = { pendingDelete = selected }
-            )
-            Spacer(Modifier.height(12.dp))
+        }
+        selected?.takeIf { it.transferStatus.inProgress && it.id != dismissedTransferFileId }?.let { file ->
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = if (colors.dark) 0.18f else 0.10f))
+                    .clickable { dismissedTransferFileId = file.id },
+                contentAlignment = Alignment.Center
+            ) {
+                FloatingTransferProgress(
+                    file = file,
+                    modifier = Modifier.clickable {}
+                )
+            }
         }
     }
     uiState.previewMediaFile?.let { file ->
@@ -162,6 +232,9 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Un
                 }
             }
         )
+    }
+    if (showIntegrityHelp) {
+        IntegrityHelpDialog(onDismiss = { showIntegrityHelp = false })
     }
 }
 
@@ -201,8 +274,9 @@ private fun EndpointButton(text: String, selected: Boolean, onClick: () -> Unit,
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun StorageSummaryCard(title: String, usedGb: Float, totalGb: Float) {
+private fun StorageSummaryCard(title: String, usedGb: Float, totalGb: Float, onHelp: () -> Unit) {
     val colors = PatrolDisplay.colors
     Column(
         Modifier
@@ -214,7 +288,19 @@ private fun StorageSummaryCard(title: String, usedGb: Float, totalGb: Float) {
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Box(
+                    Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(colors.control)
+                        .combinedClickable(onClick = {}, onLongClick = onHelp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(15.dp))
+                }
+            }
             Text("${usedGb}GB / ${totalGb.toInt()}GB", color = Color(0xFF91A1BA), fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
         LinearProgressIndicator(
@@ -262,6 +348,36 @@ private fun FilterChip(text: String, selected: Boolean, onClick: () -> Unit, mod
 }
 
 @Composable
+private fun MediaEmptyState(filter: MediaFilter, phoneSelected: Boolean) {
+    val colors = PatrolDisplay.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .height(230.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.border.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
+            .padding(22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(Modifier.size(54.dp).clip(CircleShape).background(colors.control.copy(alpha = 0.78f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(30.dp))
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("暂无${filter.label}文件", color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            if (phoneSelected) "可从设备端下载到沙盒，或等待现场采集生成。" else "设备端当前没有匹配类型的媒体。",
+            color = colors.textMuted,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
 private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
     val colors = PatrolDisplay.colors
     Column(
@@ -277,19 +393,7 @@ private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Uni
         ) {
             MediaArtwork(file = file, modifier = Modifier.fillMaxSize())
             MediaKindBadge(file)
-            if (file.verified) {
-                Box(
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(TechBlue),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Filled.Security, contentDescription = null, tint = Color.White, modifier = Modifier.size(21.dp))
-                }
-            }
+            MediaSyncBadge(file = file, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp))
             Text(
                 file.size,
                 color = Color.White,
@@ -311,6 +415,17 @@ private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Uni
                     Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
                 }
             }
+            if (file.transferStatus.inProgress) {
+                LinearProgressIndicator(
+                    progress = { file.progress.coerceIn(0f, 1f) },
+                    color = TechBlue,
+                    trackColor = Color.White.copy(alpha = 0.22f),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(5.dp)
+                )
+            }
         }
         Column(Modifier.padding(top = 10.dp, start = 4.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(file.name, color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -325,9 +440,28 @@ private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Uni
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(Modifier.width(6.dp))
-                StatusTag(transferLabel(file.transferStatus), transferColor(file.transferStatus))
+                StatusTag(mediaStatusLabel(file), transferColor(file.transferStatus))
             }
         }
+    }
+}
+
+@Composable
+private fun BoxScope.MediaSyncBadge(file: MediaFile, modifier: Modifier = Modifier) {
+    val (icon, background, tint) = when (file.transferStatus) {
+        TransferStatus.Done -> Triple(if (file.lastTransferTarget == TransferTarget.PhoneSandbox) Icons.Filled.DownloadDone else Icons.Filled.CloudDone, Success, Color.White)
+        TransferStatus.Uploading, TransferStatus.Hashing, TransferStatus.Verifying -> Triple(Icons.Filled.CloudUpload, TechBlue, Color.White)
+        TransferStatus.Failed -> Triple(Icons.Filled.CloudUpload, Color(0xFFFF4F73), Color.White)
+        TransferStatus.Idle -> Triple(Icons.Filled.CloudUpload, Color.White.copy(alpha = 0.88f), TechBlue)
+    }
+    Box(
+        modifier
+            .size(34.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(background),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(21.dp))
     }
 }
 
@@ -387,7 +521,40 @@ private fun MediaArtwork(file: MediaFile, modifier: Modifier) {
 }
 
 @Composable
-private fun MediaActionBar(onUpload: () -> Unit, onPlay: () -> Unit, onDelete: () -> Unit) {
+private fun FloatingTransferProgress(file: MediaFile, modifier: Modifier = Modifier) {
+    val colors = PatrolDisplay.colors
+    val percent = (file.progress.coerceIn(0f, 1f) * 100).toInt()
+    Column(
+        modifier
+            .widthIn(max = 310.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.border.copy(alpha = 0.85f), RoundedCornerShape(22.dp))
+            .padding(horizontal = 18.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(Modifier.size(48.dp).clip(CircleShape).background(TechBlue.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.UploadFile, contentDescription = null, tint = TechBlue, modifier = Modifier.size(27.dp))
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(file.name, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${mediaStatusLabel(file)} · $percent%", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        LinearProgressIndicator(
+            progress = { file.progress.coerceIn(0f, 1f) },
+            color = TechBlue,
+            trackColor = colors.control.copy(alpha = 0.65f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(99.dp))
+        )
+    }
+}
+
+@Composable
+private fun MediaActionBar(primaryText: String, primaryIcon: ImageVector, onPrimary: () -> Unit, onPlay: () -> Unit, onVerify: () -> Unit, onDelete: () -> Unit) {
     val colors = PatrolDisplay.colors
     val barColor = if (colors.dark) Color(0xFF0C1427) else colors.surface
     val borderColor = if (colors.dark) Color.Transparent else colors.border.copy(alpha = 0.9f)
@@ -403,9 +570,11 @@ private fun MediaActionBar(onUpload: () -> Unit, onPlay: () -> Unit, onDelete: (
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ActionBarItem("上传云端", Icons.Filled.CloudUpload, Color(0xFF2F80ED), textColor, onUpload, Modifier.weight(1f))
+        ActionBarItem(primaryText, primaryIcon, Color(0xFF2F80ED), textColor, onPrimary, Modifier.weight(1f))
         ActionDivider(dividerColor)
         ActionBarItem("本地回放", Icons.Filled.PlayCircleFilled, if (colors.dark) Color.White else colors.text, textColor, onPlay, Modifier.weight(1f))
+        ActionDivider(dividerColor)
+        ActionBarItem("证据校验", Icons.Filled.Security, Success, textColor, onVerify, Modifier.weight(1f))
         ActionDivider(dividerColor)
         ActionBarItem("删除", Icons.Filled.Delete, Color(0xFFFF4F73), textColor, onDelete, Modifier.weight(1f))
     }
@@ -506,7 +675,9 @@ private fun MediaPreviewDialog(file: MediaFile, onDismiss: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("时间：${file.time}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 Text("大小：${file.size}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Text("同步状态：${transferLabel(file.transferStatus)}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("同步状态：${mediaStatusLabel(file)}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("完整性：${if (file.verified) "SHA-256 已校验 / 水印令牌已登记" else "待校验"}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("存储：${if (file.local) "App 私有沙盒" else "耳机设备端"}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 if (file.progress > 0f && file.progress < 1f) {
                     LinearProgressIndicator(
                         progress = { file.progress },
@@ -521,6 +692,92 @@ private fun MediaPreviewDialog(file: MediaFile, onDismiss: () -> Unit) {
                     Text("关闭", fontWeight = FontWeight.Black)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun IntegrityHelpDialog(onDismiss: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .widthIn(max = 420.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(colors.surface)
+                .border(1.dp, colors.border.copy(alpha = 0.75f), RoundedCornerShape(22.dp))
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Success.copy(alpha = if (colors.dark) 0.22f else 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.Security, contentDescription = null, tint = Success, modifier = Modifier.size(28.dp))
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("证据校验", color = colors.text, fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.Black)
+                    Text("上传前确认文件可信", color = colors.textMuted, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Text(
+                "对选中的媒体生成完整性记录，用来确认下载、保存、上传前后没有被篡改。",
+                color = colors.textMuted,
+                fontSize = 14.sp,
+                lineHeight = 21.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                IntegrityFeatureRow(Icons.Filled.Check, "SHA-256 指纹", "生成唯一文件摘要，云端可复核。", TechBlue)
+                IntegrityFeatureRow(Icons.Filled.Security, "水印令牌", "登记人员与时间线索，便于追溯。", Success)
+                IntegrityFeatureRow(Icons.Filled.Inventory2, "沙盒存储", "文件保存在 App 私有目录，减少外部访问。", Warning)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text(
+                    "知道了",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(TechBlue)
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 22.dp, vertical = 12.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun IntegrityFeatureRow(icon: ImageVector, title: String, body: String, color: Color) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (colors.dark) colors.surfaceHigh.copy(alpha = 0.72f) else colors.control.copy(alpha = 0.55f))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(color.copy(alpha = if (colors.dark) 0.24f else 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = colors.text, fontSize = 14.sp, lineHeight = 19.sp, fontWeight = FontWeight.Black)
+            Text(body, color = colors.textMuted, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -591,13 +848,45 @@ private fun MediaKind.toKindCode() = when (this) {
 }
 
 private fun transferLabel(status: TransferStatus) = when (status) {
-    TransferStatus.Done -> "已上传"
-    else -> "待同步"
+    TransferStatus.Done -> "已完成"
+    TransferStatus.Hashing -> "校验中"
+    TransferStatus.Uploading -> "上传中"
+    TransferStatus.Verifying -> "确认中"
+    TransferStatus.Failed -> "失败"
+    TransferStatus.Idle -> "待上传"
 }
 
 private fun transferColor(status: TransferStatus) = when (status) {
     TransferStatus.Done -> Success
+    TransferStatus.Hashing, TransferStatus.Uploading, TransferStatus.Verifying -> TechBlue
+    TransferStatus.Failed -> Color(0xFFFF4F73)
     else -> Muted
+}
+
+private val TransferStatus.inProgress: Boolean
+    get() = this == TransferStatus.Hashing || this == TransferStatus.Uploading || this == TransferStatus.Verifying
+
+private fun mediaStatusLabel(file: MediaFile): String = when (file.transferStatus) {
+    TransferStatus.Done -> if (file.lastTransferTarget == TransferTarget.PhoneSandbox) "已下载" else "已上传"
+    TransferStatus.Idle -> if (file.local) "待上传" else "待下载"
+    else -> transferLabel(file.transferStatus)
+}
+
+private enum class MediaPrimaryAction(val label: String, val icon: ImageVector) {
+    Upload("上传云端", Icons.Filled.UploadFile),
+    Uploaded("已上传", Icons.Filled.CloudDone),
+    Download("下载沙盒", Icons.Filled.Inventory2),
+    Downloaded("已下载", Icons.Filled.DownloadDone),
+    Busy("处理中", Icons.Filled.CloudUpload)
+}
+
+private fun MediaFile.mediaPrimaryAction(phoneSelected: Boolean): MediaPrimaryAction = when {
+    transferStatus.inProgress -> MediaPrimaryAction.Busy
+    phoneSelected && transferStatus == TransferStatus.Done && lastTransferTarget == TransferTarget.PhoneSandbox -> MediaPrimaryAction.Upload
+    phoneSelected && transferStatus == TransferStatus.Done -> MediaPrimaryAction.Uploaded
+    phoneSelected -> MediaPrimaryAction.Upload
+    transferStatus == TransferStatus.Done -> MediaPrimaryAction.Downloaded
+    else -> MediaPrimaryAction.Download
 }
 
 private enum class MediaFilter(val label: String) {

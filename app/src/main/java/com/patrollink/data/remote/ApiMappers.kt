@@ -48,6 +48,7 @@ fun ScannedDeviceDto.toDomain() = ScannedDevice(
     type = when (deviceType) {
         "RECORDER" -> DeviceType.Recorder
         "SENSOR" -> DeviceType.Sensor
+        "GLASSES" -> DeviceType.Glasses
         else -> DeviceType.Headset
     }
 )

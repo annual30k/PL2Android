@@ -76,6 +76,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
+import com.patrollink.domain.OperationMessageType
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
 import com.patrollink.presentation.PatrolViewModel
@@ -166,16 +167,16 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Un
                                     dismissedTransferFileId = null
                                     viewModel.downloadMedia(it.id)
                                 }
-                                MediaPrimaryAction.Uploaded -> viewModel.showOperationMessage("${it.name} 已上传")
-                                MediaPrimaryAction.Downloaded -> viewModel.showOperationMessage("${it.name} 已下载到沙盒")
-                                MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${it.name} ${transferLabel(it.transferStatus)}，请稍候")
+                                MediaPrimaryAction.Uploaded -> viewModel.showOperationMessage("${it.name} 已上传", OperationMessageType.Success)
+                                MediaPrimaryAction.Downloaded -> viewModel.showOperationMessage("${it.name} 已下载到沙盒", OperationMessageType.Success)
+                                MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${it.name} ${transferLabel(it.transferStatus)}，请稍候", OperationMessageType.Warning)
                             }
                         }
                     },
                     onPlay = {
                         selected?.let {
                             if (it.kind == MediaKind.Audio) {
-                                viewModel.showOperationMessage("${it.name} 暂不支持本地音频预览")
+                                viewModel.showOperationMessage("${it.name} 暂不支持本地音频预览", OperationMessageType.Warning)
                             } else {
                                 viewModel.openMediaPreview(it.id)
                             }
@@ -183,12 +184,12 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Un
                     },
                     onVerify = {
                         selected?.let {
-                            if (it.verified) viewModel.showOperationMessage("${it.name} 已完成证据校验") else viewModel.verifyMedia(it.id)
+                            if (it.verified) viewModel.showOperationMessage("${it.name} 已完成证据校验", OperationMessageType.Success) else viewModel.verifyMedia(it.id)
                         }
                     },
                     onDelete = {
                         selected?.let {
-                            if (it.transferStatus.inProgress) viewModel.showOperationMessage("${it.name} 正在处理，完成后再删除") else pendingDelete = it
+                            if (it.transferStatus.inProgress) viewModel.showOperationMessage("${it.name} 正在处理，完成后再删除", OperationMessageType.Warning) else pendingDelete = it
                         }
                     }
                 )

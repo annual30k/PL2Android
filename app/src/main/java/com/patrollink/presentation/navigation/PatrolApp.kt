@@ -22,11 +22,15 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -47,7 +51,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
@@ -56,6 +62,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.delay
+import com.patrollink.domain.OperationMessage
+import com.patrollink.domain.OperationMessageType
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.permission.PermissionGate
 import com.patrollink.presentation.screen.AddDeviceScreen
@@ -267,25 +275,112 @@ private fun EquipmentReminderDialog(battery: Int, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun AppMessage(message: String, onShown: () -> Unit) {
-    val colors = PatrolDisplay.colors
+private fun AppMessage(message: OperationMessage, onShown: () -> Unit) {
+    val displayColors = PatrolDisplay.colors
+    val style = messageStyleFor(message.type, displayColors.dark)
     LaunchedEffect(message) {
-        delay(1800)
+        delay(style.durationMillis)
         onShown()
     }
-    Box(Modifier.fillMaxSize().padding(horizontal = 42.dp), contentAlignment = Alignment.Center) {
-        Text(
-            text = message,
-            color = colors.text,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Black,
+    Box(Modifier.fillMaxSize().padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
+        Row(
             modifier = Modifier
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(18.dp))
-                .background(colors.surfaceHigh)
-                .border(1.dp, colors.border.copy(alpha = 0.86f), RoundedCornerShape(18.dp))
-                .padding(horizontal = 22.dp, vertical = 16.dp)
-        )
+                .background(style.container)
+                .border(1.dp, style.border, RoundedCornerShape(18.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(style.accent.copy(alpha = if (displayColors.dark) 0.22f else 0.13f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(style.icon, contentDescription = null, tint = style.accent, modifier = Modifier.size(21.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = style.title,
+                    color = style.accent,
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                    letterSpacing = 0.sp
+                )
+                Text(
+                    text = message.text,
+                    color = style.text,
+                    fontSize = 15.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
     }
+}
+
+private data class MessageVisualStyle(
+    val title: String,
+    val icon: ImageVector,
+    val accent: Color,
+    val container: Color,
+    val border: Color,
+    val text: Color,
+    val durationMillis: Long
+)
+
+@Composable
+private fun messageStyleFor(type: OperationMessageType, dark: Boolean): MessageVisualStyle {
+    val accent = when (type) {
+        OperationMessageType.Info -> Color(0xFF2563EB)
+        OperationMessageType.Success -> Color(0xFF16A34A)
+        OperationMessageType.Warning -> Color(0xFFF59E0B)
+        OperationMessageType.Error -> Color(0xFFDC2626)
+    }
+    val title = when (type) {
+        OperationMessageType.Info -> "提示"
+        OperationMessageType.Success -> "完成"
+        OperationMessageType.Warning -> "警告"
+        OperationMessageType.Error -> "错误"
+    }
+    val icon = when (type) {
+        OperationMessageType.Info -> Icons.Filled.Info
+        OperationMessageType.Success -> Icons.Filled.CheckCircle
+        OperationMessageType.Warning -> Icons.Filled.Warning
+        OperationMessageType.Error -> Icons.Filled.Error
+    }
+    val container = if (dark) {
+        when (type) {
+            OperationMessageType.Info -> Color(0xFF0F2547)
+            OperationMessageType.Success -> Color(0xFF0D2F22)
+            OperationMessageType.Warning -> Color(0xFF332711)
+            OperationMessageType.Error -> Color(0xFF3A1518)
+        }
+    } else {
+        when (type) {
+            OperationMessageType.Info -> Color(0xFFEFF6FF)
+            OperationMessageType.Success -> Color(0xFFF0FDF4)
+            OperationMessageType.Warning -> Color(0xFFFFF7ED)
+            OperationMessageType.Error -> Color(0xFFFEF2F2)
+        }
+    }
+    val text = if (dark) Color(0xFFF8FAFC) else Color(0xFF111827)
+    return MessageVisualStyle(
+        title = title,
+        icon = icon,
+        accent = accent,
+        container = container,
+        border = accent.copy(alpha = if (dark) 0.42f else 0.26f),
+        text = text,
+        durationMillis = if (type == OperationMessageType.Error || type == OperationMessageType.Warning) 2400 else 1800
+    )
 }
 
 @Composable

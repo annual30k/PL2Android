@@ -29,12 +29,17 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -46,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -359,25 +365,89 @@ private fun GlassesActions(device: DeviceStatus, viewModel: PatrolViewModel) {
 private fun CapabilitySummaryCard(title: String, type: DeviceType, rows: List<Pair<String, String>>) {
     val colors = PatrolDisplay.colors
     val accent = type.accent()
-    PatrolCard(radius = 16) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(accent.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
+    PatrolCard(radius = 16, padding = PaddingValues(horizontal = 14.dp, vertical = 14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(accent.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
                     DeviceTypeIcon(type = type, tint = accent, modifier = Modifier.size(32.dp), fontSize = 25.sp)
                 }
-                Column {
-                    Text(title, color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 17.sp, lineHeight = 22.sp))
-                    Text(type.label, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
+                Column(Modifier.weight(1f)) {
+                    Text(title, color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 17.sp, lineHeight = 22.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(type.label, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 1)
                 }
+                StatusTag("在线", Success, filled = true)
             }
-            rows.forEach { (label, value) ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(label, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
-                    Text(value, color = colors.text, style = PatrolTextStyle.BodyStrong.copy(fontSize = 13.sp, lineHeight = 18.sp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                rows.forEachIndexed { index, (label, value) ->
+                    DeviceInfoRow(label = label, value = value, accent = deviceInfoAccent(index, label))
                 }
             }
         }
     }
+}
+
+@Composable
+private fun DeviceInfoRow(label: String, value: String, accent: Color) {
+    val colors = PatrolDisplay.colors
+    val valueColor = deviceInfoValueColor(label, value, accent)
+    Row(
+        Modifier.fillMaxWidth().height(29.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            Box(Modifier.size(24.dp).clip(RoundedCornerShape(7.dp)).background(accent.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                Icon(deviceInfoIcon(label), contentDescription = null, tint = accent, modifier = Modifier.size(15.dp))
+            }
+            Text(
+                label,
+                color = colors.textMuted,
+                style = PatrolTextStyle.BodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black),
+                maxLines = 1
+            )
+        }
+        Text(
+            value,
+            color = valueColor,
+            style = PatrolTextStyle.BodyStrong.copy(
+                fontSize = if (label.contains("存储")) 13.sp else 14.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.Black
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+private fun deviceInfoIcon(label: String): ImageVector = when {
+    label.contains("摄像") -> Icons.Filled.Videocam
+    label.contains("语音") -> Icons.Filled.Mic
+    label.contains("时长") -> Icons.Filled.AccessTime
+    label.contains("电量") -> Icons.Filled.BatteryFull
+    label.contains("存储") -> Icons.Filled.Storage
+    label.contains("环境") || label.contains("姿态") -> Icons.Filled.Sensors
+    label.contains("视角") || label.contains("AR") -> Icons.Filled.CameraAlt
+    else -> Icons.Filled.Info
+}
+
+private fun deviceInfoAccent(index: Int, label: String): Color = when {
+    label.contains("电量") -> Success
+    label.contains("存储") -> Warning
+    label.contains("语音") -> TechBlue
+    label.contains("摄像") || label.contains("视角") || label.contains("AR") -> Color(0xFF2563EB)
+    label.contains("环境") || label.contains("姿态") -> Success
+    index % 2 == 0 -> TechBlue
+    else -> Color(0xFF14B8A6)
+}
+
+private fun deviceInfoValueColor(label: String, value: String, accent: Color): Color = when {
+    value.contains("待机") -> Color(0xFF334155)
+    value.contains("录像") || value.contains("占用") -> Danger
+    label.contains("电量") -> Success
+    label.contains("存储") -> Warning
+    label.contains("时长") -> Color(0xFF0F766E)
+    else -> accent
 }
 
 @Composable

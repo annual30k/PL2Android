@@ -7,6 +7,12 @@ enum class TransferStatus { Idle, Hashing, Uploading, Verifying, Done, Failed }
 enum class FontSizeMode { Compact, Standard, Large }
 enum class DisplayThemeMode { System, Light, Dark }
 enum class DeviceType { Headset, Recorder, Sensor, Glasses }
+enum class OperationMessageType { Info, Success, Warning, Error }
+
+data class OperationMessage(
+    val text: String,
+    val type: OperationMessageType
+)
 
 data class UserProfile(
     val name: String,
@@ -88,7 +94,7 @@ data class AppUiState(
     val fontSizeMode: FontSizeMode = FontSizeMode.Standard,
     val displayThemeMode: DisplayThemeMode = DisplayThemeMode.System,
     val versionUpdate: VersionUpdateUiState = VersionUpdateUiState(),
-    val operationMessage: String? = null,
+    val operationMessage: OperationMessage? = null,
     val deviceCapabilities: DeviceCapabilities = DeviceCapabilities(),
     val deviceWifiState: DeviceWifiState = DeviceWifiState(),
     val deviceSettings: DeviceAdvancedSettings = DeviceAdvancedSettings(),

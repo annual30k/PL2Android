@@ -22,6 +22,8 @@ import com.patrollink.domain.FontSizeMode
 import com.patrollink.domain.LocationGateway
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
+import com.patrollink.domain.OperationMessage
+import com.patrollink.domain.OperationMessageType
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SecureStore
@@ -88,7 +90,7 @@ class PatrolViewModel(
                 .onSuccess { session ->
                     onSessionChanged(session)
                     secureStore?.saveSession(session)
-                    _uiState.update { it.copy(isLoggedIn = true, loginLoading = false, networkOnline = true, operationMessage = "登录成功") }
+                    _uiState.update { it.copy(isLoggedIn = true, loginLoading = false, networkOnline = true, operationMessage = operationMessage("登录成功", OperationMessageType.Success)) }
                 }
                 .onFailure { _uiState.update { it.copy(loginLoading = false, networkOnline = false) } }
         }
@@ -97,7 +99,7 @@ class PatrolViewModel(
     fun logout() = viewModelScope.launch {
         onSessionChanged(null)
         secureStore?.clearSession()
-        _uiState.update { it.copy(isLoggedIn = false, operationMessage = "已退出登录") }
+        _uiState.update { it.copy(isLoggedIn = false, operationMessage = operationMessage("已退出登录", OperationMessageType.Info)) }
     }
 
     fun toggleRecord() = viewModelScope.launch {
@@ -124,7 +126,7 @@ class PatrolViewModel(
                     state.copy(
                         deviceCapabilities = DeviceCapabilities(),
                         deviceWifiState = DeviceWifiState(),
-                        operationMessage = "设备 SDK 能力读取失败"
+                        operationMessage = operationMessage("设备 SDK 能力读取失败", OperationMessageType.Error)
                     )
                 }
             }
@@ -132,22 +134,22 @@ class PatrolViewModel(
     }
 
     fun configureDeviceWifi(enabled: Boolean, ssid: String, password: String) = viewModelScope.launch {
-        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备 Wi-Fi 通道未启用")
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备 Wi-Fi 通道未启用", OperationMessageType.Warning)
         runCatching { gateway.configureWifi(enabled, ssid, password) }
-            .onSuccess { wifi -> _uiState.update { it.copy(deviceWifiState = wifi, operationMessage = "设备 Wi-Fi 已配置") } }
-            .onFailure { _uiState.update { it.copy(operationMessage = "设备 Wi-Fi 配置失败") } }
+            .onSuccess { wifi -> _uiState.update { it.copy(deviceWifiState = wifi, operationMessage = operationMessage("设备 Wi-Fi 已配置", OperationMessageType.Success)) } }
+            .onFailure { _uiState.update { it.copy(operationMessage = operationMessage("设备 Wi-Fi 配置失败", OperationMessageType.Error)) } }
     }
 
     fun applyDeviceSettings(settings: DeviceAdvancedSettings) = viewModelScope.launch {
         val device = _uiState.value.device
-        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备参数通道未启用")
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备参数通道未启用", OperationMessageType.Warning)
         runCatching { gateway.applySettings(device, settings) }
-            .onSuccess { next -> _uiState.update { it.copy(deviceSettings = next, operationMessage = "设备参数已下发") } }
-            .onFailure { _uiState.update { it.copy(operationMessage = "设备参数下发失败") } }
+            .onSuccess { next -> _uiState.update { it.copy(deviceSettings = next, operationMessage = operationMessage("设备参数已下发", OperationMessageType.Success)) } }
+            .onFailure { _uiState.update { it.copy(operationMessage = operationMessage("设备参数下发失败", OperationMessageType.Error)) } }
     }
 
     fun toggleRealtimeAudioSync() = viewModelScope.launch {
-        val gateway = deviceControlGateway ?: return@launch showOperationMessage("实时音频通道未启用")
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("实时音频通道未启用", OperationMessageType.Warning)
         val active = _uiState.value.realtimeAudioSyncing
         val ok = runCatching {
             if (active) gateway.stopRealtimeAudioSync() else gateway.startRealtimeAudioSync("session-${System.currentTimeMillis()}")
@@ -156,9 +158,9 @@ class PatrolViewModel(
             it.copy(
                 realtimeAudioSyncing = if (ok) !active else active,
                 operationMessage = when {
-                    ok && active -> "实时音频同传已停止，后续走离线续传"
-                    ok -> "实时音频同传已启动"
-                    else -> "实时音频同传操作失败"
+                    ok && active -> operationMessage("实时音频同传已停止，后续走离线续传", OperationMessageType.Info)
+                    ok -> operationMessage("实时音频同传已启动", OperationMessageType.Success)
+                    else -> operationMessage("实时音频同传操作失败", OperationMessageType.Error)
                 }
             )
         }
@@ -166,7 +168,15 @@ class PatrolViewModel(
 
     fun notifyDeviceMediaSyncCompleted() = viewModelScope.launch {
         val ok = runCatching { deviceControlGateway?.notifyMediaSyncCompleted() == true }.getOrDefault(false)
-        _uiState.update { it.copy(operationMessage = if (ok) "已通知设备媒体同步完成" else "通知设备同步完成失败") }
+        _uiState.update {
+            it.copy(
+                operationMessage = if (ok) {
+                    operationMessage("已通知设备媒体同步完成", OperationMessageType.Success)
+                } else {
+                    operationMessage("通知设备同步完成失败", OperationMessageType.Error)
+                }
+            )
+        }
     }
 
     fun setAlertTab(status: AlertStatus) = _uiState.update { it.copy(selectedAlertTab = status) }
@@ -175,12 +185,12 @@ class PatrolViewModel(
 
     fun setFontSizeMode(mode: FontSizeMode) {
         settingsStore?.saveFontSizeMode(mode)
-        _uiState.update { it.copy(fontSizeMode = mode, operationMessage = "字体大小已保存") }
+        _uiState.update { it.copy(fontSizeMode = mode, operationMessage = operationMessage("字体大小已保存", OperationMessageType.Success)) }
     }
 
     fun setDisplayThemeMode(mode: DisplayThemeMode) {
         settingsStore?.saveDisplayThemeMode(mode)
-        _uiState.update { it.copy(displayThemeMode = mode, operationMessage = "主题模式已保存") }
+        _uiState.update { it.copy(displayThemeMode = mode, operationMessage = operationMessage("主题模式已保存", OperationMessageType.Success)) }
     }
 
     fun closeAlert(
@@ -194,7 +204,7 @@ class PatrolViewModel(
         _uiState.update {
             it.copy(alerts = it.alerts.map { alert ->
                 if (alert.id == alertId) alert.copy(status = AlertStatus.Closed) else alert
-            }, operationMessage = "处置结果已上传：${payload.attachments.size} 个附件")
+            }, operationMessage = operationMessage("处置结果已上传：${payload.attachments.size} 个附件", OperationMessageType.Success))
         }
     }
 
@@ -210,7 +220,7 @@ class PatrolViewModel(
             AlertResult.FalseAlarm -> "误报"
             AlertResult.RequestBackup -> "请求增援"
         }
-        _uiState.update { it.copy(operationMessage = "草稿已保存：$resultLabel，${payload.attachments.size} 个附件待提交") }
+        _uiState.update { it.copy(operationMessage = operationMessage("草稿已保存：$resultLabel，${payload.attachments.size} 个附件待提交", OperationMessageType.Warning)) }
     }
 
     private fun alertDraftPayload(
@@ -283,25 +293,25 @@ class PatrolViewModel(
                 mediaFiles = listOf(photo) + state.mediaFiles,
                 selectedMediaFileId = photo.id,
                 selectedMediaLocal = false,
-                operationMessage = "现场照片已保存到设备端"
+                operationMessage = operationMessage("现场照片已保存到设备端", OperationMessageType.Success)
             )
         }
     }
 
     fun startLowLatencyStream() = viewModelScope.launch {
-        _uiState.update { it.copy(streamState = StreamRelayState.Connecting, operationMessage = "正在连接实时画面") }
+        _uiState.update { it.copy(streamState = StreamRelayState.Connecting, operationMessage = operationMessage("正在连接实时画面", OperationMessageType.Info)) }
         runCatching { coordinator.startStream(_uiState.value.device, StreamMode.LowLatency) }
-            .onSuccess { _uiState.update { it.copy(streamState = StreamRelayState.Relaying, operationMessage = "实时画面已连接") } }
-            .onFailure { _uiState.update { it.copy(streamState = StreamRelayState.Failed, operationMessage = "实时画面连接失败") } }
+            .onSuccess { _uiState.update { it.copy(streamState = StreamRelayState.Relaying, operationMessage = operationMessage("实时画面已连接", OperationMessageType.Success)) } }
+            .onFailure { _uiState.update { it.copy(streamState = StreamRelayState.Failed, operationMessage = operationMessage("实时画面连接失败", OperationMessageType.Error)) } }
     }
 
     fun stopStream() = viewModelScope.launch {
         runCatching { coordinator.stopStream() }
-        _uiState.update { it.copy(streamState = StreamRelayState.Idle, operationMessage = "实时画面已关闭") }
+        _uiState.update { it.copy(streamState = StreamRelayState.Idle, operationMessage = operationMessage("实时画面已关闭", OperationMessageType.Info)) }
     }
 
     fun connectDiscoveredDevice(id: String, name: String, mac: String, signalBars: Int, type: DeviceType) = _uiState.update { state ->
-        state.copy(operationMessage = "正在连接 $name")
+        state.copy(operationMessage = operationMessage("正在连接 $name", OperationMessageType.Info))
     }.also {
         viewModelScope.launch {
             val bound = runCatching { coordinator.bindDevice(id) }.getOrElse {
@@ -322,7 +332,11 @@ class PatrolViewModel(
                     deviceCapabilities = DeviceCapabilities(),
                     deviceWifiState = DeviceWifiState(),
                     realtimeAudioSyncing = false,
-                    operationMessage = if (next.online) "$name 已连接" else "$name 连接失败，请检查蓝牙和距离"
+                    operationMessage = if (next.online) {
+                        operationMessage("$name 已连接", OperationMessageType.Success)
+                    } else {
+                        operationMessage("$name 连接失败，请检查蓝牙和距离", OperationMessageType.Error)
+                    }
                 )
             }
             refreshDeviceCapabilities()
@@ -379,7 +393,7 @@ class PatrolViewModel(
     fun uploadMedia(fileId: String) = viewModelScope.launch {
         val current = _uiState.value.mediaFiles.firstOrNull { it.id == fileId }
         if (current?.transferStatus == TransferStatus.Done) {
-            _uiState.update { it.copy(operationMessage = "${current.name} 已上传") }
+            _uiState.update { it.copy(operationMessage = operationMessage("${current.name} 已上传", OperationMessageType.Success)) }
             return@launch
         }
         runCatching {
@@ -423,7 +437,11 @@ class PatrolViewModel(
         _uiState.update { state ->
             state.copy(
                 mediaFiles = state.mediaFiles.map { if (it.id == fileId) it.copy(verified = verified) else it },
-                operationMessage = if (verified) "证据完整性校验通过" else "证据完整性校验失败"
+                operationMessage = if (verified) {
+                    operationMessage("证据完整性校验通过", OperationMessageType.Success)
+                } else {
+                    operationMessage("证据完整性校验失败", OperationMessageType.Error)
+                }
             )
         }
     }
@@ -435,7 +453,7 @@ class PatrolViewModel(
                     mediaFiles = state.mediaFiles.filterNot { it.id == fileId },
                     selectedMediaFileId = if (state.selectedMediaFileId == fileId) null else state.selectedMediaFileId,
                     previewMediaFile = if (state.previewMediaFile?.id == fileId) null else state.previewMediaFile,
-                    operationMessage = "媒体文件已删除"
+                    operationMessage = operationMessage("媒体文件已删除", OperationMessageType.Success)
                 )
             }
         }
@@ -451,14 +469,16 @@ class PatrolViewModel(
 
     fun clearMessage() = _uiState.update { it.copy(operationMessage = null) }
 
-    fun showOperationMessage(message: String) = _uiState.update { it.copy(operationMessage = message) }
+    fun showOperationMessage(message: String, type: OperationMessageType) = _uiState.update {
+        it.copy(operationMessage = operationMessage(message, type))
+    }
 
     private fun observeDeviceEvents() = viewModelScope.launch {
         deviceControlGateway?.events()?.collect { event ->
             _uiState.update { state ->
                 state.copy(
                     deviceEvents = (listOf(event) + state.deviceEvents).take(5),
-                    operationMessage = event.title
+                    operationMessage = operationMessage(event.title, OperationMessageType.Info)
                 )
             }
         }
@@ -507,7 +527,7 @@ class PatrolViewModel(
                         progress = 1f,
                         message = "更新包已准备完成"
                     ),
-                    operationMessage = "更新包已下载，等待系统安装确认"
+                    operationMessage = operationMessage("更新包已下载，等待系统安装确认", OperationMessageType.Warning)
                 )
             }
             return@launch
@@ -527,7 +547,7 @@ class PatrolViewModel(
                         progress = 1f,
                         message = if (launched) "已打开系统安装确认" else "更新包已准备完成"
                     ),
-                    operationMessage = "更新包 SHA-256 已校验"
+                    operationMessage = operationMessage("更新包 SHA-256 已校验", OperationMessageType.Success)
                 )
             }
             return@launch
@@ -539,7 +559,7 @@ class PatrolViewModel(
         _uiState.update {
             it.copy(
                 versionUpdate = updateState.copy(phase = VersionUpdatePhase.Failed, progress = 0f, message = "更新包下载或校验失败"),
-                operationMessage = "更新失败，请检查更新地址和网络"
+                operationMessage = operationMessage("更新失败，请检查更新地址和网络", OperationMessageType.Error)
             )
         }
     }
@@ -547,4 +567,6 @@ class PatrolViewModel(
     fun dismissVersionUpdate() = _uiState.update {
         it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Idle, progress = 0f, message = null))
     }
+
+    private fun operationMessage(text: String, type: OperationMessageType) = OperationMessage(text, type)
 }

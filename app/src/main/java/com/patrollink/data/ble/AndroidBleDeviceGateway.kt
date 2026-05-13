@@ -10,6 +10,7 @@ import androidx.annotation.RequiresPermission
 import com.patrollink.domain.DeviceCommand
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
+import com.patrollink.domain.DeviceType
 import com.patrollink.domain.ScannedDevice
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -34,7 +35,9 @@ class AndroidBleDeviceGateway(
                     name = device.name ?: "Patrol headset",
                     signalBars = result.rssi.toSignalBars(),
                     serviceUuid = result.scanRecord?.serviceUuids?.firstOrNull()?.uuid?.toString().orEmpty(),
-                    bonded = device.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED
+                    bonded = device.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED,
+                    macAddress = id,
+                    type = DeviceType.Headset
                 )
                 trySend(devices.values.toList())
             }

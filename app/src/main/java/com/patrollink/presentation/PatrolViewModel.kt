@@ -14,7 +14,6 @@ import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.FontSizeMode
-import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.PatrolCoordinator
@@ -40,7 +39,8 @@ class PatrolViewModel(
     private val coordinator: PatrolCoordinator = ServiceFactory.createCoordinator(),
     private val secureStore: SecureStore? = null,
     private val settingsStore: UiSettingsStore? = null,
-    private val versionGateway: VersionGateway = MockVersionGateway()
+    private val versionGateway: VersionGateway = MockVersionGateway(),
+    private val onSessionChanged: (AuthSession?) -> Unit = {}
 ) : ViewModel() {
     private val repository = MockPatrolRepository()
     private val _uiState = MutableStateFlow(
@@ -52,8 +52,10 @@ class PatrolViewModel(
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
 
     init {
+        refreshScannedDevices()
         viewModelScope.launch {
             secureStore?.readSession()?.let {
+                onSessionChanged(it)
                 _uiState.update { state -> state.copy(isLoggedIn = true, networkOnline = true) }
                 runCatching { coordinator.currentRealtimeState() }
             }
@@ -66,6 +68,7 @@ class PatrolViewModel(
             _uiState.update { it.copy(loginLoading = true) }
             runCatching { coordinator.loginAndStartSession(account, password) }
                 .onSuccess { session ->
+                    onSessionChanged(session)
                     secureStore?.saveSession(session)
                     _uiState.update { it.copy(isLoggedIn = true, loginLoading = false, networkOnline = true, operationMessage = "登录成功") }
                 }
@@ -74,6 +77,7 @@ class PatrolViewModel(
     }
 
     fun logout() = viewModelScope.launch {
+        onSessionChanged(null)
         secureStore?.clearSession()
         _uiState.update { it.copy(isLoggedIn = false, operationMessage = "已退出登录") }
     }
@@ -143,7 +147,7 @@ class PatrolViewModel(
         alertId = alertId,
         result = result.toApiValue(),
         note = note,
-        operatorId = "POLICE_9527",
+        operatorId = _uiState.value.user.badgeNo,
         attachments = attachments
     )
 
@@ -156,7 +160,7 @@ class PatrolViewModel(
         alertId = alertId,
         result = result.toApiValue(),
         note = note,
-        operatorId = "POLICE_9527",
+        operatorId = _uiState.value.user.badgeNo,
         attachments = attachments.map { it.copy(uploadIntent = "UPLOAD_NOW") }
     )
 
@@ -167,14 +171,7 @@ class PatrolViewModel(
     }
 
     fun activateSos() = viewModelScope.launch {
-        coordinator.activateSos(
-            GpsLocation(
-                latitude = 39.9087,
-                longitude = 116.3975,
-                accuracyMeters = 8.5f,
-                address = "核心商务区 CBD-North"
-            )
-        )
+        coordinator.activateSos(_uiState.value.sosLocation)
         _uiState.update { it.copy(sosActive = true) }
     }
 
@@ -244,6 +241,12 @@ class PatrolViewModel(
             selectedDeviceId = next.id,
             operationMessage = "$name 已连接"
         )
+    }
+
+    fun refreshScannedDevices() = viewModelScope.launch {
+        coordinator.scanDevices().collect { devices ->
+            _uiState.update { it.copy(scannedDevices = devices) }
+        }
     }
 
     fun selectConnectedDevice(deviceId: String) = _uiState.update { state ->

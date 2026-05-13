@@ -15,7 +15,9 @@ data class UserProfile(
     val phone: String,
     val email: String,
     val dutyArea: String,
-    val shiftDuration: String
+    val shiftDuration: String,
+    val patrolGroup: String,
+    val systemNode: String
 )
 
 data class DeviceStatus(
@@ -88,7 +90,9 @@ data class AppUiState(
     val operationMessage: String? = null,
     val device: DeviceStatus,
     val connectedDevices: List<DeviceStatus> = emptyList(),
+    val scannedDevices: List<ScannedDevice> = emptyList(),
     val selectedDeviceId: String? = null,
+    val sosLocation: GpsLocation,
     val alerts: List<AlertItem>,
     val mediaFiles: List<MediaFile>,
     val user: UserProfile

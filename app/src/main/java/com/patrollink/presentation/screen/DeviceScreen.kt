@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
+import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.ActionTile
@@ -353,11 +354,7 @@ private fun CapabilityTile(label: String, value: String, accent: Color) {
 fun AddDeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () -> Unit, onSos: () -> Unit) {
     val colors = PatrolDisplay.colors
     val palette = addDevicePalette(colors.dark)
-    val devices = listOf(
-        DiscoveredDevice("HEADSET_001", "ForceLink-H1", "2C:4A:91:3F:8B:02", DeviceType.Headset, 3, true),
-        DiscoveredDevice("RECORDER_A5", "ForceLink-A5", "4F:02:8C:76:A1:19", DeviceType.Recorder, 1, false),
-        DiscoveredDevice("SENSOR_S9", "ForceLink-S9", "1E:BD:55:0A:44:71", DeviceType.Sensor, 0, false)
-    )
+    val devices = uiState.scannedDevices
     val connectedKeys = uiState.connectedDevices
         .ifEmpty { listOf(uiState.device) }
         .flatMap { listOf(it.id, it.name) }
@@ -424,7 +421,7 @@ fun AddDeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () 
                             viewModel.connectDiscoveredDevice(
                                 id = device.id,
                                 name = device.name,
-                                mac = device.mac,
+                                mac = device.macAddress,
                                 signalBars = device.signalBars.coerceAtLeast(1),
                                 type = device.type
                             )
@@ -439,7 +436,7 @@ fun AddDeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () 
 }
 
 @Composable
-private fun ScanHeader(palette: AddDevicePalette, devices: List<DiscoveredDevice>, connectedKeys: Set<String>) {
+private fun ScanHeader(palette: AddDevicePalette, devices: List<ScannedDevice>, connectedKeys: Set<String>) {
     val transition = rememberInfiniteTransition(label = "device-scan")
     val pulse = transition.animateFloat(
         initialValue = 0f,
@@ -505,14 +502,14 @@ private fun ScanHeader(palette: AddDevicePalette, devices: List<DiscoveredDevice
 
 @Composable
 private fun HeaderDeviceChip(
-    device: DiscoveredDevice,
+    device: ScannedDevice,
     palette: AddDevicePalette,
     connected: Boolean,
     modifier: Modifier = Modifier
 ) {
     val ringColor = when {
         connected -> Success
-        device.highlighted -> TechBlue
+        device.bonded -> TechBlue
         else -> palette.headerChipBorder
     }
     Box(
@@ -536,7 +533,7 @@ private fun HeaderDeviceChip(
             Icon(
                 device.type.icon(),
                 contentDescription = null,
-                tint = if (device.highlighted || connected) Color(0xFF60A5FA) else palette.iconMuted,
+                tint = if (device.bonded || connected) Color(0xFF60A5FA) else palette.iconMuted,
                 modifier = Modifier.size(22.dp)
             )
             Spacer(Modifier.height(3.dp))
@@ -577,7 +574,7 @@ private fun deviceChipOffsetY(index: Int) = when (index % 3) {
 
 @Composable
 private fun DiscoveredDeviceCard(
-    device: DiscoveredDevice,
+    device: ScannedDevice,
     palette: AddDevicePalette,
     connected: Boolean,
     onConnect: () -> Unit
@@ -597,10 +594,10 @@ private fun DiscoveredDeviceCard(
             Modifier
                 .size(54.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(if (device.highlighted) palette.iconActiveBg else palette.iconBg),
+                .background(if (device.bonded) palette.iconActiveBg else palette.iconBg),
             contentAlignment = Alignment.Center
         ) {
-            Icon(device.type.icon(), contentDescription = null, tint = if (device.highlighted) TechBlue else palette.iconMuted, modifier = Modifier.size(28.dp))
+            Icon(device.type.icon(), contentDescription = null, tint = if (device.bonded) TechBlue else palette.iconMuted, modifier = Modifier.size(28.dp))
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -612,13 +609,13 @@ private fun DiscoveredDeviceCard(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                "${device.type.label}  ·  MAC: ${device.mac.take(8)}...",
+                "${device.type.label}  ·  MAC: ${device.macAddress.take(8)}...",
                 color = palette.muted,
                 style = PatrolTextStyle.BodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold),
                 maxLines = 1
             )
         }
-        SignalBars(device.signalBars, active = device.highlighted, palette = palette)
+        SignalBars(device.signalBars, active = device.bonded, palette = palette)
         Spacer(Modifier.width(14.dp))
         Button(
             onClick = onConnect,
@@ -626,7 +623,7 @@ private fun DiscoveredDeviceCard(
             shape = RoundedCornerShape(10.dp),
             contentPadding = PaddingValues(horizontal = 14.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (device.highlighted) Color(0xFF2F7DF6) else Color(0xFF5B91F4),
+                containerColor = if (device.bonded) Color(0xFF2F7DF6) else Color(0xFF5B91F4),
                 disabledContainerColor = palette.disabledButton
             ),
             modifier = Modifier.width(86.dp).height(48.dp)
@@ -689,17 +686,8 @@ private fun ScanTipsCard(palette: AddDevicePalette) {
     }
 }
 
-private data class DiscoveredDevice(
-    val id: String,
-    val name: String,
-    val mac: String,
-    val type: DeviceType,
-    val signalBars: Int,
-    val highlighted: Boolean
-)
-
-private fun DiscoveredDevice.isConnected(connectedKeys: Set<String>) =
-    id in connectedKeys || mac in connectedKeys || name in connectedKeys
+private fun ScannedDevice.isConnected(connectedKeys: Set<String>) =
+    id in connectedKeys || macAddress in connectedKeys || name in connectedKeys
 
 private val DeviceType.label: String
     get() = when (this) {

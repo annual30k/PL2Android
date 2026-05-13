@@ -220,6 +220,7 @@ fun AlertDetailScreen(
             }
             item {
                 EvidenceSection(
+                    alert = alert,
                     files = evidenceFiles,
                     onAdd = { showEvidenceSourceDialog = true },
                     onDelete = { fileId -> evidenceFiles = evidenceFiles.filterNot { it.id == fileId } }
@@ -524,7 +525,7 @@ private fun AlertMetricBox(label: String, value: String, modifier: Modifier = Mo
 }
 
 @Composable
-private fun EvidenceSection(files: List<UploadFileItem>, onAdd: () -> Unit, onDelete: (String) -> Unit) {
+private fun EvidenceSection(alert: com.patrollink.domain.AlertItem, files: List<UploadFileItem>, onAdd: () -> Unit, onDelete: (String) -> Unit) {
     val colors = PatrolDisplay.colors
     Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -551,8 +552,8 @@ private fun EvidenceSection(files: List<UploadFileItem>, onAdd: () -> Unit, onDe
         ) {
             SurveillanceFrame(Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC0F172A)))))
-            Text("通道04", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).clip(RoundedCornerShape(5.dp)).background(Color.Black.copy(alpha = 0.72f)).padding(horizontal = 10.dp, vertical = 6.dp))
-            Text("14:32:44", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.BottomStart).padding(start = 78.dp, bottom = 14.dp).clip(RoundedCornerShape(5.dp)).background(Color.Black.copy(alpha = 0.72f)).padding(horizontal = 10.dp, vertical = 6.dp))
+            Text(alert.source, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.BottomStart).padding(14.dp).clip(RoundedCornerShape(5.dp)).background(Color.Black.copy(alpha = 0.72f)).padding(horizontal = 10.dp, vertical = 6.dp))
+            Text(alert.time, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.BottomStart).padding(start = 92.dp, bottom = 14.dp).clip(RoundedCornerShape(5.dp)).background(Color.Black.copy(alpha = 0.72f)).padding(horizontal = 10.dp, vertical = 6.dp))
             Box(Modifier.align(Alignment.CenterEnd).padding(end = 14.dp).size(44.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.86f)), contentAlignment = Alignment.Center) {
                 PlayIcon(Color(0xFF111827))
             }
@@ -648,7 +649,7 @@ private fun alertResultFromLabel(label: String): AlertResult = when (label) {
 }
 
 private fun detailTime(time: String): String =
-    if (time.length <= 5) "2023-10-24 $time:05" else time
+    if (time.length <= 5) "今日 $time" else time
 
 @Composable
 private fun GroupIcon(color: Color) {

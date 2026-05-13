@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.VersionUpdatePhase
+import com.patrollink.domain.VersionUpdateUiState
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.PrimaryAction
 import com.patrollink.presentation.component.SystemBars
@@ -134,7 +135,7 @@ fun VersionInfoScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: (
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("战术系统节点：0x4F2A", color = colors.textSubtle, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
+                        Text("战术系统节点：${uiState.user.systemNode}", color = colors.textSubtle, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
                         Text("© 2024 哨兵核心系统", color = colors.textMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                             MiniSeal("认证")
@@ -153,7 +154,7 @@ fun VersionInfoScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: (
             )
         }
         contentDialog?.let { dialog ->
-            VersionContentDialog(content = dialog, onDismiss = { contentDialog = null })
+            VersionContentDialog(content = dialog, update = updateState, onDismiss = { contentDialog = null })
         }
     }
 }
@@ -305,7 +306,7 @@ private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater:
                     lineHeight = 21.sp
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    update.changelog.ifEmpty { listOf("优化蓝牙连接稳定性", "新增离线报告功能", "修复推送通知延迟问题") }.forEachIndexed { index, item ->
+                    update.changelog.forEachIndexed { index, item ->
                         ChangeLog((index + 1).toString().padStart(2, '0'), item)
                     }
                 }
@@ -359,13 +360,13 @@ private fun dialogTitle(phase: VersionUpdatePhase, latest: String?): String = wh
     VersionUpdatePhase.UpToDate -> "当前已是最新版本"
     VersionUpdatePhase.Failed -> "检查更新失败"
     VersionUpdatePhase.Ready -> "更新包已准备完成"
-    else -> "发现新版本 v${latest ?: "1.3.0"}"
+    else -> latest?.let { "发现新版本 v$it" } ?: "发现新版本"
 }
 
 private enum class VersionContent { Logs, Privacy, Agreement }
 
 @Composable
-private fun VersionContentDialog(content: VersionContent, onDismiss: () -> Unit) {
+private fun VersionContentDialog(content: VersionContent, update: VersionUpdateUiState, onDismiss: () -> Unit) {
     val colors = PatrolDisplay.colors
     Box(
         Modifier.fillMaxSize().background(Color(0x99020817)).padding(24.dp),
@@ -381,7 +382,7 @@ private fun VersionContentDialog(content: VersionContent, onDismiss: () -> Unit)
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text(content.title(), color = colors.text, fontSize = 20.sp, fontWeight = FontWeight.Black)
-            content.lines().forEach { line ->
+            content.lines(update).forEach { line ->
                 Text(line, color = colors.textMuted, fontSize = 14.sp, lineHeight = 22.sp)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -399,12 +400,10 @@ private fun VersionContent.title(): String = when (this) {
     VersionContent.Agreement -> "用户协议"
 }
 
-private fun VersionContent.lines(): List<String> = when (this) {
-    VersionContent.Logs -> listOf(
-        "v1.3.0：新增离线报告补偿、优化蓝牙连接诊断、修复媒体上传进度显示。",
-        "v1.2.4：完成主题模式、字体大小与版本信息页面适配。",
-        "v1.2.0：上线预警处置、媒体同步和 SOS 紧急上报流程。"
-    )
+private fun VersionContent.lines(update: VersionUpdateUiState): List<String> = when (this) {
+    VersionContent.Logs -> listOf("当前版本：v${update.currentVersionName}") +
+        update.latestVersionName?.let { listOf("可用版本：v$it") }.orEmpty() +
+        update.changelog.ifEmpty { listOf(update.message ?: "暂无新的版本日志") }
     VersionContent.Privacy -> listOf(
         "系统仅在执勤、取证、紧急上报等必要场景采集位置、音频、图片和设备状态。",
         "采集数据用于执法协同、证据校验和安全审计，不用于无关用途。",

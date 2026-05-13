@@ -49,14 +49,17 @@ class MockRestApi {
             phone = "+86 138-0000-9527",
             email = "zhang.police@city.gov.cn",
             dutyArea = "核心商务区 (CBD-North)",
-            shiftDuration = "05:24:12"
+            shiftDuration = "05:24:12",
+            patrolGroup = "巡逻组 A-42 | 重点管控区域",
+            systemNode = "0x4F2A"
         )
     )
 
     fun scanDevices(): ApiEnvelope<List<ScannedDeviceDto>> = ok(
         listOf(
-            ScannedDeviceDto("HEADSET_001", "ForceLink-H1", 4, "0000-pl2-ble-control", true),
-            ScannedDeviceDto("HEADSET_009", "ForceLink-H9", 3, "0000-pl2-ble-control", false)
+            ScannedDeviceDto("HEADSET_001", "ForceLink-H1", 4, "0000-pl2-ble-control", true, "2C:4A:91:3F:8B:02", "HEADSET"),
+            ScannedDeviceDto("RECORDER_A5", "ForceLink-A5", 3, "0000-pl2-ble-control", false, "4F:02:8C:76:A1:19", "RECORDER"),
+            ScannedDeviceDto("SENSOR_S9", "ForceLink-S9", 2, "0000-pl2-ble-control", false, "1E:BD:55:0A:44:71", "SENSOR")
         )
     )
 

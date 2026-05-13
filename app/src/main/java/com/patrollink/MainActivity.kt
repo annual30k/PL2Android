@@ -7,8 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.patrollink.data.local.AndroidKeystoreSecureStore
-import com.patrollink.data.local.UiSettingsStore
+import com.patrollink.data.RuntimeDependencyFactory
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.navigation.PatrolApp
 
@@ -30,9 +29,12 @@ private class PatrolViewModelFactory(
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        val dependencies = RuntimeDependencyFactory.create(activity.applicationContext)
         return PatrolViewModel(
-            secureStore = AndroidKeystoreSecureStore(activity.applicationContext),
-            settingsStore = UiSettingsStore(activity.applicationContext)
+            coordinator = dependencies.coordinator,
+            secureStore = dependencies.secureStore,
+            settingsStore = dependencies.settingsStore,
+            onSessionChanged = dependencies.tokenStore::update
         ) as T
     }
 }

@@ -4,6 +4,18 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+fun runtimeString(name: String): String =
+    providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse("").get()
+
+fun runtimeBoolean(name: String): String =
+    providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse("false").get()
+        .toBooleanStrictOrNull()
+        ?.toString()
+        ?: "false"
+
+fun String.asBuildConfigString(): String =
+    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 android {
     namespace = "com.patrollink"
     compileSdk = 35
@@ -14,10 +26,16 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+
+        buildConfigField("String", "REST_BASE_URL", runtimeString("PATROL_REST_BASE_URL").asBuildConfigString())
+        buildConfigField("String", "WEBSOCKET_URL", runtimeString("PATROL_WEBSOCKET_URL").asBuildConfigString())
+        buildConfigField("String", "WIFI_FILE_BASE_URL", runtimeString("PATROL_WIFI_FILE_BASE_URL").asBuildConfigString())
+        buildConfigField("boolean", "USE_REAL_BLE", runtimeBoolean("PATROL_USE_REAL_BLE"))
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {

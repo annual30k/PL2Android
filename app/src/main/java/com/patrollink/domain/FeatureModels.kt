@@ -21,7 +21,9 @@ data class ScannedDevice(
     val name: String,
     val signalBars: Int,
     val serviceUuid: String,
-    val bonded: Boolean
+    val bonded: Boolean,
+    val macAddress: String,
+    val type: DeviceType
 )
 
 data class HeartbeatAck(

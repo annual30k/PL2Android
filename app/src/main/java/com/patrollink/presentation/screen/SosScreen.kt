@@ -24,7 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,6 +61,7 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
     val context = LocalContext.current
     var seconds by remember { mutableIntStateOf(5) }
     var activationStarted by remember { mutableStateOf(false) }
+    val location = uiState.sosLocation
 
     LaunchedEffect(Unit) {
         while (seconds > 0) {
@@ -144,12 +145,12 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
                     Column {
                         Text("当前位置 (GPS)", color = Color.White.copy(alpha = 0.60f), fontSize = 10.sp, fontWeight = FontWeight.Black)
-                        Text("39.9087° N", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Text("116.3975° E", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("${"%.4f".format(location.latitude)}° N", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("${"%.4f".format(location.longitude)}° E", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("连接状态", color = Color.White.copy(alpha = 0.60f), fontSize = 10.sp, fontWeight = FontWeight.Black)
-                        Text("高精度双频", color = Color(0xFF60A5FA), fontSize = 12.sp, fontWeight = FontWeight.Black)
+                        Text("${location.accuracyMeters}m 精度", color = Color(0xFF60A5FA), fontSize = 12.sp, fontWeight = FontWeight.Black)
                     }
                 }
             }
@@ -226,7 +227,7 @@ private fun SlideToCancel(onCancel: () -> Unit) {
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF991B1B), modifier = Modifier.size(30.dp))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF991B1B), modifier = Modifier.size(30.dp))
         }
     }
 }

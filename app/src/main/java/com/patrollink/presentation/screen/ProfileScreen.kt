@@ -97,7 +97,7 @@ fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> 
                         Spacer(Modifier.height(10.dp))
                         Text(user.dutyArea, color = titleColor, style = PatrolTextStyle.BodyStrong.copy(fontSize = 15.sp, lineHeight = 21.sp))
                         Spacer(Modifier.height(3.dp))
-                        Text("巡逻组 A-42 | 重点管控区域", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
+                        Text(user.patrolGroup, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -160,8 +160,8 @@ fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> 
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         SectionHeading("版本信息", Icons.Filled.Info, Warning)
-                        Text("执法链路 v1.2.4 · 加密通道已启用 · 核心服务已同步", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
-                        StatusTag("发现新版本 v1.3.0", Warning)
+                        Text("执法链路 v${uiState.versionUpdate.currentVersionName} · 加密通道已启用 · 核心服务已同步", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
+                        StatusTag(uiState.versionUpdate.latestVersionName?.let { "发现新版本 v$it" } ?: "点击检查更新", Warning)
                     }
                 }
             }

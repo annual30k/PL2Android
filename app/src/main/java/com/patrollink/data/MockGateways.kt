@@ -79,7 +79,7 @@ class MockDeviceGateway(private val api: MockRestApi = MockRestApi()) : DeviceGa
             DeviceCommand.StartTalk -> "START_TALK"
             DeviceCommand.StopTalk -> "STOP_TALK"
         }
-        current.value = api.sendDeviceCommand(deviceId, DeviceCommandRequestDto(commandValue, "POLICE_9527", "REQ-0001")).data.toDomain()
+        current.value = api.sendDeviceCommand(deviceId, DeviceCommandRequestDto(commandValue, api.currentUser().data.badgeNo, "REQ-0001")).data.toDomain()
         return current.value
     }
 }
@@ -101,7 +101,7 @@ class MockAlertGateway(private val api: MockRestApi = MockRestApi()) : AlertGate
             AlertResult.Resolved -> "RESOLVED"
             AlertResult.RequestBackup -> "REQUEST_BACKUP"
         }
-        val updated = api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, "POLICE_9527")).data.toDomain()
+        val updated = api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, api.currentUser().data.badgeNo)).data.toDomain()
         replace(updated)
         return updated
     }

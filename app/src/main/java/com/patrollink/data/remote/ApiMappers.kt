@@ -20,7 +20,7 @@ import com.patrollink.domain.UserProfile
 
 fun AuthSessionDto.toDomain() = AuthSession(accessToken, refreshToken, expiresInSeconds)
 
-fun UserProfileDto.toDomain() = UserProfile(name, badgeNo, department, phone, email, dutyArea, shiftDuration)
+fun UserProfileDto.toDomain() = UserProfile(name, badgeNo, department, phone, email, dutyArea, shiftDuration, patrolGroup, systemNode)
 
 fun DeviceStatusDto.toDomain() = DeviceStatus(
     id = deviceId,
@@ -38,7 +38,19 @@ fun DeviceStatusDto.toDomain() = DeviceStatus(
     type = DeviceType.Headset
 )
 
-fun ScannedDeviceDto.toDomain() = ScannedDevice(deviceId, deviceName, signalBars, serviceUuid, bonded)
+fun ScannedDeviceDto.toDomain() = ScannedDevice(
+    id = deviceId,
+    name = deviceName,
+    signalBars = signalBars,
+    serviceUuid = serviceUuid,
+    bonded = bonded,
+    macAddress = macAddress,
+    type = when (deviceType) {
+        "RECORDER" -> DeviceType.Recorder
+        "SENSOR" -> DeviceType.Sensor
+        else -> DeviceType.Headset
+    }
+)
 
 fun AlertDto.toDomain() = AlertItem(
     id = alertId,

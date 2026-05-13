@@ -40,7 +40,9 @@ data class UserProfileDto(
     val phone: String,
     val email: String,
     val dutyArea: String,
-    val shiftDuration: String
+    val shiftDuration: String,
+    val patrolGroup: String,
+    val systemNode: String
 )
 
 data class DeviceStatusDto(
@@ -63,7 +65,9 @@ data class ScannedDeviceDto(
     val deviceName: String,
     val signalBars: Int,
     val serviceUuid: String,
-    val bonded: Boolean
+    val bonded: Boolean,
+    val macAddress: String,
+    val deviceType: String
 )
 
 data class DeviceCommandRequestDto(

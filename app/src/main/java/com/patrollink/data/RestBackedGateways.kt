@@ -50,7 +50,10 @@ class RestAuthGateway(private val api: PatrolRestApi) : AuthGateway {
     override suspend fun currentUser(): UserProfile = api.currentUser().data.toDomain()
 }
 
-class RestDeviceGateway(private val api: PatrolRestApi) : DeviceGateway {
+class RestDeviceGateway(
+    private val api: PatrolRestApi,
+    private val operatorIdProvider: () -> String = { "UNKNOWN_OPERATOR" }
+) : DeviceGateway {
     override fun scan(): Flow<List<ScannedDevice>> = flow {
         emit(api.scanDevices().data.map { it.toDomain() })
     }
@@ -65,11 +68,14 @@ class RestDeviceGateway(private val api: PatrolRestApi) : DeviceGateway {
             DeviceCommand.StartTalk -> "START_TALK"
             DeviceCommand.StopTalk -> "STOP_TALK"
         }
-        return api.sendDeviceCommand(deviceId, DeviceCommandRequestDto(commandValue, "POLICE_9527", "REQ-REAL")).data.toDomain()
+        return api.sendDeviceCommand(deviceId, DeviceCommandRequestDto(commandValue, operatorIdProvider(), "REQ-${System.currentTimeMillis()}")).data.toDomain()
     }
 }
 
-class RestAlertGateway(private val api: PatrolRestApi) : AlertGateway {
+class RestAlertGateway(
+    private val api: PatrolRestApi,
+    private val operatorIdProvider: () -> String = { "UNKNOWN_OPERATOR" }
+) : AlertGateway {
     override fun observeAlerts(): Flow<List<AlertItem>> = flow {
         emit(api.alerts(1, 50).data.items.map { it.toDomain() })
     }
@@ -82,7 +88,7 @@ class RestAlertGateway(private val api: PatrolRestApi) : AlertGateway {
             AlertResult.Resolved -> "RESOLVED"
             AlertResult.RequestBackup -> "REQUEST_BACKUP"
         }
-        return api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, "POLICE_9527")).data.toDomain()
+        return api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, operatorIdProvider())).data.toDomain()
     }
 }
 

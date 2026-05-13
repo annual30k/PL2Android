@@ -22,13 +22,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Bluetooth
@@ -64,7 +62,6 @@ import com.patrollink.domain.StreamRelayState
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.ActionTile
 import com.patrollink.presentation.component.DeviceStatPill
-import com.patrollink.presentation.component.ForceTopBar
 import com.patrollink.presentation.component.MetricTile
 import com.patrollink.presentation.component.OfflineBanner
 import com.patrollink.presentation.component.PatrolCard
@@ -79,17 +76,12 @@ import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
 
 @Composable
-fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Unit, onAddDevice: () -> Unit) {
+fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: () -> Unit) {
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     val device = uiState.device
     val connectedDevices = uiState.connectedDevices.ifEmpty { listOf(device) }
     Column(Modifier.fillMaxSize().background(colors.page)) {
-        ForceTopBar(
-            title = null,
-            dark = colors.dark,
-            onSos = onSos
-        )
         OfflineBanner(uiState.networkOnline)
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
@@ -471,8 +463,7 @@ fun AddDeviceScreen(
     viewModel: PatrolViewModel,
     bluetoothEnabled: Boolean,
     onToggleBluetooth: () -> Unit,
-    onBack: () -> Unit,
-    onSos: () -> Unit
+    onBack: () -> Unit
 ) {
     val colors = PatrolDisplay.colors
     val palette = addDevicePalette(colors.dark)
@@ -488,25 +479,6 @@ fun AddDeviceScreen(
         lightNavigationBar = !colors.dark
     )
     Column(Modifier.fillMaxSize().background(palette.page)) {
-        Box(Modifier.fillMaxWidth().background(palette.topBar).statusBarsPadding()) {
-            ForceTopBar(
-                title = null,
-                dark = palette.darkTopBar,
-                onSos = onSos,
-                leading = {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "返回",
-                        tint = palette.topBarContent,
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClick = onBack)
-                            .padding(4.dp)
-                    )
-                }
-            )
-        }
         LazyColumn(
             modifier = Modifier.fillMaxSize().background(palette.page),
             contentPadding = PaddingValues(bottom = 24.dp)

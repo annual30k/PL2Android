@@ -42,7 +42,6 @@ import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.FontSizeMode
 import com.patrollink.domain.AppUiState
 import com.patrollink.presentation.PatrolViewModel
-import com.patrollink.presentation.component.ForceTopBar
 import com.patrollink.presentation.component.PatrolCard
 import com.patrollink.presentation.component.PrimaryAction
 import com.patrollink.presentation.component.StatusTag
@@ -53,14 +52,13 @@ import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
 
 @Composable
-fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Unit, onOpenVersionInfo: () -> Unit) {
+fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onOpenVersionInfo: () -> Unit) {
     val colors = PatrolDisplay.colors
     val titleColor = profileTitleColor()
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     val user = uiState.user
     Box(Modifier.fillMaxSize().background(colors.page)) {
         Column(Modifier.fillMaxSize()) {
-            ForceTopBar(title = null, dark = colors.dark, onSos = onSos)
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                 contentPadding = PaddingValues(top = 10.dp, bottom = 12.dp),

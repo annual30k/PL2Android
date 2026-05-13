@@ -69,7 +69,6 @@ import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AppUiState
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.AlertLevelTag
-import com.patrollink.presentation.component.ForceTopBar
 import com.patrollink.presentation.component.FileUploadGrid
 import com.patrollink.presentation.component.OfflineBanner
 import com.patrollink.presentation.component.PatrolCard
@@ -95,13 +94,11 @@ import kotlinx.coroutines.launch
 fun AlertListScreen(
     uiState: AppUiState,
     viewModel: PatrolViewModel,
-    onSos: () -> Unit,
     onOpenDetail: (String) -> Unit
 ) {
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.surface, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     Column(Modifier.fillMaxSize().background(colors.page)) {
-        ForceTopBar(dark = false, onSos = onSos)
         OfflineBanner(uiState.networkOnline)
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             SegmentedTabs(
@@ -167,8 +164,7 @@ fun AlertDetailScreen(
     alertId: String,
     uiState: AppUiState,
     viewModel: PatrolViewModel,
-    onBack: () -> Unit,
-    onSos: () -> Unit
+    onBack: () -> Unit
 ) {
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)

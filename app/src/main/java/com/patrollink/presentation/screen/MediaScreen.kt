@@ -80,7 +80,6 @@ import com.patrollink.domain.OperationMessageType
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
 import com.patrollink.presentation.PatrolViewModel
-import com.patrollink.presentation.component.ForceTopBar
 import com.patrollink.presentation.component.MediaThumbBackground
 import com.patrollink.presentation.component.StatusTag
 import com.patrollink.presentation.component.SystemBars
@@ -92,7 +91,7 @@ import com.patrollink.presentation.theme.Warning
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Unit) {
+fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     var filter by remember { mutableStateOf(MediaFilter.All) }
@@ -106,7 +105,6 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> Un
     var dismissedTransferFileId by remember { mutableStateOf<String?>(null) }
     Box(Modifier.fillMaxSize().background(colors.page)) {
         Column(Modifier.fillMaxSize()) {
-            ForceTopBar(title = null, dark = colors.dark, onSos = onSos)
             Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                 LazyColumn(
                     modifier = Modifier.weight(1f),

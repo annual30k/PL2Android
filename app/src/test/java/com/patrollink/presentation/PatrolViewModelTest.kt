@@ -4,6 +4,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import com.patrollink.domain.TransferTarget
+import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.VersionUpdatePhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -57,13 +58,18 @@ class PatrolViewModelTest {
 
         viewModel.downloadMedia(fileId)
         advanceUntilIdle()
-        val downloaded = viewModel.uiState.value.mediaFiles.first { it.id == fileId }
-        assertTrue(downloaded.local)
-        assertEquals(TransferTarget.PhoneSandbox, downloaded.lastTransferTarget)
+        val deviceFile = viewModel.uiState.value.mediaFiles.first { it.id == fileId && !it.local }
+        val phoneFile = viewModel.uiState.value.mediaFiles.first { it.id == fileId && it.local }
+        assertFalse(deviceFile.local)
+        assertEquals(TransferTarget.PhoneSandbox, deviceFile.lastTransferTarget)
+        assertEquals(TransferStatus.Done, deviceFile.transferStatus)
+        assertTrue(phoneFile.local)
+        assertEquals(TransferStatus.Idle, phoneFile.transferStatus)
 
-        viewModel.deleteMedia(fileId)
+        viewModel.deleteMedia(fileId, local = false)
         advanceUntilIdle()
-        assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == fileId })
+        assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == fileId && !it.local })
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == fileId && it.local })
     }
 
     @Test

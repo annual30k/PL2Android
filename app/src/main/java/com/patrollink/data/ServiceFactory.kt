@@ -184,7 +184,18 @@ private class WifiBackedMediaGateway(
         val indexed = mediaIndex?.files(local).orEmpty()
         if (local && indexed.isNotEmpty()) return indexed
         if (local) return fallbackGateway.listFiles(local = true)
-        val remote = wifiClient.listDeviceFiles().data.map { it.toDomain() }
+        val phoneIds = mediaIndex?.files(local = true).orEmpty().map { it.id }.toSet()
+        val remote = wifiClient.listDeviceFiles().data.map { it.toDomain() }.map { file ->
+            if (file.id in phoneIds) {
+                file.copy(
+                    transferStatus = TransferStatus.Done,
+                    progress = 1f,
+                    lastTransferTarget = TransferTarget.PhoneSandbox
+                )
+            } else {
+                file
+            }
+        }
         remote.forEach { mediaIndex?.upsert(it) }
         return remote
     }
@@ -206,16 +217,43 @@ private class WifiBackedMediaGateway(
                 transferStatus = TransferStatus.Done,
                 verified = true,
                 progress = 1f,
-                contentUri = Uri.fromFile(downloaded).toString()
+                contentUri = Uri.fromFile(downloaded).toString(),
+                lastTransferTarget = TransferTarget.PhoneSandbox
             )
-            mediaIndex?.upsert(completed, localPath = completed.contentUri, sha256 = sha256, watermarkToken = token)
+            mediaIndex?.upsert(
+                start.copy(
+                    transferStatus = TransferStatus.Done,
+                    progress = 1f,
+                    lastTransferTarget = TransferTarget.PhoneSandbox
+                )
+            )
+            mediaIndex?.upsert(
+                completed.copy(transferStatus = TransferStatus.Idle, progress = 0f, lastTransferTarget = null),
+                localPath = completed.contentUri,
+                sha256 = sha256,
+                watermarkToken = token
+            )
             emit(completed)
         }
     }
 
-    override suspend fun delete(fileId: String): Boolean {
-        mediaIndex?.delete(fileId)
-        return fallbackGateway.delete(fileId)
+    override suspend fun delete(fileId: String, local: Boolean): Boolean {
+        if (local) {
+            mediaIndex?.find(fileId, local = true)?.contentUri
+                ?.let(Uri::parse)
+                ?.path
+                ?.let(::File)
+                ?.takeIf { it.exists() }
+                ?.delete()
+            File(mediaDirectory, "$fileId.bin").takeIf { it.exists() }?.delete()
+            File(mediaDirectory, "$fileId.integrity").takeIf { it.exists() }?.delete()
+            mediaIndex?.delete(fileId, local = true)
+            return true
+        }
+        val deleted = runCatching { wifiClient.delete(fileId).data }
+            .getOrElse { fallbackGateway.delete(fileId, local = false) }
+        if (deleted) mediaIndex?.delete(fileId, local = false)
+        return deleted
     }
 
     override suspend fun verifySha256(fileId: String): Boolean {
@@ -224,7 +262,7 @@ private class WifiBackedMediaGateway(
             val hash = integrityGateway.sha256(localFile.readBytes())
             val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, localFile.lastModified())
             File(mediaDirectory, "$fileId.integrity").writeText("sha256=$hash\nwatermark=$token\n")
-            mediaIndex?.find(fileId)?.let { mediaIndex.upsert(it.copy(verified = true), sha256 = hash, watermarkToken = token) }
+            mediaIndex?.find(fileId, local = true)?.let { mediaIndex.upsert(it.copy(verified = true), sha256 = hash, watermarkToken = token) }
             return true
         }
         return fallbackGateway.verifySha256(fileId)

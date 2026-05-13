@@ -381,7 +381,7 @@ class PatrolViewModel(
     fun downloadMedia(fileId: String) = viewModelScope.launch {
         runCatching {
             coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
-                updateTransferredMedia(fileId, updated.markTransferTarget(TransferTarget.PhoneSandbox))
+                updatePhoneTransfer(fileId, updated.markTransferTarget(TransferTarget.PhoneSandbox))
                 if (updated.transferStatus == TransferStatus.Done) runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
@@ -390,53 +390,96 @@ class PatrolViewModel(
         }
     }
 
-    fun uploadMedia(fileId: String) = viewModelScope.launch {
-        val current = _uiState.value.mediaFiles.firstOrNull { it.id == fileId }
-        if (current?.transferStatus == TransferStatus.Done) {
+    fun uploadMedia(fileId: String, local: Boolean = true) = viewModelScope.launch {
+        val current = _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local == local }
+        if (current?.transferStatus == TransferStatus.Done && current.lastTransferTarget == TransferTarget.Cloud) {
             _uiState.update { it.copy(operationMessage = operationMessage("${current.name} 已上传", OperationMessageType.Success)) }
             return@launch
         }
         runCatching {
             coordinator.transferMedia(fileId, TransferTarget.Cloud).collect { updated ->
-                updateTransferredMedia(fileId, updated.markTransferTarget(TransferTarget.Cloud))
+                updateTransferredMedia(fileId, local, updated.copy(local = local).markTransferTarget(TransferTarget.Cloud))
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
         }.onFailure {
-            simulateMediaTransfer(fileId, TransferTarget.Cloud)
+            simulateMediaTransfer(fileId, TransferTarget.Cloud, local)
         }
     }
 
-    private suspend fun simulateMediaTransfer(fileId: String, target: TransferTarget) {
-        val original = _uiState.value.mediaFiles.firstOrNull { it.id == fileId } ?: return
+    private suspend fun simulateMediaTransfer(fileId: String, target: TransferTarget, local: Boolean = target != TransferTarget.PhoneSandbox) {
+        val original = _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local == local } ?: return
         val steps = listOf(
-            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Hashing, progress = 0.1f, lastTransferTarget = target),
-            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Uploading, progress = 0.55f, lastTransferTarget = target),
-            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Verifying, progress = 0.9f, lastTransferTarget = target),
-            original.copy(local = target == TransferTarget.PhoneSandbox || original.local, transferStatus = TransferStatus.Done, progress = 1f, verified = true, lastTransferTarget = target)
+            original.copy(transferStatus = TransferStatus.Hashing, progress = 0.1f, lastTransferTarget = target),
+            original.copy(transferStatus = TransferStatus.Uploading, progress = 0.55f, lastTransferTarget = target),
+            original.copy(transferStatus = TransferStatus.Verifying, progress = 0.9f, lastTransferTarget = target),
+            original.copy(transferStatus = TransferStatus.Done, progress = 1f, verified = true, lastTransferTarget = target)
         )
         steps.forEach { updated ->
-            updateTransferredMedia(fileId, updated)
+            if (target == TransferTarget.PhoneSandbox) {
+                updatePhoneTransfer(fileId, updated)
+            } else {
+                updateTransferredMedia(fileId, local, updated)
+            }
             if (updated.transferStatus != TransferStatus.Done) delay(420)
         }
     }
 
     private fun MediaFile.markTransferTarget(target: TransferTarget): MediaFile =
-        copy(
-            local = target == TransferTarget.PhoneSandbox || local,
-            lastTransferTarget = target
-        )
+        copy(lastTransferTarget = target)
 
-    private fun updateTransferredMedia(fileId: String, updated: MediaFile) {
+    private fun updateTransferredMedia(fileId: String, local: Boolean, updated: MediaFile) {
         _uiState.update { state ->
-            state.copy(mediaFiles = state.mediaFiles.map { if (it.id == fileId) updated else it })
+            state.copy(mediaFiles = state.mediaFiles.upsertMedia(updated.copy(id = fileId, local = local)))
         }
     }
 
-    fun verifyMedia(fileId: String) = viewModelScope.launch {
+    private fun updatePhoneTransfer(fileId: String, updated: MediaFile) {
+        _uiState.update { state ->
+            val deviceFile = state.mediaFiles.firstOrNull { it.id == fileId && !it.local }
+                ?: updated.copy(id = fileId, local = false)
+            val deviceUpdate = deviceFile.copy(
+                transferStatus = updated.transferStatus,
+                progress = updated.progress,
+                verified = deviceFile.verified || (updated.transferStatus == TransferStatus.Done && updated.verified),
+                lastTransferTarget = TransferTarget.PhoneSandbox
+            )
+            val withDevice = state.mediaFiles.upsertMedia(deviceUpdate)
+            val nextFiles = if (updated.transferStatus == TransferStatus.Done) {
+                val existingPhoneFile = state.mediaFiles.firstOrNull { it.id == fileId && it.local }
+                val phoneCopy = deviceFile.copy(
+                    local = true,
+                    transferStatus = TransferStatus.Idle,
+                    progress = 0f,
+                    verified = updated.verified || deviceFile.verified || existingPhoneFile?.verified == true,
+                    contentUri = updated.contentUri ?: existingPhoneFile?.contentUri,
+                    lastTransferTarget = null
+                )
+                withDevice.upsertMedia(phoneCopy)
+            } else {
+                withDevice
+            }
+            state.copy(mediaFiles = nextFiles)
+        }
+    }
+
+    private fun List<MediaFile>.upsertMedia(file: MediaFile): List<MediaFile> {
+        var replaced = false
+        val updated = map {
+            if (it.id == file.id && it.local == file.local) {
+                replaced = true
+                file
+            } else {
+                it
+            }
+        }
+        return if (replaced) updated else listOf(file) + updated
+    }
+
+    fun verifyMedia(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = viewModelScope.launch {
         val verified = runCatching { coordinator.verifyMedia(fileId) }.getOrDefault(false)
         _uiState.update { state ->
             state.copy(
-                mediaFiles = state.mediaFiles.map { if (it.id == fileId) it.copy(verified = verified) else it },
+                mediaFiles = state.mediaFiles.map { if (it.id == fileId && it.local == local) it.copy(verified = verified) else it },
                 operationMessage = if (verified) {
                     operationMessage("证据完整性校验通过", OperationMessageType.Success)
                 } else {
@@ -446,23 +489,28 @@ class PatrolViewModel(
         }
     }
 
-    fun deleteMedia(fileId: String) = viewModelScope.launch {
-        if (coordinator.deleteMedia(fileId)) {
+    fun deleteMedia(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = viewModelScope.launch {
+        if (coordinator.deleteMedia(fileId, local)) {
             _uiState.update { state ->
                 state.copy(
-                    mediaFiles = state.mediaFiles.filterNot { it.id == fileId },
-                    selectedMediaFileId = if (state.selectedMediaFileId == fileId) null else state.selectedMediaFileId,
-                    previewMediaFile = if (state.previewMediaFile?.id == fileId) null else state.previewMediaFile,
-                    operationMessage = operationMessage("媒体文件已删除", OperationMessageType.Success)
+                    mediaFiles = state.mediaFiles.filterNot { it.id == fileId && it.local == local },
+                    selectedMediaFileId = if (state.selectedMediaFileId == fileId && state.selectedMediaLocal == local) null else state.selectedMediaFileId,
+                    previewMediaFile = state.previewMediaFile?.takeUnless { it.id == fileId && it.local == local },
+                    operationMessage = operationMessage(
+                        if (local) "手机端媒体文件已删除" else "设备端删除指令已发送，文件已移除",
+                        OperationMessageType.Success
+                    )
                 )
             }
+        } else {
+            _uiState.update { it.copy(operationMessage = operationMessage("媒体文件删除失败", OperationMessageType.Error)) }
         }
     }
 
     fun selectMedia(fileId: String) = _uiState.update { it.copy(selectedMediaFileId = fileId) }
 
-    fun openMediaPreview(fileId: String) = _uiState.update { state ->
-        state.copy(previewMediaFile = state.mediaFiles.firstOrNull { it.id == fileId }, selectedMediaFileId = fileId)
+    fun openMediaPreview(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = _uiState.update { state ->
+        state.copy(previewMediaFile = state.mediaFiles.firstOrNull { it.id == fileId && it.local == local }, selectedMediaFileId = fileId)
     }
 
     fun closeMediaPreview() = _uiState.update { it.copy(previewMediaFile = null) }

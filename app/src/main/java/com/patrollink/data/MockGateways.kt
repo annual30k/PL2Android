@@ -184,14 +184,32 @@ class MockMediaGateway(private val api: MockRestApi = MockRestApi()) : MediaGate
         val steps = api.transferMedia(fileId, TransferRequestDto(targetValue)).map { it.data.toDomain() }
         for (step in steps) {
             delay(40)
-            files.update { list -> list.map { if (it.id == fileId) step else it } }
+            val stored = if (target == TransferTarget.PhoneSandbox && step.transferStatus == TransferStatus.Done) {
+                step.copy(transferStatus = TransferStatus.Idle, progress = 0f)
+            } else {
+                step
+            }
+            files.update { list ->
+                val withTarget = list.upsertBySide(stored)
+                if (target == TransferTarget.PhoneSandbox && step.transferStatus == TransferStatus.Done) {
+                    withTarget.upsertBySide(
+                        (withTarget.firstOrNull { it.id == fileId && !it.local } ?: step.copy(local = false)).copy(
+                            transferStatus = TransferStatus.Done,
+                            progress = 1f,
+                            lastTransferTarget = TransferTarget.PhoneSandbox
+                        )
+                    )
+                } else {
+                    withTarget
+                }
+            }
             emit(step)
         }
     }
 
-    override suspend fun delete(fileId: String): Boolean {
-        val deleted = api.deleteMedia(fileId).data
-        if (deleted) files.update { list -> list.filterNot { it.id == fileId } }
+    override suspend fun delete(fileId: String, local: Boolean): Boolean {
+        val deleted = api.deleteMedia(fileId, if (local) "PHONE" else "DEVICE").data
+        if (deleted) files.update { list -> list.filterNot { it.id == fileId && it.local == local } }
         return deleted
     }
 
@@ -199,6 +217,19 @@ class MockMediaGateway(private val api: MockRestApi = MockRestApi()) : MediaGate
         val verified = api.verifyMedia(fileId).data
         files.update { list -> list.map { if (it.id == fileId) it.copy(verified = true) else it } }
         return verified
+    }
+
+    private fun List<MediaFile>.upsertBySide(file: MediaFile): List<MediaFile> {
+        var replaced = false
+        val updated = map {
+            if (it.id == file.id && it.local == file.local) {
+                replaced = true
+                file
+            } else {
+                it
+            }
+        }
+        return if (replaced) updated else updated + file
     }
 }
 

@@ -58,8 +58,8 @@ class OkHttpPatrolRestApi(
     override suspend fun transferMedia(fileId: String, request: TransferRequestDto): List<ApiEnvelope<MediaFileDto>> =
         post("api/v1/media/${fileId.pathId()}/transfer", request)
 
-    override suspend fun deleteMedia(fileId: String): ApiEnvelope<Boolean> =
-        delete("api/v1/media/${fileId.pathId()}")
+    override suspend fun deleteMedia(fileId: String, storageSide: String): ApiEnvelope<Boolean> =
+        delete("api/v1/media/${fileId.pathId()}?side=$storageSide")
 
     override suspend fun verifyMedia(fileId: String): ApiEnvelope<Boolean> =
         post("api/v1/media/${fileId.pathId()}/verify", emptyMap<String, String>())

@@ -40,7 +40,8 @@ class MockRestApiTest {
 
     @Test
     fun mediaTransferProducesRestProgressStatesAndDomainMediaFile() {
-        val steps = MockRestApi().transferMedia("VID-042", TransferRequestDto("PHONE_SANDBOX"))
+        val api = MockRestApi()
+        val steps = api.transferMedia("VID-042", TransferRequestDto("PHONE_SANDBOX"))
         val last = steps.last().data.toDomain()
 
         assertEquals(4, steps.size)
@@ -49,6 +50,8 @@ class MockRestApiTest {
         assertEquals(TransferStatus.Done, last.transferStatus)
         assertTrue(last.local)
         assertTrue(last.verified)
+        assertTrue(api.mediaFiles(local = false).data.items.any { it.fileId == "VID-042" })
+        assertEquals("IDLE", api.mediaFiles(local = true).data.items.first { it.fileId == "VID-042" }.transferStatus)
     }
 
     @Test

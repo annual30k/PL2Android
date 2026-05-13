@@ -16,6 +16,7 @@ import com.patrollink.domain.BackgroundTaskType
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.TransferStatus
+import com.patrollink.domain.TransferTarget
 
 @Entity(tableName = "offline_tasks")
 data class OfflineTaskEntity(
@@ -38,7 +39,8 @@ data class OfflineTaskEntity(
 
 @Entity(tableName = "media_index")
 data class MediaFileEntity(
-    @PrimaryKey val id: String,
+    @PrimaryKey val storageKey: String,
+    val id: String,
     val name: String,
     val kind: String,
     val time: String,
@@ -50,6 +52,7 @@ data class MediaFileEntity(
     val watermarkToken: String?,
     val transferStatus: String,
     val progress: Float,
+    val lastTransferTarget: String?,
     val updatedAt: Long
 ) {
     fun toDomain(): MediaFile =
@@ -64,12 +67,17 @@ data class MediaFileEntity(
             local = local,
             transferStatus = TransferStatus.valueOf(transferStatus),
             progress = progress,
-            contentUri = localPath
+            contentUri = localPath,
+            lastTransferTarget = lastTransferTarget?.let(TransferTarget::valueOf)
         )
 
     companion object {
+        private fun storageKey(id: String, local: Boolean): String =
+            "${if (local) "PHONE" else "DEVICE"}:$id"
+
         fun from(file: MediaFile, localPath: String? = file.contentUri, sha256: String? = null, watermarkToken: String? = null): MediaFileEntity =
             MediaFileEntity(
+                storageKey = storageKey(file.id, file.local),
                 id = file.id,
                 name = file.name,
                 kind = file.kind.name,
@@ -82,6 +90,7 @@ data class MediaFileEntity(
                 watermarkToken = watermarkToken,
                 transferStatus = file.transferStatus.name,
                 progress = file.progress,
+                lastTransferTarget = file.lastTransferTarget?.name,
                 updatedAt = System.currentTimeMillis()
             )
     }
@@ -107,16 +116,16 @@ interface MediaFileDao {
     @Query("SELECT * FROM media_index WHERE local = :local ORDER BY updatedAt DESC")
     suspend fun files(local: Boolean): List<MediaFileEntity>
 
-    @Query("SELECT * FROM media_index WHERE id = :id LIMIT 1")
-    suspend fun find(id: String): MediaFileEntity?
+    @Query("SELECT * FROM media_index WHERE id = :id AND local = :local LIMIT 1")
+    suspend fun find(id: String, local: Boolean): MediaFileEntity?
 
-    @Query("DELETE FROM media_index WHERE id = :id")
-    suspend fun delete(id: String): Int
+    @Query("DELETE FROM media_index WHERE id = :id AND local = :local")
+    suspend fun delete(id: String, local: Boolean): Int
 }
 
 @Database(
     entities = [OfflineTaskEntity::class, MediaFileEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class PatrolDatabase : RoomDatabase() {

@@ -37,12 +37,12 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Security
@@ -152,21 +152,21 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                     }
                 }
                 MediaActionBar(
-                    primaryText = primaryAction?.label ?: if (uiState.selectedMediaLocal) "上传云端" else "下载沙盒",
-                    primaryIcon = primaryAction?.icon ?: if (uiState.selectedMediaLocal) Icons.Filled.UploadFile else Icons.Filled.Inventory2,
+                    primaryText = primaryAction?.label ?: if (uiState.selectedMediaLocal) "上传云端" else "上传手机",
+                    primaryIcon = primaryAction?.icon ?: if (uiState.selectedMediaLocal) Icons.Filled.UploadFile else Icons.Filled.PhoneAndroid,
                     onPrimary = {
                         selected?.let {
                             when (it.mediaPrimaryAction(uiState.selectedMediaLocal)) {
-                                MediaPrimaryAction.Upload -> {
+                                MediaPrimaryAction.UploadCloud -> {
                                     dismissedTransferFileId = null
-                                    viewModel.uploadMedia(it.id)
+                                    viewModel.uploadMedia(it.id, it.local)
                                 }
-                                MediaPrimaryAction.Download -> {
+                                MediaPrimaryAction.UploadPhone -> {
                                     dismissedTransferFileId = null
                                     viewModel.downloadMedia(it.id)
                                 }
-                                MediaPrimaryAction.Uploaded -> viewModel.showOperationMessage("${it.name} 已上传", OperationMessageType.Success)
-                                MediaPrimaryAction.Downloaded -> viewModel.showOperationMessage("${it.name} 已下载到沙盒", OperationMessageType.Success)
+                                MediaPrimaryAction.UploadedCloud -> viewModel.showOperationMessage("${it.name} 已上传", OperationMessageType.Success)
+                                MediaPrimaryAction.UploadedPhone -> viewModel.showOperationMessage("${it.name} 已上传到手机", OperationMessageType.Success)
                                 MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${it.name} ${transferLabel(it.transferStatus)}，请稍候", OperationMessageType.Warning)
                             }
                         }
@@ -176,13 +176,13 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                             if (it.kind == MediaKind.Audio) {
                                 viewModel.showOperationMessage("${it.name} 暂不支持本地音频预览", OperationMessageType.Warning)
                             } else {
-                                viewModel.openMediaPreview(it.id)
+                                viewModel.openMediaPreview(it.id, it.local)
                             }
                         }
                     },
                     onVerify = {
                         selected?.let {
-                            if (it.verified) viewModel.showOperationMessage("${it.name} 已完成证据校验", OperationMessageType.Success) else viewModel.verifyMedia(it.id)
+                            if (it.verified) viewModel.showOperationMessage("${it.name} 已完成证据校验", OperationMessageType.Success) else viewModel.verifyMedia(it.id, it.local)
                         }
                     },
                     onDelete = {
@@ -216,10 +216,10 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text("确认删除") },
-            text = { Text("删除 ${file.name} 后，本地列表将不再显示该文件。") },
+            text = { Text(if (file.local) "删除 ${file.name} 后，手机端列表将不再显示该文件。" else "删除 ${file.name} 后，将向设备发送删除文件指令，并从设备端列表移除。") },
             confirmButton = {
                 Button(onClick = {
-                    viewModel.deleteMedia(file.id)
+                    viewModel.deleteMedia(file.id, file.local)
                     pendingDelete = null
                 }) {
                     Text("删除")
@@ -367,7 +367,7 @@ private fun MediaEmptyState(filter: MediaFilter, phoneSelected: Boolean) {
         Text("暂无${filter.label}文件", color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(6.dp))
         Text(
-            if (phoneSelected) "可从设备端下载到沙盒，或等待现场采集生成。" else "设备端当前没有匹配类型的媒体。",
+            if (phoneSelected) "可从设备端上传到手机，或等待现场采集生成。" else "设备端当前没有匹配类型的媒体。",
             color = colors.textMuted,
             fontSize = 12.sp,
             lineHeight = 18.sp,
@@ -448,10 +448,10 @@ private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Uni
 @Composable
 private fun BoxScope.MediaSyncBadge(file: MediaFile, modifier: Modifier = Modifier) {
     val (icon, background, tint) = when (file.transferStatus) {
-        TransferStatus.Done -> Triple(if (file.lastTransferTarget == TransferTarget.PhoneSandbox) Icons.Filled.DownloadDone else Icons.Filled.CloudDone, Success, Color.White)
+        TransferStatus.Done -> Triple(if (file.local) Icons.Filled.CloudDone else Icons.Filled.PhoneAndroid, Success, Color.White)
         TransferStatus.Uploading, TransferStatus.Hashing, TransferStatus.Verifying -> Triple(Icons.Filled.CloudUpload, TechBlue, Color.White)
         TransferStatus.Failed -> Triple(Icons.Filled.CloudUpload, Color(0xFFFF4F73), Color.White)
-        TransferStatus.Idle -> Triple(Icons.Filled.CloudUpload, Color.White.copy(alpha = 0.88f), TechBlue)
+        TransferStatus.Idle -> Triple(if (file.local) Icons.Filled.CloudUpload else Icons.Filled.UploadFile, Color.White.copy(alpha = 0.88f), TechBlue)
     }
     Box(
         modifier
@@ -725,7 +725,7 @@ private fun IntegrityHelpDialog(onDismiss: () -> Unit) {
                 }
             }
             Text(
-                "对选中的媒体生成完整性记录，用来确认下载、保存、上传前后没有被篡改。",
+                "对选中的媒体生成完整性记录，用来确认同步、保存、上传前后没有被篡改。",
                 color = colors.textMuted,
                 fontSize = 14.sp,
                 lineHeight = 21.sp,
@@ -866,26 +866,25 @@ private val TransferStatus.inProgress: Boolean
     get() = this == TransferStatus.Hashing || this == TransferStatus.Uploading || this == TransferStatus.Verifying
 
 private fun mediaStatusLabel(file: MediaFile): String = when (file.transferStatus) {
-    TransferStatus.Done -> if (file.lastTransferTarget == TransferTarget.PhoneSandbox) "已下载" else "已上传"
-    TransferStatus.Idle -> if (file.local) "待上传" else "待下载"
+    TransferStatus.Done -> if (file.local) "已上传" else "已上传手机"
+    TransferStatus.Idle -> if (file.local) "待上传" else "待上传手机"
     else -> transferLabel(file.transferStatus)
 }
 
 private enum class MediaPrimaryAction(val label: String, val icon: ImageVector) {
-    Upload("上传云端", Icons.Filled.UploadFile),
-    Uploaded("已上传", Icons.Filled.CloudDone),
-    Download("下载沙盒", Icons.Filled.Inventory2),
-    Downloaded("已下载", Icons.Filled.DownloadDone),
+    UploadCloud("上传云端", Icons.Filled.UploadFile),
+    UploadedCloud("已上传", Icons.Filled.CloudDone),
+    UploadPhone("上传手机", Icons.Filled.PhoneAndroid),
+    UploadedPhone("已传手机", Icons.Filled.PhoneAndroid),
     Busy("处理中", Icons.Filled.CloudUpload)
 }
 
 private fun MediaFile.mediaPrimaryAction(phoneSelected: Boolean): MediaPrimaryAction = when {
     transferStatus.inProgress -> MediaPrimaryAction.Busy
-    phoneSelected && transferStatus == TransferStatus.Done && lastTransferTarget == TransferTarget.PhoneSandbox -> MediaPrimaryAction.Upload
-    phoneSelected && transferStatus == TransferStatus.Done -> MediaPrimaryAction.Uploaded
-    phoneSelected -> MediaPrimaryAction.Upload
-    transferStatus == TransferStatus.Done -> MediaPrimaryAction.Downloaded
-    else -> MediaPrimaryAction.Download
+    phoneSelected && transferStatus == TransferStatus.Done && lastTransferTarget == TransferTarget.Cloud -> MediaPrimaryAction.UploadedCloud
+    phoneSelected -> MediaPrimaryAction.UploadCloud
+    transferStatus == TransferStatus.Done -> MediaPrimaryAction.UploadedPhone
+    else -> MediaPrimaryAction.UploadPhone
 }
 
 private enum class MediaFilter(val label: String) {

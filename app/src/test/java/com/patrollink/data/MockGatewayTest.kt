@@ -63,6 +63,8 @@ class MockGatewayTest {
         assertEquals(1f, result.progress)
         assertTrue(result.local)
         assertTrue(result.verified)
+        assertTrue(gateway.listFiles(local = false).any { it.id == file.id })
+        assertEquals(TransferStatus.Idle, gateway.listFiles(local = true).first { it.id == file.id }.transferStatus)
     }
 
     @Test
@@ -71,7 +73,7 @@ class MockGatewayTest {
         val file = gateway.listFiles(local = false).first()
 
         assertTrue(gateway.verifySha256(file.id))
-        assertTrue(gateway.delete(file.id))
+        assertTrue(gateway.delete(file.id, local = false))
         assertTrue(gateway.listFiles(local = false).none { it.id == file.id })
     }
 

@@ -44,6 +44,14 @@ class WifiFileServiceClient(
         }
     }
 
+    suspend fun delete(fileId: String): ApiEnvelope<Boolean> = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("${baseUrl.trimEnd('/')}/files/$fileId").delete().build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("delete failed: ${response.code}")
+            gson.fromJson(response.body?.string().orEmpty(), object : TypeToken<ApiEnvelope<Boolean>>() {}.type)
+        }
+    }
+
     private suspend inline fun <reified T> get(path: String): T = withContext(Dispatchers.IO) {
         val request = Request.Builder().url("${baseUrl.trimEnd('/')}/$path").build()
         client.newCall(request).execute().use { response ->

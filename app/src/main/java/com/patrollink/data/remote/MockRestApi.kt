@@ -101,7 +101,12 @@ class MockRestApi {
     }
 
     fun transferMedia(fileId: String, request: TransferRequestDto): List<ApiEnvelope<MediaFileDto>> {
-        val original = media.first { it.fileId == fileId }
+        val original = when (request.target) {
+            "PHONE_SANDBOX" -> media.first { it.fileId == fileId && it.storageSide == "DEVICE" }
+            "CLOUD" -> media.firstOrNull { it.fileId == fileId && it.storageSide == "PHONE" }
+                ?: media.first { it.fileId == fileId }
+            else -> media.first { it.fileId == fileId }
+        }
         val side = if (request.target == "PHONE_SANDBOX") "PHONE" else original.storageSide
         return listOf(
             original.copy(storageSide = side, transferStatus = "HASHING", progress = 0.1f),
@@ -109,14 +114,19 @@ class MockRestApi {
             original.copy(storageSide = side, transferStatus = "VERIFYING", progress = 0.9f),
             original.copy(storageSide = side, transferStatus = "DONE", progress = 1f, sha256Verified = true)
         ).map { step ->
-            media = media.map { if (it.fileId == fileId) step else it }
+            val stored = if (request.target == "PHONE_SANDBOX" && step.transferStatus == "DONE") {
+                step.copy(transferStatus = "IDLE", progress = 0f)
+            } else {
+                step
+            }
+            media = upsertMedia(stored)
             ok(step)
         }
     }
 
-    fun deleteMedia(fileId: String): ApiEnvelope<Boolean> {
+    fun deleteMedia(fileId: String, storageSide: String? = null): ApiEnvelope<Boolean> {
         val before = media.size
-        media = media.filterNot { it.fileId == fileId }
+        media = media.filterNot { it.fileId == fileId && (storageSide == null || it.storageSide == storageSide) }
         return ok(media.size < before)
     }
 
@@ -128,6 +138,19 @@ class MockRestApi {
 
     fun heartbeat(request: HeartbeatRequestDto): ApiEnvelope<HeartbeatAckDto> {
         return ok(HeartbeatAckDto(accepted = request.online, serverTime = 1715832000L, nextHeartbeatSeconds = 15))
+    }
+
+    private fun upsertMedia(file: MediaFileDto): List<MediaFileDto> {
+        var replaced = false
+        val updated = media.map {
+            if (it.fileId == file.fileId && it.storageSide == file.storageSide) {
+                replaced = true
+                file
+            } else {
+                it
+            }
+        }
+        return if (replaced) updated else updated + file
     }
 
     fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto> {

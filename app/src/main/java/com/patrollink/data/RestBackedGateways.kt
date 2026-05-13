@@ -101,7 +101,8 @@ class RestMediaGateway(private val api: PatrolRestApi) : MediaGateway {
         api.transferMedia(fileId, TransferRequestDto(targetValue)).forEach { emit(it.data.toDomain()) }
     }
 
-    override suspend fun delete(fileId: String): Boolean = api.deleteMedia(fileId).data
+    override suspend fun delete(fileId: String, local: Boolean): Boolean =
+        api.deleteMedia(fileId, if (local) "PHONE" else "DEVICE").data
 
     override suspend fun verifySha256(fileId: String): Boolean = api.verifyMedia(fileId).data
 }

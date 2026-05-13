@@ -12,7 +12,7 @@ interface PatrolRestApi {
     suspend fun closeAlert(alertId: String, request: AlertCloseRequestDto): ApiEnvelope<AlertDto>
     suspend fun mediaFiles(local: Boolean, page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<MediaFileDto>>
     suspend fun transferMedia(fileId: String, request: TransferRequestDto): List<ApiEnvelope<MediaFileDto>>
-    suspend fun deleteMedia(fileId: String): ApiEnvelope<Boolean>
+    suspend fun deleteMedia(fileId: String, storageSide: String): ApiEnvelope<Boolean>
     suspend fun verifyMedia(fileId: String): ApiEnvelope<Boolean>
     suspend fun heartbeat(request: HeartbeatRequestDto): ApiEnvelope<HeartbeatAckDto>
     suspend fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto>

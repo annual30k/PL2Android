@@ -45,7 +45,7 @@ class PatrolCoordinator(
 
     fun transferMedia(fileId: String, target: TransferTarget): Flow<MediaFile> = mediaGateway.transfer(fileId, target)
 
-    suspend fun deleteMedia(fileId: String): Boolean = mediaGateway.delete(fileId)
+    suspend fun deleteMedia(fileId: String, local: Boolean): Boolean = mediaGateway.delete(fileId, local)
 
     suspend fun verifyMedia(fileId: String): Boolean = mediaGateway.verifySha256(fileId)
 

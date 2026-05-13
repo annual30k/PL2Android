@@ -23,7 +23,7 @@ interface AlertGateway {
 interface MediaGateway {
     suspend fun listFiles(local: Boolean): List<MediaFile>
     fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile>
-    suspend fun delete(fileId: String): Boolean
+    suspend fun delete(fileId: String, local: Boolean): Boolean
     suspend fun verifySha256(fileId: String): Boolean
 }
 

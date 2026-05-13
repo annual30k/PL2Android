@@ -12,9 +12,9 @@ class RoomMediaIndex(
     suspend fun files(local: Boolean): List<MediaFile> =
         dao.files(local).map { it.toDomain() }
 
-    suspend fun find(fileId: String): MediaFile? =
-        dao.find(fileId)?.toDomain()
+    suspend fun find(fileId: String, local: Boolean): MediaFile? =
+        dao.find(fileId, local)?.toDomain()
 
-    suspend fun delete(fileId: String): Boolean =
-        dao.delete(fileId) > 0
+    suspend fun delete(fileId: String, local: Boolean): Boolean =
+        dao.delete(fileId, local) > 0
 }

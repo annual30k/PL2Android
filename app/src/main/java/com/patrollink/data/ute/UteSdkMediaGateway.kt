@@ -60,14 +60,21 @@ class UteSdkMediaGateway(
                     verified = true,
                     transferStatus = TransferStatus.Done,
                     progress = 1f,
-                    contentUri = Uri.fromFile(targetFile).toString()
+                    contentUri = Uri.fromFile(targetFile).toString(),
+                    lastTransferTarget = TransferTarget.PhoneSandbox
                 )
             )
         }
     }
 
-    override suspend fun delete(fileId: String): Boolean {
-        if (!fileId.startsWith(AudioPrefix)) return fallbackGateway.delete(fileId)
+    override suspend fun delete(fileId: String, local: Boolean): Boolean {
+        if (!fileId.startsWith(AudioPrefix)) return fallbackGateway.delete(fileId, local)
+        if (local) {
+            val sessionId = fileId.removePrefix(AudioPrefix)
+            File(mediaDirectory, "$sessionId.opus").takeIf { it.exists() }?.delete()
+            File(mediaDirectory, "$sessionId.integrity").takeIf { it.exists() }?.delete()
+            return true
+        }
         val request = RequestDeleteAudioRecordFileInfo().apply {
             sessionId = fileId.removePrefix(AudioPrefix)
             fileType = AudioFileType
@@ -109,8 +116,8 @@ class UteSdkMediaGateway(
                     duration = null,
                     verified = File(mediaDirectory, "$sessionId.integrity").exists(),
                     local = true,
-                    transferStatus = TransferStatus.Done,
-                    progress = 1f,
+                    transferStatus = TransferStatus.Idle,
+                    progress = 0f,
                     contentUri = Uri.fromFile(file).toString()
                 )
             }

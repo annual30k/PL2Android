@@ -116,16 +116,6 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onSos: () -> U
                     item { RecorderLiveFeed(uiState, viewModel, device) }
                     item { HeadsetCapabilityCard(device) }
                     item { HeadsetActions(device, viewModel) }
-                    item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
-                    item { MetricTile("耳机电量", "${device.battery}%", Success, device.battery / 100f) }
-                    item {
-                        MetricTile(
-                            "本机存储",
-                            "${device.storageUsedGb}GB / ${device.storageTotalGb.toInt()}GB",
-                            Warning,
-                            device.storageUsedGb / device.storageTotalGb
-                        )
-                    }
                 }
                 DeviceType.Sensor -> {
                     item { SensorCapabilityCard(device) }
@@ -299,7 +289,9 @@ private fun HeadsetCapabilityCard(device: DeviceStatus) {
         rows = listOf(
             "摄像头" to if (device.isRecording) "录像中" else "待机",
             "语音对讲" to if (device.isTalking) "通道占用中" else "待机",
-            "电量" to "${device.battery}%"
+            "在线时长" to device.onlineDuration,
+            "电量" to "${device.battery}%",
+            "本机存储" to "${device.storageUsedGb}GB / ${device.storageTotalGb.toInt()}GB"
         )
     )
 }

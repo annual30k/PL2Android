@@ -22,10 +22,13 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -313,6 +316,9 @@ private fun ActionGlyph(glyph: String, color: Color) {
         "video" -> Icons.Filled.Videocam
         "stop" -> Icons.Filled.Stop
         "talk" -> Icons.Filled.Mic
+        "wifi" -> Icons.Filled.Wifi
+        "check" -> Icons.Filled.CheckCircle
+        "info" -> Icons.Filled.Info
         else -> Icons.Filled.CameraAlt
     }
     Icon(

@@ -8,8 +8,8 @@ plugins {
 fun runtimeString(name: String): String =
     providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse("").get()
 
-fun runtimeBoolean(name: String): String =
-    providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse("false").get()
+fun runtimeBoolean(name: String, defaultValue: String = "false"): String =
+    providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse(defaultValue).get()
         .toBooleanStrictOrNull()
         ?.toString()
         ?: "false"
@@ -35,7 +35,7 @@ android {
         buildConfigField("String", "BLE_COMMAND_UUID", runtimeString("PATROL_BLE_COMMAND_UUID").asBuildConfigString())
         buildConfigField("String", "BLE_STATUS_UUID", runtimeString("PATROL_BLE_STATUS_UUID").asBuildConfigString())
         buildConfigField("String", "STREAM_RELAY_URL", runtimeString("PATROL_STREAM_RELAY_URL").asBuildConfigString())
-        buildConfigField("boolean", "USE_REAL_BLE", runtimeBoolean("PATROL_USE_REAL_BLE"))
+        buildConfigField("boolean", "USE_REAL_BLE", runtimeBoolean("PATROL_USE_REAL_BLE", defaultValue = "true"))
     }
 
     buildFeatures {
@@ -54,6 +54,8 @@ kotlin {
 }
 
 dependencies {
+    implementation(files("libs/uteWatchSdk_Android_v1.3.5.aar"))
+
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.fragment:fragment-ktx:1.8.5")
@@ -74,6 +76,7 @@ dependencies {
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("net.jpountz.lz4:lz4:1.3.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

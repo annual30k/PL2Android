@@ -14,8 +14,14 @@ import com.patrollink.data.remote.toDomain
 import com.patrollink.data.realtime.OkHttpWebSocketRealtimeGateway
 import com.patrollink.data.sos.AndroidSosEvidenceRecorder
 import com.patrollink.data.sos.MockEmergencyContactGateway
+import com.patrollink.data.ute.UteSdkBridge
+import com.patrollink.data.ute.UteSdkDeviceControlGateway
+import com.patrollink.data.ute.UteSdkDeviceGateway
+import com.patrollink.data.ute.UteSdkMediaGateway
+import com.patrollink.data.ute.UteSdkStreamRelayGateway
 import com.patrollink.data.update.AndroidVersionInstaller
 import com.patrollink.domain.AppUiState
+import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaGateway
 import com.patrollink.domain.PatrolCoordinator
@@ -63,7 +69,8 @@ object ServiceFactory {
         config: RuntimeConfig,
         tokenProvider: () -> String?,
         operatorIdProvider: () -> String = { "UNKNOWN_OPERATOR" },
-        fallbackState: AppUiState = MockPatrolRepository().initialState()
+        fallbackState: AppUiState = MockPatrolRepository().initialState(),
+        sharedUteBridge: UteSdkBridge? = null
     ): PatrolCoordinator {
         val restApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let {
             OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)
@@ -75,6 +82,7 @@ object ServiceFactory {
         val mockRealtime = MockRealtimeGateway()
         val mockStream = MockStreamRelayGateway()
         val mockSos = MockSosGateway()
+        val uteBridge = if (config.useRealBle) sharedUteBridge ?: UteSdkBridge(context) else null
         val restMediaGateway = restApi?.let(::RestMediaGateway)
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
             val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
@@ -98,12 +106,23 @@ object ServiceFactory {
                         command = config.bleCommandUuid,
                         status = config.bleStatusUuid
                     )
-                )
+                ).takeIf { config.bleServiceUuid.isNotBlank() }
+                    ?: UteSdkDeviceGateway(uteBridge ?: UteSdkBridge(context), fallbackState.device)
                 restApi != null -> RestDeviceGateway(restApi, operatorIdProvider)
                 else -> mockDevice
             },
             alertGateway = restApi?.let { RestAlertGateway(it, operatorIdProvider) } ?: mockAlert,
-            mediaGateway = wifiMediaGateway ?: restMediaGateway ?: mockMedia,
+            mediaGateway = when {
+                wifiMediaGateway != null -> wifiMediaGateway
+                uteBridge != null -> UteSdkMediaGateway(
+                    bridge = uteBridge,
+                    fallbackGateway = restMediaGateway ?: mockMedia,
+                    mediaDirectory = File(context.filesDir, "patrol_media/ute"),
+                    officerBadgeNo = fallbackState.user.badgeNo
+                )
+                restMediaGateway != null -> restMediaGateway
+                else -> mockMedia
+            },
             realtimeGateway = when {
                 config.webSocketUrl.isNotBlank() -> OkHttpWebSocketRealtimeGateway(config.webSocketUrl)
                 restApi != null -> RestRealtimeGateway(restApi)
@@ -112,11 +131,15 @@ object ServiceFactory {
             streamRelayGateway = when {
                 restApi != null -> RestStreamRelayGateway(restApi)
                 config.streamRelayUrl.isNotBlank() -> ConfiguredStreamRelayGateway(config.streamRelayUrl)
+                uteBridge != null -> UteSdkStreamRelayGateway(uteBridge)
                 else -> mockStream
             },
             sosGateway = restApi?.let(::RestSosGateway) ?: mockSos
         )
     }
+
+    fun createDeviceControlGateway(context: Context, config: RuntimeConfig, sharedUteBridge: UteSdkBridge? = null): DeviceControlGateway =
+        if (config.useRealBle) UteSdkDeviceControlGateway(sharedUteBridge ?: UteSdkBridge(context)) else MockDeviceControlGateway()
 
     fun createLocationGateway(context: Context, fallbackState: AppUiState = MockPatrolRepository().initialState()) =
         AndroidLocationGateway(context, fallbackState.sosLocation)

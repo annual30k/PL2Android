@@ -7,8 +7,15 @@ import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthGateway
 import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DeviceCommand
+import com.patrollink.domain.DeviceAdvancedSettings
+import com.patrollink.domain.DeviceCapabilities
+import com.patrollink.domain.DeviceControlGateway
+import com.patrollink.domain.DeviceEvent
+import com.patrollink.domain.DeviceEventLevel
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
+import com.patrollink.domain.DeviceType
+import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.MediaFile
@@ -82,6 +89,62 @@ class MockDeviceGateway(private val api: MockRestApi = MockRestApi()) : DeviceGa
         current.value = api.sendDeviceCommand(deviceId, DeviceCommandRequestDto(commandValue, api.currentUser().data.badgeNo, "REQ-0001")).data.toDomain()
         return current.value
     }
+}
+
+class MockDeviceControlGateway : DeviceControlGateway {
+    private val events = MutableStateFlow(
+        DeviceEvent("mock-event", "设备链路就绪", "蓝牙、媒体和配置通道可用", DeviceEventLevel.Info, System.currentTimeMillis())
+    )
+    private var wifi = DeviceWifiState(enabled = true, ssid = "PatrolLink-Device", passwordConfigured = true, connected = true)
+    private var settings = DeviceAdvancedSettings()
+
+    override fun events(): Flow<DeviceEvent> = events.asStateFlow()
+
+    override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities {
+        val sdkDevice = device.type == DeviceType.Headset || device.type == DeviceType.Glasses
+        return DeviceCapabilities(
+            supportsGlasses = device.type == DeviceType.Glasses,
+            supportsEarphone = device.type == DeviceType.Headset,
+            supportsWifi = device.type == DeviceType.Glasses,
+            supportsFileTransfer = sdkDevice,
+            supportsPhoto = sdkDevice,
+            supportsVideo = sdkDevice,
+            supportsAudioRecord = device.type == DeviceType.Headset,
+            supportsRealtimeAudio = device.type == DeviceType.Headset
+        )
+    }
+
+    override suspend fun readWifi(): DeviceWifiState = wifi
+
+    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState {
+        wifi = DeviceWifiState(enabled = enabled, ssid = ssid, passwordConfigured = password.isNotBlank(), connected = enabled && ssid.isNotBlank())
+        events.value = DeviceEvent("wifi-${System.currentTimeMillis()}", "Wi-Fi 配置已下发", wifi.ssid, DeviceEventLevel.Info, System.currentTimeMillis())
+        return wifi
+    }
+
+    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings {
+        this.settings = settings
+        events.value = DeviceEvent(
+            "settings-${System.currentTimeMillis()}",
+            "${device.name} 参数已保存",
+            "${settings.videoWidth}p/${settings.videoFrameRate}fps",
+            DeviceEventLevel.Info,
+            System.currentTimeMillis()
+        )
+        return this.settings
+    }
+
+    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean {
+        events.value = DeviceEvent("audio-${System.currentTimeMillis()}", "实时音频同传已启动", sessionId, DeviceEventLevel.Info, System.currentTimeMillis())
+        return true
+    }
+
+    override suspend fun stopRealtimeAudioSync(): Boolean {
+        events.value = DeviceEvent("audio-stop-${System.currentTimeMillis()}", "实时音频同传已停止", "已切换为离线文件续传", DeviceEventLevel.Info, System.currentTimeMillis())
+        return true
+    }
+
+    override suspend fun notifyMediaSyncCompleted(): Boolean = true
 }
 
 class MockAlertGateway(private val api: MockRestApi = MockRestApi()) : AlertGateway {

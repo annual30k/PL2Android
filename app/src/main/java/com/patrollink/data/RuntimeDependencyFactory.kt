@@ -3,7 +3,9 @@ package com.patrollink.data
 import android.content.Context
 import com.patrollink.data.local.AndroidKeystoreSecureStore
 import com.patrollink.data.local.UiSettingsStore
+import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.domain.PatrolCoordinator
+import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.SecureStore
 import com.patrollink.domain.LocationGateway
 import com.patrollink.domain.EmergencyContactGateway
@@ -13,6 +15,7 @@ import com.patrollink.domain.VersionInstaller
 
 data class RuntimeDependencies(
     val coordinator: PatrolCoordinator,
+    val deviceControlGateway: DeviceControlGateway,
     val secureStore: SecureStore,
     val settingsStore: UiSettingsStore,
     val locationGateway: LocationGateway,
@@ -31,15 +34,19 @@ object RuntimeDependencyFactory {
         val tokenStore = RuntimeTokenStore()
         val secureStore = AndroidKeystoreSecureStore(appContext)
         val fallbackState = MockPatrolRepository().initialState()
+        val uteBridge = if (config.useRealBle) UteSdkBridge(appContext) else null
         val coordinator = ServiceFactory.createRuntimeCoordinator(
             context = appContext,
             config = config,
             tokenProvider = tokenStore::token,
             operatorIdProvider = { fallbackState.user.badgeNo },
-            fallbackState = fallbackState
+            fallbackState = fallbackState,
+            sharedUteBridge = uteBridge
         )
+        val deviceControlGateway = ServiceFactory.createDeviceControlGateway(appContext, config, uteBridge)
         return RuntimeDependencies(
             coordinator = coordinator,
+            deviceControlGateway = deviceControlGateway,
             secureStore = secureStore,
             settingsStore = UiSettingsStore(appContext),
             locationGateway = ServiceFactory.createLocationGateway(appContext, fallbackState),

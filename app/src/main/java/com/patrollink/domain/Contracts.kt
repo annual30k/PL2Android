@@ -40,6 +40,17 @@ interface StreamRelayGateway {
     suspend fun stop()
 }
 
+interface DeviceControlGateway {
+    fun events(): Flow<DeviceEvent>
+    suspend fun capabilities(device: DeviceStatus): DeviceCapabilities
+    suspend fun readWifi(): DeviceWifiState
+    suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState
+    suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings
+    suspend fun startRealtimeAudioSync(sessionId: String): Boolean
+    suspend fun stopRealtimeAudioSync(): Boolean
+    suspend fun notifyMediaSyncCompleted(): Boolean
+}
+
 interface SosGateway {
     fun state(): Flow<SosState>
     suspend fun activate(location: GpsLocation): SosEvent

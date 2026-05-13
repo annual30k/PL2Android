@@ -9,6 +9,43 @@ enum class StreamRelayState { Idle, Connecting, Relaying, Failed }
 enum class SosPhase { Idle, Activating, Active, Cancelled }
 enum class AppPermission { Internet, NetworkState, FineLocation, BluetoothScan, BluetoothConnect, BluetoothAdvertise, Camera, RecordAudio, PostNotifications, ForegroundService }
 enum class BackgroundTaskType { Heartbeat, UploadEvidence, SyncAlertDisposition, VersionCheck }
+enum class DeviceEventLevel { Info, Warning, Error }
+
+data class DeviceCapabilities(
+    val supportsGlasses: Boolean = false,
+    val supportsEarphone: Boolean = false,
+    val supportsWifi: Boolean = false,
+    val supportsFileTransfer: Boolean = false,
+    val supportsPhoto: Boolean = false,
+    val supportsVideo: Boolean = false,
+    val supportsAudioRecord: Boolean = false,
+    val supportsRealtimeAudio: Boolean = false
+)
+
+data class DeviceWifiState(
+    val enabled: Boolean = false,
+    val ssid: String = "",
+    val passwordConfigured: Boolean = false,
+    val connected: Boolean = false
+)
+
+data class DeviceAdvancedSettings(
+    val videoWidth: Int = 240,
+    val videoHeight: Int = 0,
+    val videoFrameRate: Int = 16,
+    val recordingDurationSeconds: Int = 24 * 60 * 60,
+    val verticalRecording: Boolean = true,
+    val enhancedSound: Boolean = true,
+    val brightnessLevel: Int = 2
+)
+
+data class DeviceEvent(
+    val id: String,
+    val title: String,
+    val detail: String,
+    val level: DeviceEventLevel,
+    val timestamp: Long
+)
 
 data class AuthSession(
     val accessToken: String,

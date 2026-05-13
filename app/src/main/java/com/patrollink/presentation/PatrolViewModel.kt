@@ -12,7 +12,11 @@ import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DisplayThemeMode
+import com.patrollink.domain.DeviceAdvancedSettings
+import com.patrollink.domain.DeviceCapabilities
+import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.DeviceType
+import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.FontSizeMode
 import com.patrollink.domain.LocationGateway
@@ -42,6 +46,7 @@ import kotlinx.coroutines.launch
 
 class PatrolViewModel(
     private val coordinator: PatrolCoordinator = ServiceFactory.createCoordinator(),
+    private val deviceControlGateway: DeviceControlGateway? = null,
     private val secureStore: SecureStore? = null,
     private val settingsStore: UiSettingsStore? = null,
     private val versionGateway: VersionGateway = MockVersionGateway(),
@@ -64,6 +69,8 @@ class PatrolViewModel(
     init {
         refreshScannedDevices()
         refreshEmergencyContacts()
+        observeDeviceEvents()
+        refreshDeviceCapabilities()
         viewModelScope.launch {
             secureStore?.readSession()?.let {
                 onSessionChanged(it)
@@ -103,6 +110,63 @@ class PatrolViewModel(
         val device = _uiState.value.device
         val next = coordinator.setTalk(device, !device.isTalking)
         updateCurrentDevice(next)
+    }
+
+    fun refreshDeviceCapabilities() = viewModelScope.launch {
+        val device = _uiState.value.device
+        deviceControlGateway?.let { gateway ->
+            runCatching {
+                val capabilities = gateway.capabilities(device)
+                val wifi = if (capabilities.supportsWifi) gateway.readWifi() else DeviceWifiState()
+                _uiState.update { it.copy(deviceCapabilities = capabilities, deviceWifiState = wifi) }
+            }.onFailure {
+                _uiState.update { state ->
+                    state.copy(
+                        deviceCapabilities = DeviceCapabilities(),
+                        deviceWifiState = DeviceWifiState(),
+                        operationMessage = "设备 SDK 能力读取失败"
+                    )
+                }
+            }
+        }
+    }
+
+    fun configureDeviceWifi(enabled: Boolean, ssid: String, password: String) = viewModelScope.launch {
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备 Wi-Fi 通道未启用")
+        runCatching { gateway.configureWifi(enabled, ssid, password) }
+            .onSuccess { wifi -> _uiState.update { it.copy(deviceWifiState = wifi, operationMessage = "设备 Wi-Fi 已配置") } }
+            .onFailure { _uiState.update { it.copy(operationMessage = "设备 Wi-Fi 配置失败") } }
+    }
+
+    fun applyDeviceSettings(settings: DeviceAdvancedSettings) = viewModelScope.launch {
+        val device = _uiState.value.device
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备参数通道未启用")
+        runCatching { gateway.applySettings(device, settings) }
+            .onSuccess { next -> _uiState.update { it.copy(deviceSettings = next, operationMessage = "设备参数已下发") } }
+            .onFailure { _uiState.update { it.copy(operationMessage = "设备参数下发失败") } }
+    }
+
+    fun toggleRealtimeAudioSync() = viewModelScope.launch {
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("实时音频通道未启用")
+        val active = _uiState.value.realtimeAudioSyncing
+        val ok = runCatching {
+            if (active) gateway.stopRealtimeAudioSync() else gateway.startRealtimeAudioSync("session-${System.currentTimeMillis()}")
+        }.getOrDefault(false)
+        _uiState.update {
+            it.copy(
+                realtimeAudioSyncing = if (ok) !active else active,
+                operationMessage = when {
+                    ok && active -> "实时音频同传已停止，后续走离线续传"
+                    ok -> "实时音频同传已启动"
+                    else -> "实时音频同传操作失败"
+                }
+            )
+        }
+    }
+
+    fun notifyDeviceMediaSyncCompleted() = viewModelScope.launch {
+        val ok = runCatching { deviceControlGateway?.notifyMediaSyncCompleted() == true }.getOrDefault(false)
+        _uiState.update { it.copy(operationMessage = if (ok) "已通知设备媒体同步完成" else "通知设备同步完成失败") }
     }
 
     fun setAlertTab(status: AlertStatus) = _uiState.update { it.copy(selectedAlertTab = status) }
@@ -255,9 +319,13 @@ class PatrolViewModel(
                     device = next,
                     connectedDevices = connected,
                     selectedDeviceId = next.id,
+                    deviceCapabilities = DeviceCapabilities(),
+                    deviceWifiState = DeviceWifiState(),
+                    realtimeAudioSyncing = false,
                     operationMessage = if (next.online) "$name 已连接" else "$name 连接失败，请检查蓝牙和距离"
                 )
             }
+            refreshDeviceCapabilities()
         }
     }
 
@@ -278,8 +346,13 @@ class PatrolViewModel(
         state.copy(
             device = selected,
             selectedDeviceId = selected.id,
-            streamState = StreamRelayState.Idle
+            streamState = StreamRelayState.Idle,
+            deviceCapabilities = DeviceCapabilities(),
+            deviceWifiState = DeviceWifiState(),
+            realtimeAudioSyncing = false
         )
+    }.also {
+        refreshDeviceCapabilities()
     }
 
     private fun updateCurrentDevice(next: com.patrollink.domain.DeviceStatus) {
@@ -295,6 +368,7 @@ class PatrolViewModel(
         runCatching {
             coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
                 updateTransferredMedia(fileId, updated.markTransferTarget(TransferTarget.PhoneSandbox))
+                if (updated.transferStatus == TransferStatus.Done) runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
         }.onFailure {
@@ -378,6 +452,17 @@ class PatrolViewModel(
     fun clearMessage() = _uiState.update { it.copy(operationMessage = null) }
 
     fun showOperationMessage(message: String) = _uiState.update { it.copy(operationMessage = message) }
+
+    private fun observeDeviceEvents() = viewModelScope.launch {
+        deviceControlGateway?.events()?.collect { event ->
+            _uiState.update { state ->
+                state.copy(
+                    deviceEvents = (listOf(event) + state.deviceEvents).take(5),
+                    operationMessage = event.title
+                )
+            }
+        }
+    }
 
     fun checkVersionUpdate() = viewModelScope.launch {
         _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Checking, message = "正在检查更新")) }

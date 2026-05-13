@@ -107,6 +107,7 @@ private class PatrolViewModelFactory(
         val dependencies = RuntimeDependencyFactory.create(activity.applicationContext)
         return PatrolViewModel(
             coordinator = dependencies.coordinator,
+            deviceControlGateway = dependencies.deviceControlGateway,
             secureStore = dependencies.secureStore,
             settingsStore = dependencies.settingsStore,
             locationGateway = dependencies.locationGateway,

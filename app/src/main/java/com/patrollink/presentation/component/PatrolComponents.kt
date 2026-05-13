@@ -200,17 +200,20 @@ fun PrimaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
 @Composable
 fun OfflineBanner(online: Boolean) {
     if (!online) {
+        val colors = PatrolDisplay.colors
+        val container = if (colors.dark) Danger.copy(alpha = 0.18f) else Color(0xFFFFF1F2)
+        val content = if (colors.dark) Color(0xFFFFB4B8) else Color(0xFFDC2626)
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(Color(0xFFFFF1F2))
+                .background(container)
                 .padding(9.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFDC2626)))
+            Box(Modifier.size(8.dp).clip(CircleShape).background(content))
             Spacer(Modifier.width(8.dp))
-            Text("网络已断开", color = Color(0xFFDC2626), fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+            Text("网络已断开", color = content, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
         }
     }
 }

@@ -49,7 +49,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
 import com.patrollink.presentation.component.SystemBars
-import com.patrollink.presentation.theme.Muted
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.TechBlue
 
@@ -96,7 +95,10 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
                 .align(Alignment.BottomCenter)
                 .background(
                     Brush.radialGradient(
-                        listOf(Color.White.copy(alpha = 0.72f), Color.Transparent)
+                        listOf(
+                            if (colors.dark) TechBlue.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.72f),
+                            Color.Transparent
+                        )
                     )
                 )
         )
@@ -216,9 +218,9 @@ fun LoginScreen(uiState: AppUiState, onLogin: (String, String, Boolean) -> Unit)
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.size(width = 34.dp, height = 1.dp).background(Muted.copy(alpha = 0.38f)))
-                Text("  SECURED BY ENCRYPTION  ", color = Muted.copy(alpha = 0.45f), fontSize = 10.sp, fontWeight = FontWeight.Black)
-                Box(Modifier.size(width = 34.dp, height = 1.dp).background(Muted.copy(alpha = 0.38f)))
+                Box(Modifier.size(width = 34.dp, height = 1.dp).background(colors.textSubtle.copy(alpha = 0.45f)))
+                Text("  SECURED BY ENCRYPTION  ", color = colors.textSubtle.copy(alpha = 0.72f), fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Box(Modifier.size(width = 34.dp, height = 1.dp).background(colors.textSubtle.copy(alpha = 0.45f)))
             }
         }
     }

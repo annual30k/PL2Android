@@ -433,13 +433,17 @@ private fun deviceInfoAccent(index: Int, label: String): Color = when {
     else -> Color(0xFF14B8A6)
 }
 
-private fun deviceInfoValueColor(label: String, value: String, accent: Color): Color = when {
-    value.contains("待机") -> Color(0xFF334155)
-    value.contains("录像") || value.contains("占用") -> Danger
-    label.contains("电量") -> Success
-    label.contains("存储") -> Warning
-    label.contains("时长") -> Color(0xFF0F766E)
-    else -> accent
+@Composable
+private fun deviceInfoValueColor(label: String, value: String, accent: Color): Color {
+    val colors = PatrolDisplay.colors
+    return when {
+        value.contains("待机") -> if (colors.dark) colors.textMuted else Color(0xFF334155)
+        value.contains("录像") || value.contains("占用") -> Danger
+        label.contains("电量") -> Success
+        label.contains("存储") -> Warning
+        label.contains("时长") -> if (colors.dark) Color(0xFF14B8A6) else Color(0xFF0F766E)
+        else -> accent
+    }
 }
 
 @Composable

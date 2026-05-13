@@ -190,6 +190,7 @@ private fun VersionTopBar(onBack: () -> Unit) {
 @Composable
 private fun VersionRowCard(icon: String, title: String, subtitle: String, onClick: () -> Unit) {
     val colors = PatrolDisplay.colors
+    val iconTint = if (colors.dark) Color(0xFFC4D2FF) else TechBlue
     Row(
         Modifier
             .fillMaxWidth()
@@ -206,20 +207,21 @@ private fun VersionRowCard(icon: String, title: String, subtitle: String, onClic
                 .background(colors.control),
             contentAlignment = Alignment.Center
         ) {
-            VersionIcon(icon, Color(0xFFC4D2FF), Modifier.size(30.dp))
+            VersionIcon(icon, iconTint, Modifier.size(30.dp))
         }
         Spacer(Modifier.width(18.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, color = colors.text, fontSize = 18.sp, fontWeight = FontWeight.Black)
             Text(subtitle, color = colors.textMuted, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         }
-        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = Color(0xFFC4D2FF), modifier = Modifier.size(32.dp))
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = iconTint, modifier = Modifier.size(32.dp))
     }
 }
 
 @Composable
 private fun VersionTile(icon: String, title: String, modifier: Modifier, onClick: () -> Unit) {
     val colors = PatrolDisplay.colors
+    val iconTint = if (colors.dark) Color(0xFFC4D2FF) else TechBlue
     Column(
         modifier
             .height(156.dp)
@@ -229,7 +231,7 @@ private fun VersionTile(icon: String, title: String, modifier: Modifier, onClick
             .padding(22.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        VersionIcon(icon, Color(0xFFC4D2FF), Modifier.size(34.dp))
+        VersionIcon(icon, iconTint, Modifier.size(34.dp))
         Text(title, color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
     }
 }

@@ -300,7 +300,7 @@ private fun StorageSummaryCard(title: String, usedGb: Float, totalGb: Float, onH
                     Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(15.dp))
                 }
             }
-            Text("${usedGb}GB / ${totalGb.toInt()}GB", color = Color(0xFF91A1BA), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text("${usedGb}GB / ${totalGb.toInt()}GB", color = colors.textMuted, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
         LinearProgressIndicator(
             progress = { (usedGb / totalGb).coerceIn(0f, 1f) },

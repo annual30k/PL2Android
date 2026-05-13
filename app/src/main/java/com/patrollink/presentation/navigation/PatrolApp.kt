@@ -1,7 +1,5 @@
 package com.patrollink.presentation.navigation
 
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
@@ -14,17 +12,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -164,13 +159,7 @@ fun PatrolApp(
                                     onOpenDetail = { id -> navController.navigate("alertDetail/$id") }
                                 )
                             }
-                            composable(
-                                "alertDetail/{id}",
-                                enterTransition = { EnterTransition.None },
-                                exitTransition = { ExitTransition.None },
-                                popEnterTransition = { EnterTransition.None },
-                                popExitTransition = { ExitTransition.None }
-                            ) { entry ->
+                            composable("alertDetail/{id}") { entry ->
                                 val id = entry.arguments?.getString("id").orEmpty()
                                 AlertDetailScreen(
                                     alertId = id,
@@ -202,15 +191,6 @@ fun PatrolApp(
                                 SosScreen(uiState, viewModel, onClose = { navController.popBackStack() })
                             }
                         }
-                    }
-                    if (currentRoute.startsWith("alertDetail")) {
-                        Spacer(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .windowInsetsBottomHeight(WindowInsets.navigationBars)
-                                .background(PatrolDisplay.colors.bottomBar)
-                        )
                     }
                     uiState.operationMessage?.let { message ->
                         AppMessage(message = message, onShown = viewModel::clearMessage)

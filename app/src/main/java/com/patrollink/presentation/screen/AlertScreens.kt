@@ -43,7 +43,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,14 +80,11 @@ import com.patrollink.presentation.component.SystemBars
 import com.patrollink.presentation.component.UploadFileItem
 import com.patrollink.presentation.component.UploadFileState
 import com.patrollink.presentation.theme.Danger
-import com.patrollink.presentation.theme.Muted
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
 import java.io.File
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @Composable
 fun AlertListScreen(
@@ -173,19 +169,8 @@ fun AlertDetailScreen(
     var selectedResult by remember { mutableStateOf("已处置") }
     var note by remember { mutableStateOf("") }
     var evidenceFiles by remember { mutableStateOf<List<UploadFileItem>>(emptyList()) }
-    var leaving by remember { mutableStateOf(false) }
     var showEvidenceSourceDialog by remember { mutableStateOf(false) }
     var pendingCaptureUri by remember { mutableStateOf<Uri?>(null) }
-    val scope = rememberCoroutineScope()
-    val leaveDetail = {
-        if (!leaving) {
-            leaving = true
-            scope.launch {
-                delay(32)
-                onBack()
-            }
-        }
-    }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success) {
             pendingCaptureUri?.let { uri ->
@@ -200,10 +185,10 @@ fun AlertDetailScreen(
     val draftButtonContent = if (colors.dark) colors.text else colors.textMuted
     val draftButtonBorder = if (colors.dark) colors.border.copy(alpha = 0.9f) else Color.Transparent
 
-    BackHandler(enabled = !showEvidenceSourceDialog, onBack = leaveDetail)
+    BackHandler(enabled = !showEvidenceSourceDialog, onBack = onBack)
 
     Column(Modifier.fillMaxSize().background(colors.page)) {
-        AlertDetailTopBar(onBack = leaveDetail)
+        AlertDetailTopBar(onBack = onBack)
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
@@ -234,53 +219,52 @@ fun AlertDetailScreen(
                 Spacer(Modifier.height(2.dp))
             }
         }
-        if (!leaving) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(colors.bottomBar)
-                    .drawBehind {
-                        val stroke = 1.dp.toPx()
-                        drawLine(
-                            color = colors.border,
-                            start = Offset(0f, stroke / 2f),
-                            end = Offset(size.width, stroke / 2f),
-                            strokeWidth = stroke
-                        )
-                    }
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(draftButtonBg)
-                        .border(1.dp, draftButtonBorder, RoundedCornerShape(12.dp))
-                        .clickable { viewModel.saveAlertDraft(alert.id, alertResultFromLabel(selectedResult), note, evidenceFiles.toUploadAttachments()) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SaveIcon(draftButtonContent)
-                        Text("保存草稿", color = draftButtonContent, fontSize = 15.sp, fontWeight = FontWeight.Black)
-                    }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(60.dp)
+                .background(colors.bottomBar)
+                .drawBehind {
+                    val stroke = 1.dp.toPx()
+                    drawLine(
+                        color = colors.border,
+                        start = Offset(0f, stroke / 2f),
+                        end = Offset(size.width, stroke / 2f),
+                        strokeWidth = stroke
+                    )
                 }
-                Box(
-                    modifier = Modifier
-                        .weight(2f)
-                        .height(48.dp)
-                        .shadow(8.dp, RoundedCornerShape(12.dp), ambientColor = TechBlue.copy(alpha = 0.18f), spotColor = TechBlue.copy(alpha = 0.24f))
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(TechBlue)
-                        .clickable { viewModel.closeAlert(alert.id, alertResultFromLabel(selectedResult), note, evidenceFiles.toUploadAttachments()); leaveDetail() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        UploadIcon(Color.White)
-                        Text("确认上传", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Black)
-                    }
+                .padding(horizontal = 16.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(draftButtonBg)
+                    .border(1.dp, draftButtonBorder, RoundedCornerShape(12.dp))
+                    .clickable { viewModel.saveAlertDraft(alert.id, alertResultFromLabel(selectedResult), note, evidenceFiles.toUploadAttachments()) },
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SaveIcon(draftButtonContent)
+                    Text("保存草稿", color = draftButtonContent, fontSize = 15.sp, fontWeight = FontWeight.Black)
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(2f)
+                    .height(42.dp)
+                    .shadow(8.dp, RoundedCornerShape(12.dp), ambientColor = TechBlue.copy(alpha = 0.18f), spotColor = TechBlue.copy(alpha = 0.24f))
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(TechBlue)
+                    .clickable { viewModel.closeAlert(alert.id, alertResultFromLabel(selectedResult), note, evidenceFiles.toUploadAttachments()); onBack() },
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    UploadIcon(Color.White)
+                    Text("确认上传", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Black)
                 }
             }
         }
@@ -529,13 +513,15 @@ private fun EvidenceSection(alert: com.patrollink.domain.AlertItem, files: List<
                 VideoCameraIcon(TechBlue)
                 Text("实时证据", color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
             }
+            val recordingBg = if (colors.dark) Danger.copy(alpha = 0.18f) else Color(0xFFFFE3E5)
+            val recordingFg = if (colors.dark) Color(0xFFFFB4B8) else Color(0xFFE11D2E)
             Row(
-                modifier = Modifier.clip(RoundedCornerShape(99.dp)).background(Color(0xFFFFE3E5)).padding(horizontal = 9.dp, vertical = 5.dp),
+                modifier = Modifier.clip(RoundedCornerShape(99.dp)).background(recordingBg).padding(horizontal = 9.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(Icons.Filled.FiberManualRecord, contentDescription = null, tint = Color(0xFFE11D2E), modifier = Modifier.size(8.dp))
-                Text("录制中", color = Color(0xFFE11D2E), fontSize = 11.sp, fontWeight = FontWeight.Black)
+                Icon(Icons.Filled.FiberManualRecord, contentDescription = null, tint = recordingFg, modifier = Modifier.size(8.dp))
+                Text("录制中", color = recordingFg, fontSize = 11.sp, fontWeight = FontWeight.Black)
             }
         }
         Box(

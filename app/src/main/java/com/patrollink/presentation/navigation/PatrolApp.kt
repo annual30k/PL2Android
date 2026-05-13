@@ -298,10 +298,16 @@ private fun AppMessage(message: OperationMessage, onShown: () -> Unit) {
         delay(style.durationMillis)
         onShown()
     }
-    Box(Modifier.fillMaxSize().padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp),
+        contentAlignment = Alignment.TopCenter
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(top = 210.dp)
                 .clip(RoundedCornerShape(18.dp))
                 .background(style.container)
                 .border(1.dp, style.border, RoundedCornerShape(18.dp))

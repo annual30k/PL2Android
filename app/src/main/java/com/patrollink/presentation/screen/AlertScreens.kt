@@ -223,11 +223,11 @@ fun AlertDetailScreen(
             Modifier
                 .fillMaxWidth()
                 .height(60.dp)
-                .background(colors.bottomBar)
+                .background(colors.page)
                 .drawBehind {
                     val stroke = 1.dp.toPx()
                     drawLine(
-                        color = colors.border,
+                        color = colors.border.copy(alpha = 0.55f),
                         start = Offset(0f, stroke / 2f),
                         end = Offset(size.width, stroke / 2f),
                         strokeWidth = stroke

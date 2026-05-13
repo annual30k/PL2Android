@@ -73,6 +73,7 @@ class PatrolViewModel(
         refreshEmergencyContacts()
         observeDeviceEvents()
         refreshDeviceCapabilities()
+        refreshPatrolArea()
         viewModelScope.launch {
             secureStore?.readSession()?.let {
                 onSessionChanged(it)
@@ -191,6 +192,17 @@ class PatrolViewModel(
     fun setDisplayThemeMode(mode: DisplayThemeMode) {
         settingsStore?.saveDisplayThemeMode(mode)
         _uiState.update { it.copy(displayThemeMode = mode, operationMessage = operationMessage("主题模式已保存", OperationMessageType.Success)) }
+    }
+
+    fun refreshCurrentLocation() = viewModelScope.launch {
+        val gateway = locationGateway ?: return@launch
+        runCatching { gateway.currentLocation() }
+            .onSuccess { location -> _uiState.update { it.copy(sosLocation = location) } }
+    }
+
+    fun refreshPatrolArea() = viewModelScope.launch {
+        runCatching { coordinator.currentPatrolArea() }
+            .onSuccess { patrolArea -> _uiState.update { it.copy(patrolArea = patrolArea) } }
     }
 
     fun closeAlert(

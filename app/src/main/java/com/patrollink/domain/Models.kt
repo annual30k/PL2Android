@@ -26,6 +26,20 @@ data class UserProfile(
     val systemNode: String
 )
 
+data class PatrolGeoPoint(
+    val latitude: Double,
+    val longitude: Double
+)
+
+data class PatrolArea(
+    val id: String,
+    val name: String,
+    val teamId: String,
+    val teamName: String,
+    val boundary: List<PatrolGeoPoint>,
+    val route: List<PatrolGeoPoint>
+)
+
 data class DeviceStatus(
     val id: String,
     val name: String,
@@ -105,6 +119,7 @@ data class AppUiState(
     val scannedDevices: List<ScannedDevice> = emptyList(),
     val selectedDeviceId: String? = null,
     val sosLocation: GpsLocation,
+    val patrolArea: PatrolArea,
     val emergencyContacts: List<EmergencyContact> = emptyList(),
     val alerts: List<AlertItem>,
     val mediaFiles: List<MediaFile>,

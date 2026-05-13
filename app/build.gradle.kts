@@ -8,6 +8,9 @@ plugins {
 fun runtimeString(name: String): String =
     providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse("").get()
 
+fun runtimeString(name: String, defaultValue: String): String =
+    providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse(defaultValue).get()
+
 fun runtimeBoolean(name: String, defaultValue: String = "false"): String =
     providers.gradleProperty(name).orElse(providers.environmentVariable(name)).orElse(defaultValue).get()
         .toBooleanStrictOrNull()
@@ -36,6 +39,7 @@ android {
         buildConfigField("String", "BLE_STATUS_UUID", runtimeString("PATROL_BLE_STATUS_UUID").asBuildConfigString())
         buildConfigField("String", "STREAM_RELAY_URL", runtimeString("PATROL_STREAM_RELAY_URL").asBuildConfigString())
         buildConfigField("boolean", "USE_REAL_BLE", runtimeBoolean("PATROL_USE_REAL_BLE", defaultValue = "true"))
+        manifestPlaceholders["AMAP_API_KEY"] = runtimeString("AMAP_API_KEY", "1c4b16bd2fbaddc21048bf0506a04c23")
     }
 
     buildFeatures {
@@ -76,6 +80,7 @@ dependencies {
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.amap.api:3dmap:10.0.600")
     implementation("net.jpountz.lz4:lz4:1.3.0")
 
     testImplementation("junit:junit:4.13.2")

@@ -10,7 +10,8 @@ class PatrolCoordinator(
     private val mediaGateway: MediaGateway,
     private val realtimeGateway: RealtimeGateway,
     private val streamRelayGateway: StreamRelayGateway,
-    private val sosGateway: SosGateway
+    private val sosGateway: SosGateway,
+    private val patrolAreaGateway: PatrolAreaGateway
 ) {
     suspend fun loginAndStartSession(account: String, password: String): AuthSession {
         val session = authGateway.login(account, password)
@@ -66,6 +67,8 @@ class PatrolCoordinator(
     suspend fun cancelSos(): SosEvent = sosGateway.cancel()
 
     fun sosState(): Flow<SosState> = sosGateway.state()
+
+    suspend fun currentPatrolArea(): PatrolArea = patrolAreaGateway.currentArea()
 
     suspend fun currentRealtimeState(): RealtimeConnection = realtimeGateway.connection().first()
 }

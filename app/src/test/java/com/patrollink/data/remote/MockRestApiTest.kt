@@ -66,6 +66,19 @@ class MockRestApiTest {
     }
 
     @Test
+    fun currentPatrolAreaContainsTeamSpecificBoundaryAndRoute() {
+        val area = MockRestApi().currentPatrolArea().data.toDomain()
+
+        assertEquals("AREA-FZ-WQ-001", area.id)
+        assertEquals("TEAM-A-42", area.teamId)
+        assertEquals("福州温泉公园重点巡区", area.name)
+        assertTrue(area.boundary.size >= 3)
+        assertTrue(area.route.size >= 2)
+        assertEquals(26.10058, area.route[2].latitude, 0.00001)
+        assertEquals(119.30771, area.route[2].longitude, 0.00001)
+    }
+
+    @Test
     fun sosResponseContainsLocationAudioAndEtaFields() = runTest {
         val location = GpsLocation(39.9, 116.3, 8f, "CBD-North").toDto()
         val response = MockRestApi().activateSos(location).data

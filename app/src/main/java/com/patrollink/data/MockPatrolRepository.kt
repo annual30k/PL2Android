@@ -25,11 +25,12 @@ class MockPatrolRepository {
             scannedDevices = api.scanDevices().data.map { it.toDomain() },
             selectedDeviceId = primary.id,
             sosLocation = GpsLocation(
-                latitude = 39.9087,
-                longitude = 116.3975,
-                accuracyMeters = 8.5f,
-                address = "核心商务区 CBD-North"
+                latitude = 26.10058,
+                longitude = 119.30771,
+                accuracyMeters = 5f,
+                address = "福州温泉公园"
             ),
+            patrolArea = api.currentPatrolArea().data.toDomain(),
             alerts = api.alerts().data.items.map { it.toDomain() },
             mediaFiles = api.mediaFiles(local = false).data.items.map { it.toDomain() } +
                 api.mediaFiles(local = true).data.items.map { it.toDomain() },

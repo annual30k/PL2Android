@@ -4,6 +4,7 @@ import com.patrollink.data.MockAlertGateway
 import com.patrollink.data.MockAuthGateway
 import com.patrollink.data.MockDeviceGateway
 import com.patrollink.data.MockMediaGateway
+import com.patrollink.data.MockPatrolAreaGateway
 import com.patrollink.data.MockRealtimeGateway
 import com.patrollink.data.MockSosGateway
 import com.patrollink.data.MockStreamRelayGateway
@@ -22,7 +23,8 @@ class PatrolCoordinatorTest {
         mediaGateway = MockMediaGateway(),
         realtimeGateway = MockRealtimeGateway(),
         streamRelayGateway = MockStreamRelayGateway(),
-        sosGateway = MockSosGateway()
+        sosGateway = MockSosGateway(),
+        patrolAreaGateway = MockPatrolAreaGateway()
     )
 
     @Test
@@ -90,5 +92,14 @@ class PatrolCoordinatorTest {
 
         assertEquals(StreamRelayState.Relaying, streamState)
         assertEquals(SosPhase.Active, sos.phase)
+    }
+
+    @Test
+    fun currentPatrolAreaComesFromTeamAreaGateway() = runTest {
+        val area = coordinator().currentPatrolArea()
+
+        assertEquals("TEAM-A-42", area.teamId)
+        assertTrue(area.boundary.size >= 3)
+        assertTrue(area.route.size >= 2)
     }
 }

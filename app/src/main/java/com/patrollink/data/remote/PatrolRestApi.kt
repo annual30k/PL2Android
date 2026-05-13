@@ -17,6 +17,7 @@ interface PatrolRestApi {
     suspend fun heartbeat(request: HeartbeatRequestDto): ApiEnvelope<HeartbeatAckDto>
     suspend fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto>
     suspend fun stopStream(): ApiEnvelope<StreamRelayStateDto>
+    suspend fun currentPatrolArea(): ApiEnvelope<PatrolAreaDto>
     suspend fun activateSos(location: GpsLocationDto): ApiEnvelope<SosEventDto>
     suspend fun cancelSos(): ApiEnvelope<SosEventDto>
 }

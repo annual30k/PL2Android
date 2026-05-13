@@ -23,6 +23,8 @@ import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaGateway
+import com.patrollink.domain.PatrolArea
+import com.patrollink.domain.PatrolAreaGateway
 import com.patrollink.domain.RealtimeConnection
 import com.patrollink.domain.RealtimeGateway
 import com.patrollink.domain.ScannedDevice
@@ -169,4 +171,8 @@ class RestSosGateway(private val api: PatrolRestApi) : SosGateway {
         state.value = response.toDomainState()
         return response.toDomainEvent()
     }
+}
+
+class RestPatrolAreaGateway(private val api: PatrolRestApi) : PatrolAreaGateway {
+    override suspend fun currentArea(): PatrolArea = api.currentPatrolArea().data.toDomain()
 }

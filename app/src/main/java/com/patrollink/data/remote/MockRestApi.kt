@@ -48,10 +48,33 @@ class MockRestApi {
             department = "第一巡逻支队",
             phone = "+86 138-0000-9527",
             email = "zhang.police@city.gov.cn",
-            dutyArea = "核心商务区 (CBD-North)",
+            dutyArea = "福州温泉公园",
             shiftDuration = "05:24:12",
-            patrolGroup = "巡逻组 A-42 | 重点管控区域",
+            patrolGroup = "巡逻组 A-42 | 温泉公园重点巡区",
             systemNode = "0x4F2A"
+        )
+    )
+
+    fun currentPatrolArea(): ApiEnvelope<PatrolAreaDto> = ok(
+        PatrolAreaDto(
+            areaId = "AREA-FZ-WQ-001",
+            areaName = "福州温泉公园重点巡区",
+            teamId = "TEAM-A-42",
+            teamName = "巡逻组 A-42",
+            boundary = listOf(
+                PatrolGeoPointDto(26.10295, 119.30485),
+                PatrolGeoPointDto(26.10335, 119.31010),
+                PatrolGeoPointDto(26.10020, 119.31115),
+                PatrolGeoPointDto(26.09795, 119.30910),
+                PatrolGeoPointDto(26.09815, 119.30465)
+            ),
+            route = listOf(
+                PatrolGeoPointDto(26.09875, 119.30495),
+                PatrolGeoPointDto(26.10020, 119.30655),
+                PatrolGeoPointDto(26.10058, 119.30771),
+                PatrolGeoPointDto(26.10155, 119.30900),
+                PatrolGeoPointDto(26.10255, 119.30795)
+            )
         )
     )
 

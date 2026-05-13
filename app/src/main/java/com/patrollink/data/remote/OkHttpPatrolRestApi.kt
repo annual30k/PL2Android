@@ -73,6 +73,9 @@ class OkHttpPatrolRestApi(
     override suspend fun stopStream(): ApiEnvelope<StreamRelayStateDto> =
         post("api/v1/stream/stop", emptyMap<String, String>())
 
+    override suspend fun currentPatrolArea(): ApiEnvelope<PatrolAreaDto> =
+        get("api/v1/patrol/areas/current")
+
     override suspend fun activateSos(location: GpsLocationDto): ApiEnvelope<SosEventDto> =
         post("api/v1/sos/activate", location)
 

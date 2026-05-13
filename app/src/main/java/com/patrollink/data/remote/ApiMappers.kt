@@ -10,6 +10,8 @@ import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
+import com.patrollink.domain.PatrolArea
+import com.patrollink.domain.PatrolGeoPoint
 import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.SosEvent
 import com.patrollink.domain.SosPhase
@@ -110,6 +112,17 @@ fun StreamRelayStateDto.toDomain() = when (state) {
 fun GpsLocation.toDto() = GpsLocationDto(latitude, longitude, accuracyMeters, address)
 
 fun GpsLocationDto.toDomain() = GpsLocation(latitude, longitude, accuracyMeters, address)
+
+fun PatrolGeoPointDto.toDomain() = PatrolGeoPoint(latitude, longitude)
+
+fun PatrolAreaDto.toDomain() = PatrolArea(
+    id = areaId,
+    name = areaName,
+    teamId = teamId,
+    teamName = teamName,
+    boundary = boundary.map { it.toDomain() },
+    route = route.map { it.toDomain() }
+)
 
 fun SosEventDto.toDomainEvent() = SosEvent(
     id = sosId,

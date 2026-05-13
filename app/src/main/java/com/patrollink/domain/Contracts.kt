@@ -57,6 +57,10 @@ interface SosGateway {
     suspend fun cancel(): SosEvent
 }
 
+interface PatrolAreaGateway {
+    suspend fun currentArea(): PatrolArea
+}
+
 interface SecureStore {
     suspend fun saveSession(session: AuthSession)
     suspend fun readSession(): AuthSession?

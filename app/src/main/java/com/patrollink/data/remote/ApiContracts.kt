@@ -167,6 +167,20 @@ data class GpsLocationDto(
     val address: String
 )
 
+data class PatrolGeoPointDto(
+    val latitude: Double,
+    val longitude: Double
+)
+
+data class PatrolAreaDto(
+    val areaId: String,
+    val areaName: String,
+    val teamId: String,
+    val teamName: String,
+    val boundary: List<PatrolGeoPointDto>,
+    val route: List<PatrolGeoPointDto>
+)
+
 data class SosEventDto(
     val sosId: String,
     val phase: String,

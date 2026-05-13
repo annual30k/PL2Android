@@ -20,6 +20,8 @@ import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaGateway
+import com.patrollink.domain.PatrolArea
+import com.patrollink.domain.PatrolAreaGateway
 import com.patrollink.domain.RealtimeConnection
 import com.patrollink.domain.RealtimeGateway
 import com.patrollink.domain.ScannedDevice
@@ -262,6 +264,10 @@ class MockRealtimeGateway(private val api: MockRestApi = MockRestApi()) : Realti
             )
         ).data.toDomain()
     }
+}
+
+class MockPatrolAreaGateway(private val api: MockRestApi = MockRestApi()) : PatrolAreaGateway {
+    override suspend fun currentArea(): PatrolArea = api.currentPatrolArea().data.toDomain()
 }
 
 class MockStreamRelayGateway(private val api: MockRestApi = MockRestApi()) : StreamRelayGateway {

@@ -44,7 +44,8 @@ object ServiceFactory {
         mediaGateway = MockMediaGateway(),
         realtimeGateway = MockRealtimeGateway(),
         streamRelayGateway = MockStreamRelayGateway(),
-        sosGateway = MockSosGateway()
+        sosGateway = MockSosGateway(),
+        patrolAreaGateway = MockPatrolAreaGateway()
     )
 
     fun createRestCoordinator(
@@ -60,7 +61,8 @@ object ServiceFactory {
             mediaGateway = RestMediaGateway(api),
             realtimeGateway = RestRealtimeGateway(api),
             streamRelayGateway = RestStreamRelayGateway(api),
-            sosGateway = RestSosGateway(api)
+            sosGateway = RestSosGateway(api),
+            patrolAreaGateway = RestPatrolAreaGateway(api)
         )
     }
 
@@ -82,6 +84,7 @@ object ServiceFactory {
         val mockRealtime = MockRealtimeGateway()
         val mockStream = MockStreamRelayGateway()
         val mockSos = MockSosGateway()
+        val mockPatrolArea = MockPatrolAreaGateway()
         val uteBridge = if (config.useRealBle) sharedUteBridge ?: UteSdkBridge(context) else null
         val restMediaGateway = restApi?.let(::RestMediaGateway)
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
@@ -134,7 +137,8 @@ object ServiceFactory {
                 uteBridge != null -> UteSdkStreamRelayGateway(uteBridge)
                 else -> mockStream
             },
-            sosGateway = restApi?.let(::RestSosGateway) ?: mockSos
+            sosGateway = restApi?.let(::RestSosGateway) ?: mockSos,
+            patrolAreaGateway = restApi?.let(::RestPatrolAreaGateway) ?: mockPatrolArea
         )
     }
 

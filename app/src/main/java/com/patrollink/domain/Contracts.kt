@@ -42,6 +42,12 @@ interface StreamRelayGateway {
     suspend fun stop()
 }
 
+interface IntercomGateway {
+    fun state(): Flow<IntercomState>
+    suspend fun start(deviceId: String): IntercomSession
+    suspend fun stop()
+}
+
 interface DeviceControlGateway {
     fun events(): Flow<DeviceEvent>
     suspend fun capabilities(device: DeviceStatus): DeviceCapabilities

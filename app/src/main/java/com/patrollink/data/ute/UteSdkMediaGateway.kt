@@ -16,7 +16,6 @@ import com.yc.nadalsdk.constants.NotifyType
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
@@ -42,8 +41,27 @@ class UteSdkMediaGateway(
                 val sessionId = fileId.removePrefix(AudioPrefix)
                 val localFile = File(mediaDirectory, "$sessionId.opus")
                 if (!localFile.exists()) {
-                    emitAll(fallbackGateway.transfer(fileId, target))
-                    return@flow
+                    val remote = listFiles(local = false).firstOrNull { it.id == fileId } ?: error("media file not found: $fileId")
+                    emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = 0.05f, lastTransferTarget = TransferTarget.PhoneSandbox))
+                    localFile.also { it.parentFile?.mkdirs() }.outputStream().use { output ->
+                        syncAudio(sessionId, output::write) { progress ->
+                            emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = (progress * 0.58f).coerceIn(0.08f, 0.58f), lastTransferTarget = TransferTarget.PhoneSandbox))
+                        }
+                    }
+                    emit(remote.copy(transferStatus = TransferStatus.Hashing, progress = 0.62f, lastTransferTarget = TransferTarget.Cloud))
+                    val sha256 = integrityGateway.sha256(localFile.readBytes())
+                    val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, localFile.lastModified())
+                    File(mediaDirectory, "$sessionId.integrity").writeText("sha256=$sha256\nwatermark=$token\n")
+                    emit(
+                        remote.copy(
+                            local = true,
+                            verified = true,
+                            transferStatus = TransferStatus.Uploading,
+                            progress = 0.72f,
+                            contentUri = Uri.fromFile(localFile).toString(),
+                            lastTransferTarget = TransferTarget.Cloud
+                        )
+                    )
                 }
                 val local = localFiles().firstOrNull { it.id == fileId }
                     ?: MediaFile(

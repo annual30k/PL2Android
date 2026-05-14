@@ -18,6 +18,9 @@ import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
+import com.patrollink.domain.IntercomGateway
+import com.patrollink.domain.IntercomSession
+import com.patrollink.domain.IntercomState
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaGateway
 import com.patrollink.domain.PatrolArea
@@ -289,6 +292,30 @@ class MockStreamRelayGateway(private val api: MockRestApi = MockRestApi()) : Str
 
     override suspend fun stop() {
         state.value = api.stopStream().data.toDomain()
+    }
+}
+
+class MockIntercomGateway : IntercomGateway {
+    private val state = MutableStateFlow(IntercomState.Idle)
+
+    override fun state(): Flow<IntercomState> = state.asStateFlow()
+
+    override suspend fun start(deviceId: String): IntercomSession {
+        state.value = IntercomState.Signaling
+        return IntercomSession(
+            sessionId = "IC-MOCK-${System.currentTimeMillis()}",
+            deviceId = deviceId,
+            state = IntercomState.Signaling,
+            mode = "FULL_DUPLEX",
+            signalingUrl = "/api/v1/intercom/sessions/mock/signals",
+            audioRoute = "BLUETOOTH_HEADSET_SCO_PREFERRED",
+            iceServers = listOf("stun:turn.patrollink.local:3478"),
+            message = "Mock WebRTC/VoIP 对讲会话已创建"
+        )
+    }
+
+    override suspend fun stop() {
+        state.value = IntercomState.Idle
     }
 }
 

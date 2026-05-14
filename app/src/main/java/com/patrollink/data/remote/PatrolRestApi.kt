@@ -28,6 +28,12 @@ interface PatrolRestApi {
     suspend fun readMessage(messageId: String): ApiEnvelope<PatrolMessageDto>
     suspend fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto>
     suspend fun stopStream(): ApiEnvelope<StreamRelayStateDto>
+    suspend fun createIntercomSession(request: IntercomSessionRequestDto): ApiEnvelope<IntercomSessionDto>
+    suspend fun pendingIntercomSession(deviceId: String): ApiEnvelope<IntercomSessionDto?>
+    suspend fun acceptIntercomSession(sessionId: String): ApiEnvelope<IntercomSessionDto>
+    suspend fun closeIntercomSession(sessionId: String): ApiEnvelope<IntercomSessionDto>
+    suspend fun sendIntercomSignal(sessionId: String, request: IntercomSignalRequestDto): ApiEnvelope<IntercomSignalDto>
+    suspend fun intercomSignals(sessionId: String, afterSignalId: String = ""): ApiEnvelope<List<IntercomSignalDto>>
     suspend fun currentPatrolArea(): ApiEnvelope<PatrolAreaDto>
     suspend fun activateSos(location: GpsLocationDto): ApiEnvelope<SosEventDto>
     suspend fun cancelSos(): ApiEnvelope<SosEventDto>

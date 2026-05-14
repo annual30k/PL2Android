@@ -181,6 +181,24 @@ class OkHttpPatrolRestApi(
     override suspend fun stopStream(): ApiEnvelope<StreamRelayStateDto> =
         post("api/v1/stream/stop", emptyMap<String, String>())
 
+    override suspend fun createIntercomSession(request: IntercomSessionRequestDto): ApiEnvelope<IntercomSessionDto> =
+        post("api/v1/intercom/sessions", request)
+
+    override suspend fun pendingIntercomSession(deviceId: String): ApiEnvelope<IntercomSessionDto?> =
+        get("api/v1/intercom/sessions/pending?deviceId=${deviceId.pathId()}")
+
+    override suspend fun acceptIntercomSession(sessionId: String): ApiEnvelope<IntercomSessionDto> =
+        post("api/v1/intercom/sessions/${sessionId.pathId()}/accept", emptyMap<String, String>())
+
+    override suspend fun closeIntercomSession(sessionId: String): ApiEnvelope<IntercomSessionDto> =
+        post("api/v1/intercom/sessions/${sessionId.pathId()}/close", emptyMap<String, String>())
+
+    override suspend fun sendIntercomSignal(sessionId: String, request: IntercomSignalRequestDto): ApiEnvelope<IntercomSignalDto> =
+        post("api/v1/intercom/sessions/${sessionId.pathId()}/signals", request)
+
+    override suspend fun intercomSignals(sessionId: String, afterSignalId: String): ApiEnvelope<List<IntercomSignalDto>> =
+        get("api/v1/intercom/sessions/${sessionId.pathId()}/signals?afterSignalId=$afterSignalId")
+
     override suspend fun currentPatrolArea(): ApiEnvelope<PatrolAreaDto> =
         get("api/v1/patrol/areas/current")
 
@@ -242,7 +260,7 @@ class OkHttpPatrolRestApi(
         val lower = fileName.lowercase()
         return when {
             lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp") || lower.endsWith(".bmp") -> "PHOTO"
-            lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".aac") || lower.endsWith(".m4a") || lower.endsWith(".amr") -> "AUDIO"
+            lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".aac") || lower.endsWith(".m4a") || lower.endsWith(".amr") || lower.endsWith(".opus") -> "AUDIO"
             else -> "VIDEO"
         }
     }

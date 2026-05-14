@@ -1,6 +1,7 @@
 package com.patrollink.data
 
 import android.content.Context
+import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.local.AndroidKeystoreSecureStore
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.ute.UteSdkBridge
@@ -25,6 +26,7 @@ data class RuntimeDependencies(
     val notificationGateway: PatrolNotificationGateway,
     val versionGateway: VersionGateway,
     val versionInstaller: VersionInstaller,
+    val cerebellumApi: CerebellumApi?,
     val tokenStore: RuntimeTokenStore,
     val config: RuntimeConfig
 )
@@ -63,6 +65,7 @@ object RuntimeDependencyFactory {
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
             versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
             versionInstaller = ServiceFactory.createVersionInstaller(appContext),
+            cerebellumApi = ServiceFactory.createCerebellumApi(config),
             tokenStore = tokenStore,
             config = config
         )

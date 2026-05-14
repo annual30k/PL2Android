@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import com.patrollink.data.ble.AndroidBleDeviceGateway
 import com.patrollink.data.ble.BleGattProfile
+import com.patrollink.data.edge.CerebellumApi
+import com.patrollink.data.edge.OkHttpCerebellumApi
 import com.patrollink.data.file.WifiFileServiceClient
 import com.patrollink.data.location.AndroidLocationGateway
 import com.patrollink.data.notification.AndroidPatrolNotificationGateway
@@ -20,6 +22,7 @@ import com.patrollink.data.ute.UteSdkDeviceGateway
 import com.patrollink.data.ute.UteSdkMediaGateway
 import com.patrollink.data.ute.UteSdkStreamRelayGateway
 import com.patrollink.data.update.AndroidVersionInstaller
+import com.patrollink.data.voip.BluetoothVoipAudioRouter
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.MediaFile
@@ -35,7 +38,6 @@ import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 
 object ServiceFactory {
@@ -47,7 +49,8 @@ object ServiceFactory {
         realtimeGateway = MockRealtimeGateway(),
         streamRelayGateway = MockStreamRelayGateway(),
         sosGateway = MockSosGateway(),
-        patrolAreaGateway = MockPatrolAreaGateway()
+        patrolAreaGateway = MockPatrolAreaGateway(),
+        intercomGateway = MockIntercomGateway()
     )
 
     fun createRestCoordinator(
@@ -64,7 +67,8 @@ object ServiceFactory {
             realtimeGateway = RestRealtimeGateway(api),
             streamRelayGateway = RestStreamRelayGateway(api),
             sosGateway = RestSosGateway(api),
-            patrolAreaGateway = RestPatrolAreaGateway(api)
+            patrolAreaGateway = RestPatrolAreaGateway(api),
+            intercomGateway = RestIntercomGateway(api)
         )
     }
 
@@ -140,7 +144,8 @@ object ServiceFactory {
                 else -> mockStream
             },
             sosGateway = restApi?.let(::RestSosGateway) ?: mockSos,
-            patrolAreaGateway = restApi?.let(::RestPatrolAreaGateway) ?: mockPatrolArea
+            patrolAreaGateway = restApi?.let(::RestPatrolAreaGateway) ?: mockPatrolArea,
+            intercomGateway = restApi?.let { RestIntercomGateway(it, BluetoothVoipAudioRouter(context)) } ?: MockIntercomGateway()
         )
     }
 
@@ -175,6 +180,14 @@ object ServiceFactory {
         config.restBaseUrl.takeIf { it.isNotBlank() }
             ?.let { RestVersionGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
             ?: MockVersionGateway()
+
+    fun createCerebellumApi(config: RuntimeConfig): CerebellumApi? =
+        config.cerebellumBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
+            OkHttpCerebellumApi(
+                baseUrl = baseUrl,
+                apiKeyProvider = { config.cerebellumApiKey }
+            )
+        }
 }
 
 private class ConfiguredStreamRelayGateway(
@@ -229,8 +242,28 @@ private class WifiBackedMediaGateway(
             return flow {
                 val localFile = File(mediaDirectory, "$fileId.bin")
                 if (!localFile.exists()) {
-                    emitAll(fallbackGateway.transfer(fileId, target))
-                    return@flow
+                    val start = deviceFile(fileId).copy(transferStatus = TransferStatus.Uploading, progress = 0.05f, lastTransferTarget = TransferTarget.PhoneSandbox)
+                    emit(start)
+                    val downloaded = wifiClient.download(fileId, localFile.also { it.parentFile?.mkdirs() })
+                    emit(start.copy(transferStatus = TransferStatus.Hashing, progress = 0.45f))
+                    val sha256 = integrityGateway.sha256(downloaded.readBytes())
+                    val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, downloaded.lastModified())
+                    File(mediaDirectory, "$fileId.integrity").writeText("sha256=$sha256\nwatermark=$token\n")
+                    val completed = start.copy(
+                        local = true,
+                        transferStatus = TransferStatus.Uploading,
+                        verified = true,
+                        progress = 0.62f,
+                        contentUri = Uri.fromFile(downloaded).toString(),
+                        lastTransferTarget = TransferTarget.Cloud
+                    )
+                    mediaIndex?.upsert(
+                        completed.copy(transferStatus = TransferStatus.Idle, progress = 0f, lastTransferTarget = null),
+                        localPath = completed.contentUri,
+                        sha256 = sha256,
+                        watermarkToken = token
+                    )
+                    emit(completed)
                 }
                 val local = mediaIndex?.find(fileId, local = true)
                     ?: deviceFile(fileId).copy(local = true, contentUri = Uri.fromFile(localFile).toString())

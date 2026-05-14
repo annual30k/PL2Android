@@ -69,6 +69,7 @@ DTOs and mappers live under `app/src/main/java/com/patrollink/data/remote`.
 ## Real Integration Switch Points
 
 - Backend REST: `data/remote/OkHttpPatrolRestApi.kt`
+- Cerebellum edge REST: `data/edge/OkHttpCerebellumApi.kt`
 - Backend-backed gateways: `data/RestBackedGateways.kt`
 - WebSocket: `data/realtime/OkHttpWebSocketRealtimeGateway.kt`
 - BLE: `data/ble/AndroidBleDeviceGateway.kt`
@@ -77,7 +78,17 @@ DTOs and mappers live under `app/src/main/java/com/patrollink/data/remote`.
 - Offline task persistence: `data/local/JsonFileBackgroundTaskGateway.kt`
 - Foreground keep-alive: `service/PatrolForegroundService.kt`
 
-Remaining production work requires real backend URLs/contracts beyond the current DTOs, headset GATT UUIDs, command acknowledgement protocol, Wi-Fi hotspot file API details, and streaming SDK endpoints.
+Cerebellum direct connection can be configured with build properties or environment variables:
+
+```bash
+PATROL_CEREBELLUM_BASE_URL=http://127.0.0.1:8088 \
+PATROL_CEREBELLUM_API_KEY=change-this-key \
+./gradlew assembleDebug
+```
+
+Use `http://10.0.2.2:8088` from the Android emulator to reach a Docker service on the host. For field devices, use the hotspot or Wi-Fi Direct `192.168.x.x` address; cross-network access should go through HTTPS/mTLS.
+
+Remaining production work requires real backend URLs/contracts beyond the current DTOs, headset GATT UUIDs, command acknowledgement protocol, Wi-Fi hotspot file API details, cerebellum discovery/pairing, and streaming SDK endpoints.
 
 ## Verification
 

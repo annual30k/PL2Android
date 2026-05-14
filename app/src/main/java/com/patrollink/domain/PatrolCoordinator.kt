@@ -11,7 +11,8 @@ class PatrolCoordinator(
     private val realtimeGateway: RealtimeGateway,
     private val streamRelayGateway: StreamRelayGateway,
     private val sosGateway: SosGateway,
-    private val patrolAreaGateway: PatrolAreaGateway
+    private val patrolAreaGateway: PatrolAreaGateway,
+    private val intercomGateway: IntercomGateway? = null
 ) {
     suspend fun loginAndStartSession(account: String, password: String): AuthSession {
         val session = authGateway.login(account, password)
@@ -29,8 +30,18 @@ class PatrolCoordinator(
     suspend fun setRecording(device: DeviceStatus, enabled: Boolean): DeviceStatus =
         deviceGateway.sendCommand(device.id, if (enabled) DeviceCommand.StartRecord else DeviceCommand.StopRecord)
 
-    suspend fun setTalk(device: DeviceStatus, enabled: Boolean): DeviceStatus =
-        deviceGateway.sendCommand(device.id, if (enabled) DeviceCommand.StartTalk else DeviceCommand.StopTalk)
+    suspend fun setTalk(device: DeviceStatus, enabled: Boolean): DeviceStatus {
+        val gateway = intercomGateway
+        if (gateway != null) {
+            if (enabled) {
+                gateway.start(device.id)
+            } else {
+                gateway.stop()
+            }
+            return device.copy(isTalking = enabled)
+        }
+        return deviceGateway.sendCommand(device.id, if (enabled) DeviceCommand.StartTalk else DeviceCommand.StopTalk)
+    }
 
     fun observeAlerts(): Flow<List<AlertItem>> = alertGateway.observeAlerts()
 

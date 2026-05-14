@@ -83,6 +83,17 @@ data class MediaFile(
     val lastTransferTarget: TransferTarget? = null
 )
 
+data class IntercomSession(
+    val sessionId: String,
+    val deviceId: String,
+    val state: IntercomState,
+    val mode: String,
+    val signalingUrl: String,
+    val audioRoute: String,
+    val iceServers: List<String>,
+    val message: String
+)
+
 enum class VersionUpdatePhase { Idle, Checking, Available, Downloading, Ready, UpToDate, Failed }
 
 data class VersionUpdateUiState(

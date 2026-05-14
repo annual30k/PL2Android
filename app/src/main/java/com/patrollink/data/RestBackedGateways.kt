@@ -3,10 +3,13 @@ package com.patrollink.data
 import com.patrollink.data.remote.AlertCloseRequestDto
 import com.patrollink.data.remote.DeviceCommandRequestDto
 import com.patrollink.data.remote.HeartbeatRequestDto
+import com.patrollink.data.remote.IntercomSessionRequestDto
+import com.patrollink.data.remote.IntercomSignalRequestDto
 import com.patrollink.data.remote.LoginRequestDto
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.remote.StreamRelayRequestDto
 import com.patrollink.data.remote.TransferRequestDto
+import com.patrollink.data.voip.BluetoothVoipAudioRouter
 import com.patrollink.data.remote.toDomain
 import com.patrollink.data.remote.toDomainEvent
 import com.patrollink.data.remote.toDomainState
@@ -26,6 +29,9 @@ import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
+import com.patrollink.domain.IntercomGateway
+import com.patrollink.domain.IntercomSession
+import com.patrollink.domain.IntercomState
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaGateway
 import com.patrollink.domain.PatrolArea
@@ -197,6 +203,41 @@ class RestStreamRelayGateway(private val api: PatrolRestApi) : StreamRelayGatewa
 
     override suspend fun stop() {
         state.value = api.stopStream().data.toDomain()
+    }
+}
+
+class RestIntercomGateway(
+    private val api: PatrolRestApi,
+    private val audioRouter: BluetoothVoipAudioRouter? = null
+) : IntercomGateway {
+    private val state = MutableStateFlow(IntercomState.Idle)
+    private var activeSessionId: String? = null
+
+    override fun state(): Flow<IntercomState> = state.asStateFlow()
+
+    override suspend fun start(deviceId: String): IntercomSession {
+        require(deviceId.isNotBlank()) { "device required" }
+        state.value = IntercomState.WaitingApp
+        val session = api.pendingIntercomSession(deviceId).data
+            ?: api.createIntercomSession(IntercomSessionRequestDto(deviceId = deviceId)).data
+        activeSessionId = session.sessionId
+        audioRouter?.startBluetoothRoute()
+        api.acceptIntercomSession(session.sessionId)
+        api.sendIntercomSignal(session.sessionId, IntercomSignalRequestDto(type = "ready", payload = """{"audioRoute":"BLUETOOTH_HEADSET"}"""))
+        val domain = session.toDomain().copy(state = IntercomState.Signaling)
+        state.value = domain.state
+        return domain
+    }
+
+    override suspend fun stop() {
+        val sessionId = activeSessionId
+        if (sessionId != null) {
+            api.sendIntercomSignal(sessionId, IntercomSignalRequestDto(type = "hangup"))
+            api.closeIntercomSession(sessionId)
+        }
+        activeSessionId = null
+        audioRouter?.stopBluetoothRoute()
+        state.value = IntercomState.Idle
     }
 }
 

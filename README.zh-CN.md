@@ -68,6 +68,7 @@ DTO 和映射逻辑位于 `app/src/main/java/com/patrollink/data/remote`。
 ## 真实集成切换点
 
 - 后端 REST：`data/remote/OkHttpPatrolRestApi.kt`
+- 边缘智慧小脑 REST：`data/edge/OkHttpCerebellumApi.kt`
 - 后端接入 gateway：`data/RestBackedGateways.kt`
 - WebSocket：`data/realtime/OkHttpWebSocketRealtimeGateway.kt`
 - BLE：`data/ble/AndroidBleDeviceGateway.kt`
@@ -76,7 +77,17 @@ DTO 和映射逻辑位于 `app/src/main/java/com/patrollink/data/remote`。
 - 离线任务持久化：`data/local/JsonFileBackgroundTaskGateway.kt`
 - 前台保活服务：`service/PatrolForegroundService.kt`
 
-后续生产化需要补齐真实后端 URL 和接口契约、耳机 GATT UUID、指令确认协议、Wi-Fi 热点文件 API 细节以及音视频流 SDK 接入点。
+小脑直连可通过构建参数或环境变量配置：
+
+```bash
+PATROL_CEREBELLUM_BASE_URL=http://127.0.0.1:8088 \
+PATROL_CEREBELLUM_API_KEY=change-this-key \
+./gradlew assembleDebug
+```
+
+Android 模拟器访问宿主机 Docker 时可用 `http://10.0.2.2:8088`。局域网直连工程样机时可用设备热点或 Wi-Fi Direct 分配的 `192.168.x.x` 地址；公网或跨网段访问必须改为 HTTPS/mTLS 网关。
+
+后续生产化需要补齐真实后端 URL 和接口契约、耳机 GATT UUID、指令确认协议、Wi-Fi 热点文件 API 细节、小脑发现/配对流程以及音视频流 SDK 接入点。
 
 ## 验证方式
 

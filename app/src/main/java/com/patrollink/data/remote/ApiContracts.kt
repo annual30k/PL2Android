@@ -237,6 +237,40 @@ data class StreamRelayStateDto(
     val latencyMs: Int?
 )
 
+data class IntercomSessionRequestDto(
+    val deviceId: String,
+    val mode: String = "FULL_DUPLEX",
+    val initiatorId: String = "android-app"
+)
+
+data class IntercomSessionDto(
+    val sessionId: String,
+    val deviceId: String,
+    val state: String,
+    val mode: String,
+    val signalingUrl: String,
+    val audioRoute: String,
+    val iceServers: List<String> = emptyList(),
+    val startedAt: Long? = null,
+    val expiresAt: Long? = null,
+    val message: String
+)
+
+data class IntercomSignalRequestDto(
+    val sender: String = "APP",
+    val type: String,
+    val payload: String = ""
+)
+
+data class IntercomSignalDto(
+    val signalId: String,
+    val sessionId: String,
+    val sender: String,
+    val type: String,
+    val payload: String,
+    val timestamp: Long
+)
+
 data class GpsLocationDto(
     val latitude: Double,
     val longitude: Double,
@@ -272,6 +306,9 @@ data class PatrolMessageDto(
     val title: String,
     val content: String,
     val targetType: String,
+    val deliveryStatus: String = "",
+    val deliveredAt: String = "",
+    val readAt: String = "",
     val status: String,
     val sentAt: String
 )

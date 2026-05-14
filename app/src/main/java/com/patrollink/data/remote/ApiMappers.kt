@@ -11,6 +11,8 @@ import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
+import com.patrollink.domain.IntercomSession
+import com.patrollink.domain.IntercomState
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.PatrolArea
@@ -176,6 +178,24 @@ fun StreamRelayStateDto.toDomain() = when (state) {
     "FAILED" -> StreamRelayState.Failed
     else -> StreamRelayState.Idle
 }
+
+fun IntercomSessionDto.toDomain() = IntercomSession(
+    sessionId = sessionId,
+    deviceId = deviceId,
+    state = when (state) {
+        "WAITING_APP" -> IntercomState.WaitingApp
+        "SIGNALING" -> IntercomState.Signaling
+        "ACTIVE" -> IntercomState.Active
+        "CLOSED" -> IntercomState.Closed
+        "FAILED" -> IntercomState.Failed
+        else -> IntercomState.Idle
+    },
+    mode = mode,
+    signalingUrl = signalingUrl,
+    audioRoute = audioRoute,
+    iceServers = iceServers,
+    message = message
+)
 
 fun GpsLocation.toDto() = GpsLocationDto(latitude, longitude, accuracyMeters, address)
 

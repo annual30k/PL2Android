@@ -7,10 +7,19 @@ interface PatrolRestApi {
     suspend fun scanDevices(): ApiEnvelope<List<ScannedDeviceDto>>
     suspend fun bindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto>
     suspend fun sendDeviceCommand(deviceId: String, request: DeviceCommandRequestDto): ApiEnvelope<DeviceStatusDto>
+    suspend fun deviceCapabilities(deviceId: String): ApiEnvelope<DeviceCapabilitiesDto>
+    suspend fun deviceWifi(deviceId: String): ApiEnvelope<DeviceWifiStateDto>
+    suspend fun configureWifi(deviceId: String, request: DeviceWifiStateDto): ApiEnvelope<DeviceWifiStateDto>
+    suspend fun applyDeviceSettings(deviceId: String, request: DeviceAdvancedSettingsDto): ApiEnvelope<DeviceAdvancedSettingsDto>
+    suspend fun startRealtimeAudioSync(deviceId: String): ApiEnvelope<DeviceControlResultDto>
+    suspend fun stopRealtimeAudioSync(deviceId: String): ApiEnvelope<DeviceControlResultDto>
+    suspend fun notifyMediaSyncCompleted(deviceId: String): ApiEnvelope<DeviceControlResultDto>
     suspend fun alerts(page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<AlertDto>>
     suspend fun acknowledgeAlert(alertId: String): ApiEnvelope<AlertDto>
     suspend fun closeAlert(alertId: String, request: AlertCloseRequestDto): ApiEnvelope<AlertDto>
     suspend fun mediaFiles(local: Boolean, page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<MediaFileDto>>
+    suspend fun uploadMedia(file: java.io.File, storageSide: String = "PHONE", bizType: String = "", bizId: String = ""): ApiEnvelope<MediaFileDto>
+    suspend fun uploadMediaResumable(file: java.io.File, storageSide: String = "PHONE", bizType: String = "", bizId: String = ""): ApiEnvelope<MediaUploadTaskDto>
     suspend fun transferMedia(fileId: String, request: TransferRequestDto): List<ApiEnvelope<MediaFileDto>>
     suspend fun deleteMedia(fileId: String, storageSide: String): ApiEnvelope<Boolean>
     suspend fun verifyMedia(fileId: String): ApiEnvelope<Boolean>
@@ -22,4 +31,5 @@ interface PatrolRestApi {
     suspend fun currentPatrolArea(): ApiEnvelope<PatrolAreaDto>
     suspend fun activateSos(location: GpsLocationDto): ApiEnvelope<SosEventDto>
     suspend fun cancelSos(): ApiEnvelope<SosEventDto>
+    suspend fun checkVersion(currentVersionCode: Int): ApiEnvelope<VersionCheckResultDto>
 }

@@ -16,9 +16,14 @@ import com.patrollink.domain.AlertItem
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AuthGateway
 import com.patrollink.domain.AuthSession
+import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCommand
+import com.patrollink.domain.DeviceCapabilities
+import com.patrollink.domain.DeviceControlGateway
+import com.patrollink.domain.DeviceEvent
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
+import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.MediaFile
@@ -37,9 +42,13 @@ import com.patrollink.domain.StreamRelayGateway
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.UserProfile
+import com.patrollink.domain.VersionCheckResult
+import com.patrollink.domain.VersionGateway
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 
 class RestAuthGateway(private val api: PatrolRestApi) : AuthGateway {
@@ -103,10 +112,46 @@ class RestMediaGateway(private val api: PatrolRestApi) : MediaGateway {
         api.transferMedia(fileId, TransferRequestDto(targetValue)).forEach { emit(it.data.toDomain()) }
     }
 
+    override suspend fun uploadLocalFile(file: File, storageSide: String, bizType: String, bizId: String): MediaFile? =
+        api.uploadMediaResumable(file, storageSide, bizType, bizId).data.toDomain()
+
     override suspend fun delete(fileId: String, local: Boolean): Boolean =
         api.deleteMedia(fileId, if (local) "PHONE" else "DEVICE").data
 
     override suspend fun verifySha256(fileId: String): Boolean = api.verifyMedia(fileId).data
+}
+
+class RestDeviceControlGateway(
+    private val api: PatrolRestApi,
+    private val deviceIdProvider: () -> String = { "HEADSET_001" }
+) : DeviceControlGateway {
+    override fun events(): Flow<DeviceEvent> = emptyFlow()
+
+    override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities =
+        api.deviceCapabilities(device.id).data.toDomain()
+
+    override suspend fun readWifi(): DeviceWifiState =
+        api.deviceWifi(deviceIdProvider()).data.toDomain()
+
+    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState =
+        api.configureWifi(deviceIdProvider(), DeviceWifiState(enabled, ssid, password.isNotBlank(), enabled && ssid.isNotBlank()).toDto(password)).data.toDomain()
+
+    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings =
+        api.applyDeviceSettings(device.id, settings.toDto()).data.toDomain()
+
+    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean =
+        api.startRealtimeAudioSync(deviceIdProvider()).data.success
+
+    override suspend fun stopRealtimeAudioSync(): Boolean =
+        api.stopRealtimeAudioSync(deviceIdProvider()).data.success
+
+    override suspend fun notifyMediaSyncCompleted(): Boolean =
+        api.notifyMediaSyncCompleted(deviceIdProvider()).data.success
+}
+
+class RestVersionGateway(private val api: PatrolRestApi) : VersionGateway {
+    override suspend fun check(currentVersionCode: Int): VersionCheckResult =
+        api.checkVersion(currentVersionCode).data.toDomain()
 }
 
 class RestRealtimeGateway(private val api: PatrolRestApi) : RealtimeGateway {

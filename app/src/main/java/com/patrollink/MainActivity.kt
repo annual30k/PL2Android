@@ -114,6 +114,7 @@ private class PatrolViewModelFactory(
             sosEvidenceRecorder = dependencies.sosEvidenceRecorder,
             emergencyContactGateway = dependencies.emergencyContactGateway,
             notificationGateway = dependencies.notificationGateway,
+            versionGateway = dependencies.versionGateway,
             versionInstaller = dependencies.versionInstaller,
             onSessionChanged = dependencies.tokenStore::update
         ) as T

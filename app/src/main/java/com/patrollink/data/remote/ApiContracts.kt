@@ -76,6 +76,40 @@ data class DeviceCommandRequestDto(
     val requestId: String
 )
 
+data class DeviceCapabilitiesDto(
+    val supportsGlasses: Boolean,
+    val supportsEarphone: Boolean,
+    val supportsWifi: Boolean,
+    val supportsFileTransfer: Boolean,
+    val supportsPhoto: Boolean,
+    val supportsVideo: Boolean,
+    val supportsAudioRecord: Boolean,
+    val supportsRealtimeAudio: Boolean
+)
+
+data class DeviceWifiStateDto(
+    val enabled: Boolean,
+    val ssid: String,
+    val passwordConfigured: Boolean,
+    val connected: Boolean
+)
+
+data class DeviceAdvancedSettingsDto(
+    val videoWidth: Int,
+    val videoHeight: Int,
+    val videoFrameRate: Int,
+    val recordingDurationSeconds: Int,
+    val verticalRecording: Boolean,
+    val enhancedSound: Boolean,
+    val brightnessLevel: Int
+)
+
+data class DeviceControlResultDto(
+    val success: Boolean,
+    val state: String,
+    val message: String
+)
+
 data class AlertDto(
     val alertId: String,
     val title: String,
@@ -125,6 +159,45 @@ data class MediaFileDto(
     val transferStatus: String,
     val progress: Float,
     val contentUri: String? = null
+)
+
+data class MediaUploadTaskCreateDto(
+    val fileName: String,
+    val mediaType: String,
+    val mimeType: String,
+    val fileSizeBytes: Long,
+    val chunkSizeBytes: Long,
+    val totalChunks: Int,
+    val sha256: String,
+    val storageSide: String,
+    val bizType: String,
+    val bizId: String
+)
+
+data class MediaUploadTaskDto(
+    val taskId: String,
+    val fileId: String?,
+    val fileName: String,
+    val mediaType: String,
+    val mimeType: String?,
+    val fileSizeBytes: Long,
+    val chunkSizeBytes: Long,
+    val totalChunks: Int,
+    val uploadedChunks: Int,
+    val uploadedChunkIndexes: List<Int> = emptyList(),
+    val uploadedBytes: Long,
+    val expectedSha256: String?,
+    val actualSha256: String?,
+    val storageSide: String,
+    val bizType: String?,
+    val bizId: String?,
+    val status: String,
+    val progress: Float,
+    val errorMessage: String?,
+    val badgeNo: String?,
+    val officerName: String?,
+    val deviceId: String?,
+    val completedAt: String?
 )
 
 data class TransferRequestDto(
@@ -201,4 +274,13 @@ data class PatrolMessageDto(
     val targetType: String,
     val status: String,
     val sentAt: String
+)
+
+data class VersionCheckResultDto(
+    val latestVersionCode: Int,
+    val latestVersionName: String,
+    val forceUpdate: Boolean,
+    val changelog: List<String>,
+    val downloadUrl: String?,
+    val sha256: String?
 )

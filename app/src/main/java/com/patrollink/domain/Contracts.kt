@@ -1,6 +1,7 @@
 package com.patrollink.domain
 
 import kotlinx.coroutines.flow.Flow
+import java.io.File
 
 interface AuthGateway {
     suspend fun login(account: String, password: String): AuthSession
@@ -23,6 +24,7 @@ interface AlertGateway {
 interface MediaGateway {
     suspend fun listFiles(local: Boolean): List<MediaFile>
     fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile>
+    suspend fun uploadLocalFile(file: File, storageSide: String = "PHONE", bizType: String = "", bizId: String = ""): MediaFile? = null
     suspend fun delete(fileId: String, local: Boolean): Boolean
     suspend fun verifySha256(fileId: String): Boolean
 }

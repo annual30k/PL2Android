@@ -34,6 +34,8 @@ android {
         buildConfigField("String", "REST_BASE_URL", runtimeString("PATROL_REST_BASE_URL").asBuildConfigString())
         buildConfigField("String", "WEBSOCKET_URL", runtimeString("PATROL_WEBSOCKET_URL").asBuildConfigString())
         buildConfigField("String", "WIFI_FILE_BASE_URL", runtimeString("PATROL_WIFI_FILE_BASE_URL").asBuildConfigString())
+        buildConfigField("String", "CEREBELLUM_BASE_URL", runtimeString("PATROL_CEREBELLUM_BASE_URL").asBuildConfigString())
+        buildConfigField("String", "CEREBELLUM_API_KEY", runtimeString("PATROL_CEREBELLUM_API_KEY").asBuildConfigString())
         buildConfigField("String", "BLE_SERVICE_UUID", runtimeString("PATROL_BLE_SERVICE_UUID").asBuildConfigString())
         buildConfigField("String", "BLE_COMMAND_UUID", runtimeString("PATROL_BLE_COMMAND_UUID").asBuildConfigString())
         buildConfigField("String", "BLE_STATUS_UUID", runtimeString("PATROL_BLE_STATUS_UUID").asBuildConfigString())
@@ -85,6 +87,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

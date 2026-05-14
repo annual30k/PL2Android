@@ -11,6 +11,7 @@ import com.patrollink.domain.LocationGateway
 import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SosEvidenceRecorder
+import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.VersionInstaller
 
 data class RuntimeDependencies(
@@ -22,6 +23,7 @@ data class RuntimeDependencies(
     val sosEvidenceRecorder: SosEvidenceRecorder,
     val emergencyContactGateway: EmergencyContactGateway,
     val notificationGateway: PatrolNotificationGateway,
+    val versionGateway: VersionGateway,
     val versionInstaller: VersionInstaller,
     val tokenStore: RuntimeTokenStore,
     val config: RuntimeConfig
@@ -43,7 +45,13 @@ object RuntimeDependencyFactory {
             fallbackState = fallbackState,
             sharedUteBridge = uteBridge
         )
-        val deviceControlGateway = ServiceFactory.createDeviceControlGateway(appContext, config, uteBridge)
+        val deviceControlGateway = ServiceFactory.createDeviceControlGateway(
+            context = appContext,
+            config = config,
+            sharedUteBridge = uteBridge,
+            tokenProvider = tokenStore::token,
+            deviceIdProvider = { fallbackState.device.id }
+        )
         return RuntimeDependencies(
             coordinator = coordinator,
             deviceControlGateway = deviceControlGateway,
@@ -53,6 +61,7 @@ object RuntimeDependencyFactory {
             sosEvidenceRecorder = ServiceFactory.createSosEvidenceRecorder(appContext),
             emergencyContactGateway = ServiceFactory.createEmergencyContactGateway(),
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
+            versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
             versionInstaller = ServiceFactory.createVersionInstaller(appContext),
             tokenStore = tokenStore,
             config = config

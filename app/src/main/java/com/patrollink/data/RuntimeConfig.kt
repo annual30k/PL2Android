@@ -8,6 +8,8 @@ data class RuntimeConfig(
     val restBaseUrl: String,
     val webSocketUrl: String,
     val wifiFileBaseUrl: String,
+    val cerebellumBaseUrl: String,
+    val cerebellumApiKey: String,
     val bleServiceUuid: String,
     val bleCommandUuid: String,
     val bleStatusUuid: String,
@@ -17,6 +19,7 @@ data class RuntimeConfig(
     val hasRest: Boolean get() = restBaseUrl.isNotBlank()
     val hasWebSocket: Boolean get() = webSocketUrl.isNotBlank()
     val hasWifiFileService: Boolean get() = wifiFileBaseUrl.isNotBlank()
+    val hasCerebellum: Boolean get() = cerebellumBaseUrl.isNotBlank()
 }
 
 class RuntimeConfigStore(context: Context) {
@@ -26,6 +29,8 @@ class RuntimeConfigStore(context: Context) {
         restBaseUrl = prefs.getString(KEY_REST_BASE_URL, null).orBuildConfig(BuildConfig.REST_BASE_URL),
         webSocketUrl = prefs.getString(KEY_WEBSOCKET_URL, null).orBuildConfig(BuildConfig.WEBSOCKET_URL),
         wifiFileBaseUrl = prefs.getString(KEY_WIFI_FILE_BASE_URL, null).orBuildConfig(BuildConfig.WIFI_FILE_BASE_URL),
+        cerebellumBaseUrl = prefs.getString(KEY_CEREBELLUM_BASE_URL, null).orBuildConfig(BuildConfig.CEREBELLUM_BASE_URL),
+        cerebellumApiKey = prefs.getString(KEY_CEREBELLUM_API_KEY, null).orBuildConfig(BuildConfig.CEREBELLUM_API_KEY),
         bleServiceUuid = prefs.getString(KEY_BLE_SERVICE_UUID, null).orBuildConfig(BuildConfig.BLE_SERVICE_UUID),
         bleCommandUuid = prefs.getString(KEY_BLE_COMMAND_UUID, null).orBuildConfig(BuildConfig.BLE_COMMAND_UUID),
         bleStatusUuid = prefs.getString(KEY_BLE_STATUS_UUID, null).orBuildConfig(BuildConfig.BLE_STATUS_UUID),
@@ -40,6 +45,8 @@ class RuntimeConfigStore(context: Context) {
         const val KEY_REST_BASE_URL = "rest_base_url"
         const val KEY_WEBSOCKET_URL = "websocket_url"
         const val KEY_WIFI_FILE_BASE_URL = "wifi_file_base_url"
+        const val KEY_CEREBELLUM_BASE_URL = "cerebellum_base_url"
+        const val KEY_CEREBELLUM_API_KEY = "cerebellum_api_key"
         const val KEY_BLE_SERVICE_UUID = "ble_service_uuid"
         const val KEY_BLE_COMMAND_UUID = "ble_command_uuid"
         const val KEY_BLE_STATUS_UUID = "ble_status_uuid"

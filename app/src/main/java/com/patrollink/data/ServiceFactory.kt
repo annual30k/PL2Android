@@ -30,10 +30,12 @@ import com.patrollink.domain.StreamRelayGateway
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
+import com.patrollink.domain.VersionGateway
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 
 object ServiceFactory {
@@ -142,8 +144,21 @@ object ServiceFactory {
         )
     }
 
-    fun createDeviceControlGateway(context: Context, config: RuntimeConfig, sharedUteBridge: UteSdkBridge? = null): DeviceControlGateway =
-        if (config.useRealBle) UteSdkDeviceControlGateway(sharedUteBridge ?: UteSdkBridge(context)) else MockDeviceControlGateway()
+    fun createDeviceControlGateway(
+        context: Context,
+        config: RuntimeConfig,
+        sharedUteBridge: UteSdkBridge? = null,
+        tokenProvider: () -> String? = { null },
+        deviceIdProvider: () -> String = { "HEADSET_001" }
+    ): DeviceControlGateway =
+        when {
+            config.useRealBle -> UteSdkDeviceControlGateway(sharedUteBridge ?: UteSdkBridge(context))
+            config.restBaseUrl.isNotBlank() -> RestDeviceControlGateway(
+                OkHttpPatrolRestApi(baseUrl = config.restBaseUrl, tokenProvider = tokenProvider),
+                deviceIdProvider
+            )
+            else -> MockDeviceControlGateway()
+        }
 
     fun createLocationGateway(context: Context, fallbackState: AppUiState = MockPatrolRepository().initialState()) =
         AndroidLocationGateway(context, fallbackState.sosLocation)
@@ -155,6 +170,11 @@ object ServiceFactory {
     fun createNotificationGateway(context: Context) = AndroidPatrolNotificationGateway(context)
 
     fun createVersionInstaller(context: Context) = AndroidVersionInstaller(context)
+
+    fun createVersionGateway(config: RuntimeConfig, tokenProvider: () -> String? = { null }): VersionGateway =
+        config.restBaseUrl.takeIf { it.isNotBlank() }
+            ?.let { RestVersionGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
+            ?: MockVersionGateway()
 }
 
 private class ConfiguredStreamRelayGateway(
@@ -205,7 +225,30 @@ private class WifiBackedMediaGateway(
     }
 
     override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> {
-        if (target != TransferTarget.PhoneSandbox) return fallbackGateway.transfer(fileId, target)
+        if (target != TransferTarget.PhoneSandbox) {
+            return flow {
+                val localFile = File(mediaDirectory, "$fileId.bin")
+                if (!localFile.exists()) {
+                    emitAll(fallbackGateway.transfer(fileId, target))
+                    return@flow
+                }
+                val local = mediaIndex?.find(fileId, local = true)
+                    ?: deviceFile(fileId).copy(local = true, contentUri = Uri.fromFile(localFile).toString())
+                emit(local.copy(transferStatus = TransferStatus.Uploading, progress = 0.18f, lastTransferTarget = target))
+                val uploaded = fallbackGateway.uploadLocalFile(localFile, storageSide = "PHONE", bizType = "MEDIA", bizId = fileId)
+                emit(
+                    (uploaded ?: local).copy(
+                        id = fileId,
+                        local = true,
+                        transferStatus = TransferStatus.Done,
+                        progress = 1f,
+                        verified = true,
+                        contentUri = Uri.fromFile(localFile).toString(),
+                        lastTransferTarget = target
+                    )
+                )
+            }
+        }
         return flow {
             val start = deviceFile(fileId).copy(transferStatus = TransferStatus.Uploading, progress = 0.05f)
             emit(start)
@@ -259,6 +302,9 @@ private class WifiBackedMediaGateway(
         if (deleted) mediaIndex?.delete(fileId, local = false)
         return deleted
     }
+
+    override suspend fun uploadLocalFile(file: File, storageSide: String, bizType: String, bizId: String): MediaFile? =
+        fallbackGateway.uploadLocalFile(file, storageSide, bizType, bizId)
 
     override suspend fun verifySha256(fileId: String): Boolean {
         val localFile = File(mediaDirectory, "$fileId.bin")

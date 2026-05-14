@@ -16,6 +16,7 @@ import com.yc.nadalsdk.constants.NotifyType
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
@@ -36,6 +37,43 @@ class UteSdkMediaGateway(
     }
 
     override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> {
+        if (fileId.startsWith(AudioPrefix) && target == TransferTarget.Cloud) {
+            return flow {
+                val sessionId = fileId.removePrefix(AudioPrefix)
+                val localFile = File(mediaDirectory, "$sessionId.opus")
+                if (!localFile.exists()) {
+                    emitAll(fallbackGateway.transfer(fileId, target))
+                    return@flow
+                }
+                val local = localFiles().firstOrNull { it.id == fileId }
+                    ?: MediaFile(
+                        id = fileId,
+                        name = localFile.name,
+                        kind = MediaKind.Audio,
+                        time = localFile.lastModified().toString(),
+                        size = localFile.length().toReadableSize(),
+                        duration = null,
+                        verified = File(mediaDirectory, "$sessionId.integrity").exists(),
+                        local = true,
+                        transferStatus = TransferStatus.Uploading,
+                        progress = 0.15f,
+                        contentUri = Uri.fromFile(localFile).toString()
+                    )
+                emit(local.copy(transferStatus = TransferStatus.Uploading, progress = 0.18f, lastTransferTarget = TransferTarget.Cloud))
+                val uploaded = fallbackGateway.uploadLocalFile(localFile, storageSide = "PHONE", bizType = "MEDIA", bizId = fileId)
+                emit(
+                    (uploaded ?: local).copy(
+                        id = fileId,
+                        local = true,
+                        verified = true,
+                        transferStatus = TransferStatus.Done,
+                        progress = 1f,
+                        contentUri = Uri.fromFile(localFile).toString(),
+                        lastTransferTarget = TransferTarget.Cloud
+                    )
+                )
+            }
+        }
         if (!fileId.startsWith(AudioPrefix) || target != TransferTarget.PhoneSandbox) {
             return fallbackGateway.transfer(fileId, target)
         }

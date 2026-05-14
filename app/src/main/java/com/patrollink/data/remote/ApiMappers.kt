@@ -4,8 +4,11 @@ import com.patrollink.domain.AlertItem
 import com.patrollink.domain.AlertLevel
 import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthSession
+import com.patrollink.domain.DeviceAdvancedSettings
+import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
+import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.MediaFile
@@ -19,6 +22,7 @@ import com.patrollink.domain.SosState
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.UserProfile
+import com.patrollink.domain.VersionCheckResult
 
 fun AuthSessionDto.toDomain() = AuthSession(accessToken, refreshToken, expiresInSeconds)
 
@@ -53,6 +57,46 @@ fun ScannedDeviceDto.toDomain() = ScannedDevice(
         "GLASSES" -> DeviceType.Glasses
         else -> DeviceType.Headset
     }
+)
+
+fun DeviceCapabilitiesDto.toDomain() = DeviceCapabilities(
+    supportsGlasses = supportsGlasses,
+    supportsEarphone = supportsEarphone,
+    supportsWifi = supportsWifi,
+    supportsFileTransfer = supportsFileTransfer,
+    supportsPhoto = supportsPhoto,
+    supportsVideo = supportsVideo,
+    supportsAudioRecord = supportsAudioRecord,
+    supportsRealtimeAudio = supportsRealtimeAudio
+)
+
+fun DeviceWifiStateDto.toDomain() = DeviceWifiState(enabled, ssid, passwordConfigured, connected)
+
+fun DeviceWifiState.toDto(password: String = "") = DeviceWifiStateDto(
+    enabled = enabled,
+    ssid = ssid,
+    passwordConfigured = password.isNotBlank() || passwordConfigured,
+    connected = connected
+)
+
+fun DeviceAdvancedSettingsDto.toDomain() = DeviceAdvancedSettings(
+    videoWidth = videoWidth,
+    videoHeight = videoHeight,
+    videoFrameRate = videoFrameRate,
+    recordingDurationSeconds = recordingDurationSeconds,
+    verticalRecording = verticalRecording,
+    enhancedSound = enhancedSound,
+    brightnessLevel = brightnessLevel
+)
+
+fun DeviceAdvancedSettings.toDto() = DeviceAdvancedSettingsDto(
+    videoWidth = videoWidth,
+    videoHeight = videoHeight,
+    videoFrameRate = videoFrameRate,
+    recordingDurationSeconds = recordingDurationSeconds,
+    verticalRecording = verticalRecording,
+    enhancedSound = enhancedSound,
+    brightnessLevel = brightnessLevel
 )
 
 fun AlertDto.toDomain() = AlertItem(
@@ -100,6 +144,30 @@ fun MediaFileDto.toDomain() = MediaFile(
     contentUri = contentUri
 )
 
+fun MediaUploadTaskDto.toDomain() = MediaFile(
+    id = fileId ?: taskId,
+    name = fileName,
+    kind = when (mediaType) {
+        "PHOTO" -> MediaKind.Photo
+        "AUDIO" -> MediaKind.Audio
+        else -> MediaKind.Video
+    },
+    time = completedAt.orEmpty(),
+    size = fileSizeBytes.toSizeText(),
+    duration = null,
+    verified = status == "DONE" && !actualSha256.isNullOrBlank(),
+    local = storageSide == "PHONE",
+    transferStatus = when (status) {
+        "MERGING", "VERIFYING" -> TransferStatus.Verifying
+        "UPLOADING", "UPLOADED" -> TransferStatus.Uploading
+        "DONE" -> TransferStatus.Done
+        "FAILED", "CANCELLED", "EXPIRED" -> TransferStatus.Failed
+        else -> TransferStatus.Idle
+    },
+    progress = progress,
+    contentUri = fileId?.let { "/files/$it/download" }
+)
+
 fun HeartbeatAckDto.toDomain() = HeartbeatAck(accepted, serverTime)
 
 fun StreamRelayStateDto.toDomain() = when (state) {
@@ -137,9 +205,27 @@ fun SosEventDto.toDomainState() = SosState(
     backupEtaMinutes = backupEtaMinutes
 )
 
+fun VersionCheckResultDto.toDomain() = VersionCheckResult(
+    latestVersionCode = latestVersionCode,
+    latestVersionName = latestVersionName,
+    forceUpdate = forceUpdate,
+    changelog = changelog,
+    downloadUrl = downloadUrl,
+    sha256 = sha256
+)
+
 private fun String.toSosPhase() = when (this) {
     "ACTIVATING" -> SosPhase.Activating
     "ACTIVE" -> SosPhase.Active
     "CANCELLED" -> SosPhase.Cancelled
     else -> SosPhase.Idle
+}
+
+private fun Long.toSizeText(): String {
+    val mb = this / 1024.0 / 1024.0
+    return if (mb >= 1.0) {
+        "%.1f MB".format(mb)
+    } else {
+        "${this / 1024} KB"
+    }
 }

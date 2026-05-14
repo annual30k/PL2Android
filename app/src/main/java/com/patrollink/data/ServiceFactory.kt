@@ -90,7 +90,7 @@ object ServiceFactory {
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
             val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
             WifiBackedMediaGateway(
-                wifiClient = WifiFileServiceClient(baseUrl),
+                wifiClient = WifiFileServiceClient(baseUrl, tokenProvider = tokenProvider),
                 fallbackGateway = restMediaGateway ?: mockMedia,
                 mediaDirectory = File(context.filesDir, "patrol_media/device"),
                 officerBadgeNo = fallbackState.user.badgeNo,

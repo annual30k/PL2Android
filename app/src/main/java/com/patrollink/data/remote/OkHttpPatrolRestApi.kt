@@ -13,6 +13,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 class OkHttpPatrolRestApi(
     private val baseUrl: String,
     private val tokenProvider: () -> String? = { null },
+    private val clientIdProvider: () -> String? = { DEFAULT_CLIENT_ID },
     private val client: OkHttpClient = OkHttpClient(),
     private val gson: Gson = Gson()
 ) : PatrolRestApi {
@@ -95,6 +96,7 @@ class OkHttpPatrolRestApi(
             .url(urlFor(path))
             .method(method, if (method == "GET") null else body ?: ByteArray(0).toRequestBody(jsonMediaType))
             .header("Accept", "application/json")
+        clientIdProvider()?.takeIf { it.isNotBlank() }?.let { builder.header("clientid", it) }
         tokenProvider()?.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
         val request = builder.build()
         return withContext(Dispatchers.IO) {
@@ -120,5 +122,9 @@ class OkHttpPatrolRestApi(
     private fun String.pathId(): String {
         require(matches(Regex("[A-Za-z0-9_.:-]+"))) { "invalid path id" }
         return this
+    }
+
+    companion object {
+        const val DEFAULT_CLIENT_ID = "428a8310cd442757ae699df5d894f051"
     }
 }

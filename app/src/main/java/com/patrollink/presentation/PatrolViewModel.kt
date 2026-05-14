@@ -42,6 +42,7 @@ import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -313,7 +314,16 @@ class PatrolViewModel(
     fun startLowLatencyStream() = viewModelScope.launch {
         _uiState.update { it.copy(streamState = StreamRelayState.Connecting, operationMessage = operationMessage("正在连接实时画面", OperationMessageType.Info)) }
         runCatching { coordinator.startStream(_uiState.value.device, StreamMode.LowLatency) }
-            .onSuccess { _uiState.update { it.copy(streamState = StreamRelayState.Relaying, operationMessage = operationMessage("实时画面已连接", OperationMessageType.Success)) } }
+            .onSuccess {
+                val streamState = coordinator.streamState().first()
+                val message = when (streamState) {
+                    StreamRelayState.Relaying -> operationMessage("实时画面已连接", OperationMessageType.Success)
+                    StreamRelayState.Connecting -> operationMessage("正在连接实时画面", OperationMessageType.Info)
+                    StreamRelayState.Failed -> operationMessage("实时画面暂不可用，等待 SDK 能力接入", OperationMessageType.Error)
+                    StreamRelayState.Idle -> operationMessage("实时画面暂未开启", OperationMessageType.Info)
+                }
+                _uiState.update { it.copy(streamState = streamState, operationMessage = message) }
+            }
             .onFailure { _uiState.update { it.copy(streamState = StreamRelayState.Failed, operationMessage = operationMessage("实时画面连接失败", OperationMessageType.Error)) } }
     }
 

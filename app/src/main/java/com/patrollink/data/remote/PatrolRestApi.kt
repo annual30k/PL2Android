@@ -15,6 +15,8 @@ interface PatrolRestApi {
     suspend fun deleteMedia(fileId: String, storageSide: String): ApiEnvelope<Boolean>
     suspend fun verifyMedia(fileId: String): ApiEnvelope<Boolean>
     suspend fun heartbeat(request: HeartbeatRequestDto): ApiEnvelope<HeartbeatAckDto>
+    suspend fun messages(targetId: String, page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<PatrolMessageDto>>
+    suspend fun readMessage(messageId: String): ApiEnvelope<PatrolMessageDto>
     suspend fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto>
     suspend fun stopStream(): ApiEnvelope<StreamRelayStateDto>
     suspend fun currentPatrolArea(): ApiEnvelope<PatrolAreaDto>

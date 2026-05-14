@@ -68,6 +68,12 @@ class OkHttpPatrolRestApi(
     override suspend fun heartbeat(request: HeartbeatRequestDto): ApiEnvelope<HeartbeatAckDto> =
         post("api/v1/realtime/heartbeat", request)
 
+    override suspend fun messages(targetId: String, page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<PatrolMessageDto>> =
+        get("api/v1/messages?targetId=$targetId&page=$page&pageSize=$pageSize")
+
+    override suspend fun readMessage(messageId: String): ApiEnvelope<PatrolMessageDto> =
+        post("api/v1/messages/${messageId.pathId()}/read", emptyMap<String, String>())
+
     override suspend fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto> =
         post("api/v1/stream/start", request)
 

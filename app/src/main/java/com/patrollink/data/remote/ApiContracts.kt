@@ -139,7 +139,11 @@ data class HeartbeatRequestDto(
     val batteryPercent: Int,
     val signalBars: Int,
     val recordingStatus: String,
-    val clientTimestamp: Long
+    val clientTimestamp: Long,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val accuracyMeters: Float? = null,
+    val address: String? = null
 )
 
 data class HeartbeatAckDto(
@@ -188,4 +192,13 @@ data class SosEventDto(
     val location: GpsLocationDto?,
     val recordingAudio: Boolean,
     val backupEtaMinutes: Int?
+)
+
+data class PatrolMessageDto(
+    val messageId: String,
+    val title: String,
+    val content: String,
+    val targetType: String,
+    val status: String,
+    val sentAt: String
 )

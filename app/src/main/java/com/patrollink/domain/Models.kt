@@ -118,6 +118,7 @@ data class DailyReport(
 data class DailyReportUiState(
     val missionId: String = "",
     val operatorNote: String = "",
+    val selectedMediaIds: Set<String> = emptySet(),
     val generating: Boolean = false,
     val report: DailyReport? = null,
     val lastError: String? = null

@@ -106,6 +106,7 @@ private class PatrolViewModelFactory(
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         val dependencies = RuntimeDependencyFactory.create(activity.applicationContext)
         return PatrolViewModel(
+            appContext = activity.applicationContext,
             coordinator = dependencies.coordinator,
             deviceControlGateway = dependencies.deviceControlGateway,
             secureStore = dependencies.secureStore,

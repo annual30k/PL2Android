@@ -2,6 +2,7 @@ package com.patrollink.presentation.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,8 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
@@ -36,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DailyReport
+import com.patrollink.domain.MediaFile
+import com.patrollink.domain.MediaKind
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.PatrolCard
 import com.patrollink.presentation.component.StatusTag
@@ -96,6 +101,12 @@ fun DailyReportScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                         singleLine = false,
                         onValueChange = viewModel::updateDailyReportOperatorNote
                     )
+                    ReportMediaSelector(
+                        files = uiState.mediaFiles.filter { it.kind == MediaKind.Video || it.kind == MediaKind.Audio || it.kind == MediaKind.Photo },
+                        selectedIds = reportState.selectedMediaIds,
+                        onToggle = viewModel::toggleDailyReportMedia,
+                        onClear = viewModel::clearDailyReportMediaSelection
+                    )
                     Button(
                         onClick = viewModel::generateDailyReport,
                         enabled = !reportState.generating,
@@ -130,6 +141,83 @@ fun DailyReportScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
             item { ReportResultCard(report) }
         }
     }
+}
+
+@Composable
+private fun ReportMediaSelector(
+    files: List<MediaFile>,
+    selectedIds: Set<String>,
+    onToggle: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+                Text("分析媒体", color = colors.text, style = PatrolTextStyle.BodyStrong)
+                Text(
+                    if (selectedIds.isEmpty()) "未选择时默认分析今天全部视频、录音和图片" else "已选择 ${selectedIds.size} 个媒体文件",
+                    color = colors.textSubtle,
+                    style = PatrolTextStyle.Caption
+                )
+            }
+            if (selectedIds.isNotEmpty()) {
+                Button(
+                    onClick = onClear,
+                    shape = RoundedCornerShape(9.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.control)
+                ) {
+                    Text("清空", color = colors.text, style = PatrolTextStyle.BodyStrong)
+                }
+            }
+        }
+        if (files.isEmpty()) {
+            Text("暂无可选视频、录音或图片", color = colors.textMuted, style = PatrolTextStyle.BodySmall)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                files.take(12).forEach { file ->
+                    ReportMediaOption(
+                        file = file,
+                        selected = file.id in selectedIds,
+                        onClick = { onToggle(file.id) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReportMediaOption(file: MediaFile, selected: Boolean, onClick: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) TechBlue.copy(alpha = if (colors.dark) 0.18f else 0.08f) else colors.control.copy(alpha = 0.55f))
+            .border(1.dp, if (selected) TechBlue.copy(alpha = 0.55f) else colors.border, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = selected,
+            onCheckedChange = { onClick() },
+            colors = CheckboxDefaults.colors(checkedColor = TechBlue)
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(file.name, color = colors.text, style = PatrolTextStyle.BodyStrong)
+            Text("${mediaKindLabel(file.kind)} · ${file.time} · ${file.size}", color = colors.textSubtle, style = PatrolTextStyle.Caption)
+        }
+        StatusTag(if (file.local) "手机" else "设备", if (file.local) Success else TechBlue)
+    }
+}
+
+private fun mediaKindLabel(kind: MediaKind): String = when (kind) {
+    MediaKind.Video -> "视频"
+    MediaKind.Photo -> "图片"
+    MediaKind.Audio -> "录音"
 }
 
 @Composable

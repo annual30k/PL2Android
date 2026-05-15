@@ -1,5 +1,7 @@
 package com.patrollink.presentation
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.patrollink.data.MockVersionGateway
@@ -42,6 +44,7 @@ import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.VersionInstaller
 import com.patrollink.domain.VersionUpdatePhase
 import com.patrollink.domain.VersionUpdateUiState
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -57,6 +60,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class PatrolViewModel(
+    private val appContext: Context? = null,
     private val coordinator: PatrolCoordinator = ServiceFactory.createCoordinator(),
     private val deviceControlGateway: DeviceControlGateway? = null,
     private val secureStore: SecureStore? = null,
@@ -273,6 +277,20 @@ class PatrolViewModel(
         state.copy(dailyReport = state.dailyReport.copy(operatorNote = note, lastError = null))
     }
 
+    fun toggleDailyReportMedia(fileId: String) = _uiState.update { state ->
+        val selected = state.dailyReport.selectedMediaIds
+        state.copy(
+            dailyReport = state.dailyReport.copy(
+                selectedMediaIds = if (fileId in selected) selected - fileId else selected + fileId,
+                lastError = null
+            )
+        )
+    }
+
+    fun clearDailyReportMediaSelection() = _uiState.update { state ->
+        state.copy(dailyReport = state.dailyReport.copy(selectedMediaIds = emptySet(), lastError = null))
+    }
+
     fun updateCerebellumBaseUrl(baseUrl: String) = _uiState.update { state ->
         state.copy(cerebellumSettings = state.cerebellumSettings.copy(baseUrl = baseUrl))
     }
@@ -314,6 +332,7 @@ class PatrolViewModel(
         val current = _uiState.value
         val missionId = current.dailyReport.missionId.ifBlank { defaultMissionId(current.user.badgeNo) }
         val note = current.dailyReport.operatorNote.ifBlank { null }
+        val selectedMedia = current.mediaFiles.filter { it.id in current.dailyReport.selectedMediaIds }
         _uiState.update { state ->
             state.copy(
                 dailyReport = state.dailyReport.copy(
@@ -325,12 +344,30 @@ class PatrolViewModel(
             )
         }
         runCatching {
+            val uploadedMedia = selectedMedia.map { file ->
+                val localFile = localFileForCerebellumUpload(file, appContext)
+                    ?: error("${file.name} 不在手机本地，请先上传到手机后再交给小脑分析")
+                api.uploadFile(
+                    file = localFile,
+                    missionId = missionId,
+                    evidenceType = file.kind.toCerebellumEvidenceType(),
+                    note = "App选择日报分析：${file.name}",
+                    register = true
+                )
+            }
             api.createReport(
                 CerebellumReportRequestDto(
                     missionId = missionId,
                     reportType = "daily",
                     preferQuality = true,
-                    operatorNote = note
+                    operatorNote = note,
+                    selectedMediaIds = uploadedMedia.mapNotNull { it.evidence?.evidenceId },
+                    selectedMediaUris = uploadedMedia.mapNotNull { it.evidence?.sourceUri ?: it.file.fileUri },
+                    includeTodayMediaDefault = selectedMedia.isEmpty(),
+                    submitToBackend = true,
+                    operatorId = current.user.badgeNo,
+                    officerName = current.user.name,
+                    deviceId = current.device.id
                 )
             ).report
         }.onSuccess { report ->
@@ -359,6 +396,34 @@ class PatrolViewModel(
                     operationMessage = operationMessage("小脑日报生成失败", OperationMessageType.Error)
                 )
             }
+        }
+    }
+
+    fun refreshCerebellumFiles() = viewModelScope.launch {
+        val api = cerebellumApi ?: return@launch showOperationMessage("小脑服务地址未配置", OperationMessageType.Warning)
+        runCatching { api.listFiles() }
+            .onSuccess { files ->
+                showOperationMessage("小脑文件 ${files.count} 个，可用于日报分析或证据登记", OperationMessageType.Success)
+            }
+            .onFailure {
+                showOperationMessage("读取小脑文件失败", OperationMessageType.Error)
+            }
+    }
+
+    fun sendCerebellumCommand(command: String) = viewModelScope.launch {
+        val api = cerebellumApi ?: return@launch showOperationMessage("小脑服务地址未配置", OperationMessageType.Warning)
+        runCatching {
+            api.sendCommand(
+                com.patrollink.data.edge.CerebellumCommandRequestDto(
+                    command = command,
+                    requestId = "app-${System.currentTimeMillis()}",
+                    operatorId = _uiState.value.user.badgeNo
+                )
+            )
+        }.onSuccess {
+            showOperationMessage("小脑指令已下发：$command", OperationMessageType.Success)
+        }.onFailure {
+            showOperationMessage("小脑指令下发失败", OperationMessageType.Error)
         }
     }
 
@@ -812,4 +877,31 @@ class PatrolViewModel(
     }
 
     private fun operationMessage(text: String, type: OperationMessageType) = OperationMessage(text, type)
+}
+
+private fun localFileForCerebellumUpload(file: MediaFile, context: Context?): File? {
+    val value = file.contentUri?.takeIf { it.isNotBlank() } ?: return null
+    val direct = if (value.startsWith("/")) File(value) else null
+    if (direct?.exists() == true && direct.isFile) return direct
+    val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return null
+    if (uri.scheme == "file") {
+        val path = uri.path ?: return null
+        return File(path).takeIf { it.exists() && it.isFile }
+    }
+    if (uri.scheme == "content" && context != null) {
+        val targetDir = File(context.cacheDir, "cerebellum_uploads").also { it.mkdirs() }
+        val safeName = file.name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "${file.id}.bin" }
+        val target = File(targetDir, "${file.id}-$safeName")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        return target.takeIf { it.exists() && it.isFile }
+    }
+    return null
+}
+
+private fun MediaKind.toCerebellumEvidenceType(): String = when (this) {
+    MediaKind.Video -> "video"
+    MediaKind.Photo -> "image"
+    MediaKind.Audio -> "audio"
 }

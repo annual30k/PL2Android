@@ -2,6 +2,7 @@ package com.patrollink.data.edge
 
 import com.google.gson.JsonElement
 import com.google.gson.annotations.SerializedName
+import java.io.File
 
 interface CerebellumApi {
     suspend fun health(): CerebellumHealthDto
@@ -16,7 +17,19 @@ interface CerebellumApi {
     suspend fun runSyncTask(taskId: String): CerebellumSyncTaskResponseDto
     suspend fun summarizeVideo(request: CerebellumVideoSummaryRequestDto): CerebellumVideoSummaryResponseDto
     suspend fun createReport(request: CerebellumReportRequestDto): CerebellumReportResponseDto
+    suspend fun uploadFile(
+        file: File,
+        missionId: String? = null,
+        evidenceType: String = "other",
+        note: String? = null,
+        register: Boolean = true
+    ): CerebellumFileUploadResponseDto = unsupportedCerebellumMethod()
+    suspend fun listFiles(): CerebellumFileListResponseDto = unsupportedCerebellumMethod()
+    suspend fun operateFile(fileName: String, request: CerebellumFileOperationRequestDto): CerebellumFileOperationResponseDto = unsupportedCerebellumMethod()
+    suspend fun sendCommand(request: CerebellumCommandRequestDto): CerebellumCommandResponseDto = unsupportedCerebellumMethod()
 }
+
+private fun unsupportedCerebellumMethod(): Nothing = error("Cerebellum API method is not implemented")
 
 data class CerebellumHealthDto(
     val status: String,
@@ -141,6 +154,52 @@ data class CerebellumEvidenceDto(
     @SerializedName("chain_status") val chainStatus: String
 )
 
+data class CerebellumUploadedFileDto(
+    @SerializedName("file_id") val fileId: String,
+    @SerializedName("file_name") val fileName: String,
+    @SerializedName("file_uri") val fileUri: String,
+    @SerializedName("size_bytes") val sizeBytes: Long,
+    val sha256: String,
+    @SerializedName("uploaded_at") val uploadedAt: String,
+    @SerializedName("download_url") val downloadUrl: String
+)
+
+data class CerebellumFileUploadResponseDto(
+    val file: CerebellumUploadedFileDto,
+    val evidence: CerebellumEvidenceDto?,
+    val event: CerebellumEventDto
+)
+
+data class CerebellumFileListResponseDto(
+    val count: Int,
+    val files: List<CerebellumUploadedFileDto>
+)
+
+data class CerebellumFileOperationRequestDto(
+    val operation: String,
+    @SerializedName("mission_id") val missionId: String? = null,
+    @SerializedName("evidence_type") val evidenceType: String = "other",
+    val note: String? = null
+)
+
+data class CerebellumFileOperationResponseDto(
+    val result: JsonElement,
+    val event: CerebellumEventDto
+)
+
+data class CerebellumCommandRequestDto(
+    val command: String,
+    @SerializedName("request_id") val requestId: String? = null,
+    @SerializedName("operator_id") val operatorId: String? = null,
+    val payload: Map<String, Any?> = emptyMap()
+)
+
+data class CerebellumCommandResponseDto(
+    val accepted: Boolean,
+    val result: JsonElement,
+    val event: CerebellumEventDto
+)
+
 data class CerebellumSyncTaskRequestDto(
     @SerializedName("mission_id") val missionId: String? = null,
     @SerializedName("destination_url") val destinationUrl: String? = null,
@@ -189,6 +248,13 @@ data class CerebellumReportRequestDto(
     @SerializedName("report_type") val reportType: String = "daily",
     @SerializedName("prefer_quality") val preferQuality: Boolean = false,
     @SerializedName("operator_note") val operatorNote: String? = null,
+    @SerializedName("selected_media_ids") val selectedMediaIds: List<String> = emptyList(),
+    @SerializedName("selected_media_uris") val selectedMediaUris: List<String> = emptyList(),
+    @SerializedName("include_today_media_default") val includeTodayMediaDefault: Boolean = true,
+    @SerializedName("submit_to_backend") val submitToBackend: Boolean = true,
+    @SerializedName("operator_id") val operatorId: String? = null,
+    @SerializedName("officer_name") val officerName: String? = null,
+    @SerializedName("device_id") val deviceId: String? = null,
     @SerializedName("max_tokens") val maxTokens: Int = 1200
 )
 
@@ -198,6 +264,7 @@ data class CerebellumReportResponseDto(
 )
 
 data class CerebellumReportDto(
+    @SerializedName("report_id") val reportId: String? = null,
     @SerializedName("mission_id") val missionId: String,
     @SerializedName("report_type") val reportType: String,
     val model: String,

@@ -2,13 +2,16 @@ package com.patrollink.data.edge
 
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
@@ -63,6 +66,41 @@ class OkHttpCerebellumApi(
 
     override suspend fun createReport(request: CerebellumReportRequestDto): CerebellumReportResponseDto =
         post("api/v1/llm/report", request, reportClient)
+
+    override suspend fun uploadFile(
+        file: File,
+        missionId: String?,
+        evidenceType: String,
+        note: String?,
+        register: Boolean
+    ): CerebellumFileUploadResponseDto {
+        require(file.exists() && file.isFile) { "upload file not found: ${file.absolutePath}" }
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("evidence_type", evidenceType)
+            .addFormDataPart("register", register.toString())
+            .apply {
+                missionId?.takeIf { it.isNotBlank() }?.let { addFormDataPart("mission_id", it) }
+                note?.takeIf { it.isNotBlank() }?.let { addFormDataPart("note", it) }
+            }
+            .addFormDataPart("file", file.name, file.asRequestBody("application/octet-stream".toMediaType()))
+            .build()
+        val builder = Request.Builder()
+            .url(urlFor("api/v1/files/upload"))
+            .post(body)
+            .header("Accept", "application/json")
+        apiKeyProvider()?.takeIf { it.isNotBlank() }?.let { builder.header("X-API-Key", it) }
+        return executeRequest(reportClient, builder.build(), object : TypeToken<CerebellumFileUploadResponseDto>() {}.type)
+    }
+
+    override suspend fun listFiles(): CerebellumFileListResponseDto =
+        get("api/v1/files")
+
+    override suspend fun operateFile(fileName: String, request: CerebellumFileOperationRequestDto): CerebellumFileOperationResponseDto =
+        post("api/v1/files/${fileName.pathId()}/operations", request)
+
+    override suspend fun sendCommand(request: CerebellumCommandRequestDto): CerebellumCommandResponseDto =
+        post("api/v1/commands", request)
 
     private suspend inline fun <reified T> get(path: String): T = execute("GET", path, null)
 

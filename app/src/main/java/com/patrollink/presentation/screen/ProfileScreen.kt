@@ -288,6 +288,30 @@ fun CerebellumConfigScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBa
                         onClick = viewModel::saveCerebellumSettings,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        PrimaryAction(
+                            text = "读取小脑文件",
+                            onClick = viewModel::refreshCerebellumFiles,
+                            modifier = Modifier.weight(1f)
+                        )
+                        PrimaryAction(
+                            text = "健康检查",
+                            onClick = { viewModel.sendCerebellumCommand("health_check") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        PrimaryAction(
+                            text = "刷新文件索引",
+                            onClick = { viewModel.sendCerebellumCommand("refresh_files") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        PrimaryAction(
+                            text = "同步人脸库",
+                            onClick = { viewModel.sendCerebellumCommand("sync_face_library") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }

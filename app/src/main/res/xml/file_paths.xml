@@ -6,6 +6,9 @@
     <cache-path
         name="updates"
         path="updates/" />
+    <cache-path
+        name="cerebellum_uploads"
+        path="cerebellum_uploads/" />
     <files-path
         name="patrol_media"
         path="patrol_media/" />

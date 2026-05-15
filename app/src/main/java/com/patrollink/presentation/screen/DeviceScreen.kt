@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,7 +81,8 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     val device = uiState.device
-    val connectedDevices = uiState.connectedDevices.ifEmpty { listOf(device) }
+    val connectedDevices = uiState.connectedDevices.filter { it.isControllableDevice() }
+    val hasConnectedDevice = device.isControllableDevice()
     Column(Modifier.fillMaxSize().background(colors.page)) {
         OfflineBanner(uiState.networkOnline)
         LazyColumn(
@@ -96,36 +98,38 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                     onAddDevice = onAddDevice
                 )
             }
-            when (device.type) {
-                DeviceType.Recorder -> {
-                    item { RecorderLiveFeed(uiState, viewModel, device) }
-                    item { RecorderActions(device, viewModel) }
-                    item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
-                    item {
-                        MetricTile(
-                            "存储空间",
-                            "${device.storageUsedGb}GB / ${device.storageTotalGb.toInt()}GB",
-                            Warning,
-                            device.storageUsedGb / device.storageTotalGb
-                        )
+            if (hasConnectedDevice) {
+                when (device.type) {
+                    DeviceType.Recorder -> {
+                        item { RecorderLiveFeed(uiState, viewModel, device) }
+                        item { RecorderActions(device, viewModel) }
+                        item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
+                        item {
+                            MetricTile(
+                                "存储空间",
+                                "${device.storageUsedGb}GB / ${device.storageTotalGb.toInt()}GB",
+                                Warning,
+                                device.storageUsedGb / device.storageTotalGb
+                            )
+                        }
                     }
-                }
-                DeviceType.Headset -> {
-                    item { RecorderLiveFeed(uiState, viewModel, device) }
-                    item { HeadsetCapabilityCard(device) }
-                    item { HeadsetActions(device, viewModel) }
-                }
-                DeviceType.Sensor -> {
-                    item { SensorCapabilityCard(device) }
-                    item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
-                    item { MetricTile("状态稳定度", "96%", Success, 0.96f) }
-                }
-                DeviceType.Glasses -> {
-                    item { RecorderLiveFeed(uiState, viewModel, device) }
-                    item { GlassesCapabilityCard(device) }
-                    item { GlassesActions(device, viewModel) }
-                    item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
-                    item { MetricTile("眼镜电量", "${device.battery}%", Success, device.battery / 100f) }
+                    DeviceType.Headset -> {
+                        item { RecorderLiveFeed(uiState, viewModel, device) }
+                        item { HeadsetCapabilityCard(device) }
+                        item { HeadsetActions(device, viewModel) }
+                    }
+                    DeviceType.Sensor -> {
+                        item { SensorCapabilityCard(device) }
+                        item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
+                        item { MetricTile("状态稳定度", "96%", Success, 0.96f) }
+                    }
+                    DeviceType.Glasses -> {
+                        item { RecorderLiveFeed(uiState, viewModel, device) }
+                        item { GlassesCapabilityCard(device) }
+                        item { GlassesActions(device, viewModel) }
+                        item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
+                        item { MetricTile("眼镜电量", "${device.battery}%", Success, device.battery / 100f) }
+                    }
                 }
             }
         }
@@ -133,7 +137,12 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
 }
 
 @Composable
-private fun ConnectedDevicesPanel(devices: List<DeviceStatus>, selectedId: String, onSelect: (String) -> Unit, onAddDevice: () -> Unit) {
+private fun ConnectedDevicesPanel(
+    devices: List<DeviceStatus>,
+    selectedId: String,
+    onSelect: (String) -> Unit,
+    onAddDevice: () -> Unit
+) {
     val colors = PatrolDisplay.colors
     PatrolCard(radius = 16, padding = PaddingValues(16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -160,14 +169,22 @@ private fun ConnectedDevicesPanel(devices: List<DeviceStatus>, selectedId: Strin
                     }
                 }
             }
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(devices.size) { index ->
-                    val device = devices[index]
-                    ConnectedDeviceChip(
-                        device = device,
-                        selected = device.id == selectedId,
-                        onClick = { onSelect(device.id) }
-                    )
+            if (devices.isEmpty()) {
+                Text(
+                    "当前没有设备在线，请添加或连接设备后再使用拍照、录像、对讲和实时画面。",
+                    color = colors.textMuted,
+                    style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold)
+                )
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(devices.size) { index ->
+                        val device = devices[index]
+                        ConnectedDeviceChip(
+                            device = device,
+                            selected = device.id == selectedId,
+                            onClick = { onSelect(device.id) }
+                        )
+                    }
                 }
             }
         }
@@ -203,6 +220,7 @@ private fun ConnectedDeviceChip(device: DeviceStatus, selected: Boolean, onClick
 
 @Composable
 private fun RecorderLiveFeed(uiState: AppUiState, viewModel: PatrolViewModel, device: DeviceStatus) {
+    val enabled = device.isControllableDevice()
     Box(
         Modifier
             .fillMaxWidth()
@@ -210,9 +228,15 @@ private fun RecorderLiveFeed(uiState: AppUiState, viewModel: PatrolViewModel, de
             .clip(RoundedCornerShape(18.dp))
             .background(Color.Black)
             .border(4.dp, Color(0xFF0F172A), RoundedCornerShape(18.dp))
-            .clickable {
-                if (uiState.streamState == StreamRelayState.Relaying) viewModel.stopStream() else viewModel.startLowLatencyStream()
-            }
+            .then(
+                if (enabled) {
+                    Modifier.clickable {
+                        if (uiState.streamState == StreamRelayState.Relaying) viewModel.stopStream() else viewModel.startLowLatencyStream()
+                    }
+                } else {
+                    Modifier
+                }
+            )
     ) {
         Box(
             Modifier
@@ -264,14 +288,16 @@ private fun RecorderLiveFeed(uiState: AppUiState, viewModel: PatrolViewModel, de
 
 @Composable
 private fun RecorderActions(device: DeviceStatus, viewModel: PatrolViewModel) {
+    val enabled = device.isControllableDevice()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", enabled = enabled, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isRecording) "停止录像" else "录制视频",
                 if (device.isRecording) "stop" else "video",
                 active = device.isRecording,
                 danger = device.isRecording,
+                enabled = enabled,
                 onClick = viewModel::toggleRecord
             )
         }
@@ -296,22 +322,25 @@ private fun HeadsetCapabilityCard(device: DeviceStatus) {
 
 @Composable
 private fun HeadsetActions(device: DeviceStatus, viewModel: PatrolViewModel) {
+    val enabled = device.isControllableDevice()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isTalking) "对讲中" else "语音对讲",
                 "talk",
                 active = device.isTalking,
+                enabled = enabled,
                 onClick = viewModel::toggleTalk
             )
         }
-        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", enabled = enabled, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isRecording) "停止录像" else "执法录像",
                 if (device.isRecording) "stop" else "video",
                 active = device.isRecording,
                 danger = device.isRecording,
+                enabled = enabled,
                 onClick = viewModel::toggleRecord
             )
         }
@@ -338,14 +367,16 @@ private fun GlassesCapabilityCard(device: DeviceStatus) {
 
 @Composable
 private fun GlassesActions(device: DeviceStatus, viewModel: PatrolViewModel) {
+    val enabled = device.isControllableDevice()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) { ActionTile("抓拍", "camera", onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) { ActionTile("抓拍", "camera", enabled = enabled, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isRecording) "停止录像" else "执法录像",
                 if (device.isRecording) "stop" else "video",
                 active = device.isRecording,
                 danger = device.isRecording,
+                enabled = enabled,
                 onClick = viewModel::toggleRecord
             )
         }
@@ -367,7 +398,7 @@ private fun CapabilitySummaryCard(title: String, type: DeviceType, rows: List<Pa
                     Text(title, color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 17.sp, lineHeight = 22.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(type.label, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 1)
                 }
-                StatusTag("在线", Success, filled = true)
+                StatusTag(if (title.isNotBlank()) "在线" else "未连接", if (title.isNotBlank()) Success else Warning, filled = true)
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 rows.forEachIndexed { index, (label, value) ->
@@ -472,10 +503,13 @@ fun AddDeviceScreen(
     val colors = PatrolDisplay.colors
     val palette = addDevicePalette(colors.dark)
     val devices = remember(uiState.scannedDevices) { uiState.scannedDevices.distinctByDeviceIdentity() }
-    val connectedKeys = uiState.connectedDevices
-        .ifEmpty { listOf(uiState.device) }
+    val connectedKeys = (uiState.connectedDevices + uiState.device)
+        .filter { it.isControllableDevice() }
         .flatMap { listOf(it.id, it.name) }
         .toSet()
+    LaunchedEffect(Unit) {
+        viewModel.refreshScannedDevices(showFailureMessage = true)
+    }
     SystemBars(
         statusBarColor = palette.topBar,
         navigationBarColor = colors.bottomBar,
@@ -527,6 +561,7 @@ fun AddDeviceScreen(
                         device = device,
                         palette = palette,
                         connected = connected,
+                        onUnbind = { viewModel.unbindDevice(device.id) },
                         onConnect = {
                             viewModel.connectDiscoveredDevice(
                                 id = device.id,
@@ -712,6 +747,7 @@ private fun DiscoveredDeviceCard(
     device: ScannedDevice,
     palette: AddDevicePalette,
     connected: Boolean,
+    onUnbind: () -> Unit,
     onConnect: () -> Unit
 ) {
     Row(
@@ -763,15 +799,15 @@ private fun DiscoveredDeviceCard(
                 .height(40.dp)
                 .clip(RoundedCornerShape(9.dp))
                 .background(
-                    if (connected) palette.disabledButton
+                    if (connected) Danger
                     else if (device.bonded) Color(0xFF2F7DF6)
                     else Color(0xFF4D8DF6)
                 )
-                .then(if (connected) Modifier else Modifier.clickable(onClick = onConnect)),
+                .clickable(onClick = if (connected) onUnbind else onConnect),
             contentAlignment = Alignment.Center
         ) {
             Text(
-                if (connected) "已连接" else "连接",
+                if (connected) "解绑" else "连接",
                 color = Color.White,
                 style = PatrolTextStyle.BodyStrong.copy(fontSize = 12.sp, lineHeight = 16.sp),
                 maxLines = 1
@@ -830,6 +866,9 @@ private fun ScanTipsCard(palette: AddDevicePalette) {
 
 private fun ScannedDevice.isConnected(connectedKeys: Set<String>) =
     id in connectedKeys || macAddress in connectedKeys || name in connectedKeys
+
+private fun DeviceStatus.isControllableDevice(): Boolean =
+    id.isNotBlank() && online
 
 @Composable
 private fun DeviceTypeIcon(

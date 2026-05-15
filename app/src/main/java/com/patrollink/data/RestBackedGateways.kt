@@ -78,6 +78,9 @@ class RestDeviceGateway(
 
     override suspend fun bind(deviceId: String): DeviceStatus = api.bindDevice(deviceId).data.toDomain()
 
+    override suspend fun unbind(deviceId: String): DeviceStatus? =
+        runCatching { api.unbindDevice(deviceId).data.toDomain() }.getOrNull()
+
     override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus {
         val commandValue = when (command) {
             DeviceCommand.TakePhoto -> "TAKE_PHOTO"
@@ -130,7 +133,7 @@ class RestMediaGateway(private val api: PatrolRestApi) : MediaGateway {
 
 class RestDeviceControlGateway(
     private val api: PatrolRestApi,
-    private val deviceIdProvider: () -> String = { "HEADSET_001" }
+    private val deviceIdProvider: () -> String = { "" }
 ) : DeviceControlGateway {
     override fun events(): Flow<DeviceEvent> = emptyFlow()
 

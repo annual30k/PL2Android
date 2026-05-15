@@ -24,7 +24,7 @@ data class LoginRequestDto(
     val account: String,
     val password: String,
     val clientType: String = "ANDROID",
-    val deviceModel: String = "mock-device"
+    val deviceModel: String = "android-device"
 )
 
 data class AuthSessionDto(
@@ -313,6 +313,15 @@ data class PatrolMessageDto(
     val readAt: String = "",
     val status: String,
     val sentAt: String
+)
+
+data class DailyReportContentUpdateDto(
+    val content: String
+)
+
+data class DailyReportDto(
+    val reportId: String? = null,
+    val content: String? = null
 )
 
 data class VersionCheckResultDto(

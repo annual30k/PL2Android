@@ -12,6 +12,7 @@ interface AuthGateway {
 interface DeviceGateway {
     fun scan(): Flow<List<ScannedDevice>>
     suspend fun bind(deviceId: String): DeviceStatus
+    suspend fun unbind(deviceId: String): DeviceStatus?
     suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus
 }
 

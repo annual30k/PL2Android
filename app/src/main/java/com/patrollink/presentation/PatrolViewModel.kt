@@ -2,10 +2,10 @@ package com.patrollink.presentation
 
 import android.content.Context
 import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.patrollink.data.MockVersionGateway
-import com.patrollink.data.MockPatrolRepository
+import com.patrollink.data.EmptyVersionGateway
 import com.patrollink.data.RuntimeConfigStore
 import com.patrollink.data.ServiceFactory
 import com.patrollink.data.edge.CerebellumApi
@@ -13,6 +13,8 @@ import com.patrollink.data.edge.CerebellumReportRequestDto
 import com.patrollink.data.edge.OkHttpCerebellumApi
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.remote.AlertDraftRequestDto
+import com.patrollink.data.remote.DailyReportContentUpdateDto
+import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.remote.UploadAttachmentDto
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
@@ -25,6 +27,7 @@ import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.EmergencyContactGateway
+import com.patrollink.domain.EmptyAppState
 import com.patrollink.domain.FontSizeMode
 import com.patrollink.domain.IntercomState
 import com.patrollink.domain.LocationGateway
@@ -45,6 +48,8 @@ import com.patrollink.domain.VersionInstaller
 import com.patrollink.domain.VersionUpdatePhase
 import com.patrollink.domain.VersionUpdateUiState
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -65,19 +70,20 @@ class PatrolViewModel(
     private val deviceControlGateway: DeviceControlGateway? = null,
     private val secureStore: SecureStore? = null,
     private val settingsStore: UiSettingsStore? = null,
-    private val versionGateway: VersionGateway = MockVersionGateway(),
+    private val versionGateway: VersionGateway = EmptyVersionGateway(),
     private val locationGateway: LocationGateway? = null,
     private val sosEvidenceRecorder: SosEvidenceRecorder? = null,
     private val emergencyContactGateway: EmergencyContactGateway? = null,
     private val notificationGateway: PatrolNotificationGateway? = null,
     private val versionInstaller: VersionInstaller? = null,
     private var cerebellumApi: CerebellumApi? = null,
+    private val patrolRestApi: PatrolRestApi? = null,
     private val runtimeConfigStore: RuntimeConfigStore? = null,
+    private val backendBaseUrl: String = "",
     private val onSessionChanged: (AuthSession?) -> Unit = {}
 ) : ViewModel() {
-    private val repository = MockPatrolRepository()
     private val _uiState = MutableStateFlow(
-        repository.initialState().copy(
+        EmptyAppState.create().copy(
             fontSizeMode = settingsStore?.readFontSizeMode() ?: FontSizeMode.Standard,
             displayThemeMode = settingsStore?.readDisplayThemeMode() ?: DisplayThemeMode.System,
             cerebellumSettings = runtimeConfigStore?.readCerebellumSettings()?.let {
@@ -93,27 +99,82 @@ class PatrolViewModel(
         observeDeviceEvents()
         observeIntercomState()
         viewModelScope.launch {
-            secureStore?.let { store -> withContext(Dispatchers.IO) { store.readSession() } }?.let {
-                onSessionChanged(it)
-                _uiState.update { state -> state.copy(isLoggedIn = true, networkOnline = true) }
-                startAuthenticatedRefreshes()
-                runCatching { coordinator.currentRealtimeState() }
-            }
+            restoreSavedSession()
         }
     }
 
+    private suspend fun restoreSavedSession() {
+        val store = secureStore
+        val session = store?.let { withContext(Dispatchers.IO) { it.readSession() } }
+        if (session == null || !session.hasUsableTokens()) {
+            if (session != null) withContext(Dispatchers.IO) { store.clearSession() }
+            onSessionChanged(null)
+            _uiState.update { state -> state.copy(isLoggedIn = false, sessionRestoring = false) }
+            return
+        }
+
+        onSessionChanged(session)
+        runCatching { coordinator.currentUser() }
+            .onSuccess { user ->
+                _uiState.update { state ->
+                    state.copy(
+                        isLoggedIn = true,
+                        sessionRestoring = false,
+                        networkOnline = true,
+                        user = user
+                    )
+                }
+                startAuthenticatedRefreshes()
+                runCatching { coordinator.currentRealtimeState() }
+            }
+            .onFailure {
+                onSessionChanged(null)
+                withContext(Dispatchers.IO) { store.clearSession() }
+                _uiState.update { state ->
+                    state.copy(
+                        isLoggedIn = false,
+                        sessionRestoring = false,
+                        networkOnline = false
+                    )
+                }
+            }
+    }
+
     fun login(account: String, password: String, agreed: Boolean) {
-        if (account.isBlank() || password.isBlank() || !agreed) return
+        when {
+            account.isBlank() -> {
+                showOperationMessage("请输入账号", OperationMessageType.Warning)
+                return
+            }
+            password.isBlank() -> {
+                showOperationMessage("请输入密码", OperationMessageType.Warning)
+                return
+            }
+            !agreed -> {
+                showOperationMessage("请先阅读并同意服务协议和隐私政策", OperationMessageType.Warning)
+                return
+            }
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(loginLoading = true) }
             runCatching { coordinator.loginAndStartSession(account, password) }
                 .onSuccess { session ->
                     onSessionChanged(session)
                     secureStore?.let { store -> withContext(Dispatchers.IO) { store.saveSession(session) } }
-                    _uiState.update { it.copy(isLoggedIn = true, loginLoading = false, networkOnline = true, operationMessage = operationMessage("登录成功", OperationMessageType.Success)) }
+                    _uiState.update { it.copy(isLoggedIn = true, sessionRestoring = false, loginLoading = false, networkOnline = true, operationMessage = operationMessage("登录成功", OperationMessageType.Success)) }
                     startAuthenticatedRefreshes()
                 }
-                .onFailure { _uiState.update { it.copy(loginLoading = false, networkOnline = false) } }
+                .onFailure { throwable ->
+                    val message = throwable.message?.takeIf { it.isNotBlank() } ?: "登录失败，请检查账号、密码和后台连接"
+                    _uiState.update {
+                        it.copy(
+                            sessionRestoring = false,
+                            loginLoading = false,
+                            networkOnline = false,
+                            operationMessage = operationMessage(message, OperationMessageType.Error)
+                        )
+                    }
+                }
         }
     }
 
@@ -122,23 +183,33 @@ class PatrolViewModel(
         scannedDevicesJob = null
         onSessionChanged(null)
         secureStore?.let { store -> withContext(Dispatchers.IO) { store.clearSession() } }
-        _uiState.update { it.copy(isLoggedIn = false, scannedDevices = emptyList(), operationMessage = operationMessage("已退出登录", OperationMessageType.Info)) }
+        _uiState.update { it.copy(isLoggedIn = false, sessionRestoring = false, scannedDevices = emptyList(), operationMessage = operationMessage("已退出登录", OperationMessageType.Info)) }
     }
 
     private fun startAuthenticatedRefreshes() {
-        refreshScannedDevices()
+        refreshCurrentUser()
+        refreshScannedDevices(showFailureMessage = false)
+        refreshMediaFiles()
         refreshDeviceCapabilities()
         refreshPatrolArea()
     }
 
     fun toggleRecord() = viewModelScope.launch {
         val device = _uiState.value.device
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备", OperationMessageType.Warning)
+            return@launch
+        }
         val next = coordinator.setRecording(device, !device.isRecording)
         updateCurrentDevice(next)
     }
 
     fun toggleTalk() = viewModelScope.launch {
         val device = _uiState.value.device
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备", OperationMessageType.Warning)
+            return@launch
+        }
         runCatching { coordinator.setTalk(device, !device.isTalking) }
             .onSuccess { next -> updateCurrentDevice(next) }
             .onFailure {
@@ -181,6 +252,10 @@ class PatrolViewModel(
 
     fun refreshDeviceCapabilities() = viewModelScope.launch {
         val device = _uiState.value.device
+        if (!device.canReceiveDeviceCommand()) {
+            _uiState.update { it.copy(deviceCapabilities = DeviceCapabilities(), deviceWifiState = DeviceWifiState()) }
+            return@launch
+        }
         deviceControlGateway?.let { gateway ->
             runCatching {
                 val capabilities = gateway.capabilities(device)
@@ -269,12 +344,47 @@ class PatrolViewModel(
             .onSuccess { patrolArea -> _uiState.update { it.copy(patrolArea = patrolArea) } }
     }
 
+    fun refreshCurrentUser() = viewModelScope.launch {
+        runCatching { coordinator.currentUser() }
+            .onSuccess { user -> _uiState.update { it.copy(user = user) } }
+    }
+
     fun updateDailyReportMissionId(missionId: String) = _uiState.update { state ->
         state.copy(dailyReport = state.dailyReport.copy(missionId = missionId, lastError = null))
     }
 
     fun updateDailyReportOperatorNote(note: String) = _uiState.update { state ->
         state.copy(dailyReport = state.dailyReport.copy(operatorNote = note, lastError = null))
+    }
+
+    fun updateDailyReportContent(content: String) = _uiState.update { state ->
+        val report = state.dailyReport.report ?: return@update state
+        state.copy(dailyReport = state.dailyReport.copy(report = report.copy(content = content), lastError = null))
+    }
+
+    fun saveDailyReportContent() = viewModelScope.launch {
+        val report = _uiState.value.dailyReport.report ?: return@launch
+        val reportId = report.reportId ?: return@launch showOperationMessage("日报编号缺失，无法保存正文", OperationMessageType.Warning)
+        val api = patrolRestApi ?: return@launch showOperationMessage("后台服务未配置，无法保存正文", OperationMessageType.Warning)
+        _uiState.update { state -> state.copy(dailyReport = state.dailyReport.copy(contentSaving = true, lastError = null)) }
+        runCatching { api.updateDailyReportContent(reportId, DailyReportContentUpdateDto(report.content)) }
+            .onSuccess {
+                _uiState.update { state ->
+                    state.copy(
+                        dailyReport = state.dailyReport.copy(contentSaving = false),
+                        operationMessage = operationMessage("日报正文已保存", OperationMessageType.Success)
+                    )
+                }
+            }
+            .onFailure { throwable ->
+                val message = throwable.message?.takeIf { it.isNotBlank() } ?: "日报正文保存失败"
+                _uiState.update { state ->
+                    state.copy(
+                        dailyReport = state.dailyReport.copy(contentSaving = false, lastError = message),
+                        operationMessage = operationMessage("日报正文保存失败", OperationMessageType.Error)
+                    )
+                }
+            }
     }
 
     fun toggleDailyReportMedia(fileId: String) = _uiState.update { state ->
@@ -289,6 +399,23 @@ class PatrolViewModel(
 
     fun clearDailyReportMediaSelection() = _uiState.update { state ->
         state.copy(dailyReport = state.dailyReport.copy(selectedMediaIds = emptySet(), lastError = null))
+    }
+
+    fun refreshMediaFiles() = viewModelScope.launch {
+        val phoneMedia = runCatching { coordinator.mediaFiles(local = true) }.getOrDefault(emptyList())
+        val deviceMedia = runCatching { coordinator.mediaFiles(local = false) }.getOrDefault(emptyList())
+        val loaded = (phoneMedia + deviceMedia).distinctBy { it.id to it.local }
+        if (loaded.isEmpty()) return@launch
+        _uiState.update { state ->
+            val transient = state.mediaFiles.filter { current ->
+                loaded.none { it.id == current.id && it.local == current.local }
+            }
+            val next = (loaded + transient).distinctBy { it.id to it.local }
+            state.copy(
+                mediaFiles = next,
+                selectedMediaFileId = state.selectedMediaFileId ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
+            )
+        }
     }
 
     fun updateCerebellumBaseUrl(baseUrl: String) = _uiState.update { state ->
@@ -331,8 +458,10 @@ class PatrolViewModel(
         val api = cerebellumApi ?: return@launch showOperationMessage("小脑服务地址未配置", OperationMessageType.Warning)
         val current = _uiState.value
         val missionId = current.dailyReport.missionId.ifBlank { defaultMissionId(current.user.badgeNo) }
-        val note = current.dailyReport.operatorNote.ifBlank { null }
+        val reportableMedia = current.mediaFiles.reportableMedia()
         val selectedMedia = current.mediaFiles.filter { it.id in current.dailyReport.selectedMediaIds }
+            .ifEmpty { reportableMedia }
+            .preferPhoneCopies()
         _uiState.update { state ->
             state.copy(
                 dailyReport = state.dailyReport.copy(
@@ -344,9 +473,16 @@ class PatrolViewModel(
             )
         }
         runCatching {
-            val uploadedMedia = selectedMedia.map { file ->
-                val localFile = localFileForCerebellumUpload(file, appContext)
-                    ?: error("${file.name} 不在手机本地，请先上传到手机后再交给小脑分析")
+            val uploadableMedia = selectedMedia.mapNotNull { file ->
+                val localReady = ensureMediaFileForCerebellum(file)
+                localReady?.let { ready ->
+                    localFileForCerebellumUpload(ready, appContext, backendBaseUrl, secureStore)?.let { localFile -> ready to localFile }
+                }
+            }.distinctBy { (file, _) -> file.id }
+            val skippedMedia = selectedMedia.filterNot { selected ->
+                uploadableMedia.any { (file, _) -> file.id == selected.id }
+            }
+            val uploadedMedia = uploadableMedia.map { (file, localFile) ->
                 api.uploadFile(
                     file = localFile,
                     missionId = missionId,
@@ -355,6 +491,11 @@ class PatrolViewModel(
                     register = true
                 )
             }
+            val note = dailyReportOperatorNote(
+                current.dailyReport.operatorNote,
+                selectedMedia = selectedMedia,
+                skippedMedia = skippedMedia
+            )
             api.createReport(
                 CerebellumReportRequestDto(
                     missionId = missionId,
@@ -363,7 +504,7 @@ class PatrolViewModel(
                     operatorNote = note,
                     selectedMediaIds = uploadedMedia.mapNotNull { it.evidence?.evidenceId },
                     selectedMediaUris = uploadedMedia.mapNotNull { it.evidence?.sourceUri ?: it.file.fileUri },
-                    includeTodayMediaDefault = selectedMedia.isEmpty(),
+                    includeTodayMediaDefault = uploadedMedia.isEmpty(),
                     submitToBackend = true,
                     operatorId = current.user.badgeNo,
                     officerName = current.user.name,
@@ -376,6 +517,7 @@ class PatrolViewModel(
                     dailyReport = state.dailyReport.copy(
                         generating = false,
                         report = DailyReport(
+                            reportId = report.reportId,
                             missionId = report.missionId,
                             generatedAt = report.generatedAt,
                             content = report.content,
@@ -403,10 +545,37 @@ class PatrolViewModel(
         val api = cerebellumApi ?: return@launch showOperationMessage("小脑服务地址未配置", OperationMessageType.Warning)
         runCatching { api.listFiles() }
             .onSuccess { files ->
-                showOperationMessage("小脑文件 ${files.count} 个，可用于日报分析或证据登记", OperationMessageType.Success)
+                _uiState.update { state ->
+                    state.copy(
+                        cerebellumSettings = state.cerebellumSettings.copy(
+                            lastFileCount = files.count,
+                            lastFileNames = files.files.take(3).map { it.fileName }
+                        ),
+                        operationMessage = operationMessage("小脑文件 ${files.count} 个，可用于日报分析或证据登记", OperationMessageType.Success)
+                    )
+                }
             }
             .onFailure {
                 showOperationMessage("读取小脑文件失败", OperationMessageType.Error)
+            }
+    }
+
+    fun checkCerebellumHealth() = viewModelScope.launch {
+        val api = cerebellumApi ?: return@launch showOperationMessage("小脑服务地址未配置", OperationMessageType.Warning)
+        runCatching { api.health() }
+            .onSuccess { health ->
+                _uiState.update { state ->
+                    state.copy(
+                        cerebellumSettings = state.cerebellumSettings.copy(
+                            healthStatus = "${health.status} · ${health.deviceId}",
+                            healthDetail = "主模型 ${health.primaryModel} · 已运行 ${health.uptimeSeconds.toUptimeLabel()}"
+                        ),
+                        operationMessage = operationMessage("小脑健康检查通过", OperationMessageType.Success)
+                    )
+                }
+            }
+            .onFailure {
+                showOperationMessage("小脑健康检查失败", OperationMessageType.Error)
             }
     }
 
@@ -421,7 +590,18 @@ class PatrolViewModel(
                 )
             )
         }.onSuccess {
-            showOperationMessage("小脑指令已下发：$command", OperationMessageType.Success)
+            val resultText = "${command.toCerebellumCommandLabel()}已下发 · ${if (it.accepted) "已接受" else "待确认"}"
+            _uiState.update { state ->
+                val settings = when (command) {
+                    "refresh_files" -> state.cerebellumSettings.copy(lastFileCommandResult = resultText)
+                    "sync_face_library" -> state.cerebellumSettings.copy(lastFaceLibrarySyncResult = resultText)
+                    else -> state.cerebellumSettings
+                }
+                state.copy(
+                    cerebellumSettings = settings,
+                    operationMessage = operationMessage("小脑指令已下发：${command.toCerebellumCommandLabel()}", OperationMessageType.Success)
+                )
+            }
         }.onFailure {
             showOperationMessage("小脑指令下发失败", OperationMessageType.Error)
         }
@@ -506,7 +686,12 @@ class PatrolViewModel(
     }
 
     fun takePhoto() = viewModelScope.launch {
-        val next = coordinator.takePhoto(_uiState.value.device)
+        val device = _uiState.value.device
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备", OperationMessageType.Warning)
+            return@launch
+        }
+        val next = coordinator.takePhoto(device)
         val now = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
         val photo = MediaFile(
             id = "photo-${System.currentTimeMillis()}",
@@ -533,6 +718,10 @@ class PatrolViewModel(
     }
 
     fun startLowLatencyStream() = viewModelScope.launch {
+        if (!_uiState.value.device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备", OperationMessageType.Warning)
+            return@launch
+        }
         _uiState.update { it.copy(streamState = StreamRelayState.Connecting, operationMessage = operationMessage("正在连接实时画面", OperationMessageType.Info)) }
         runCatching { coordinator.startStream(_uiState.value.device, StreamMode.LowLatency) }
             .onSuccess {
@@ -567,11 +756,15 @@ class PatrolViewModel(
                 type = type
             )
             _uiState.update { state ->
-                val connected = (state.connectedDevices.filterNot { it.id == next.id || it.type == next.type } + next)
+                val connected = if (next.online) {
+                    state.connectedDevices.filterNot { it.id == next.id || it.type == next.type } + next
+                } else {
+                    state.connectedDevices.filterNot { it.id == next.id }
+                }
                 state.copy(
-                    device = next,
+                    device = if (next.online) next else state.device,
                     connectedDevices = connected,
-                    selectedDeviceId = next.id,
+                    selectedDeviceId = if (next.online) next.id else state.selectedDeviceId,
                     deviceCapabilities = DeviceCapabilities(),
                     deviceWifiState = DeviceWifiState(),
                     realtimeAudioSyncing = false,
@@ -586,7 +779,37 @@ class PatrolViewModel(
         }
     }
 
-    fun refreshScannedDevices() {
+    fun unbindCurrentDevice() = unbindDevice(_uiState.value.device.id)
+
+    fun unbindDevice(deviceId: String) = viewModelScope.launch {
+        if (deviceId.isBlank()) {
+            showOperationMessage("当前没有可解绑设备", OperationMessageType.Warning)
+            return@launch
+        }
+        val target = _uiState.value.connectedDevices.firstOrNull { it.id == deviceId }
+            ?: _uiState.value.device.takeIf { it.id == deviceId }
+        runCatching { coordinator.unbindDevice(deviceId) }
+        _uiState.update { state ->
+            val remaining = state.connectedDevices.filterNot { it.id == deviceId }
+            val next = if (state.device.id == deviceId) {
+                remaining.firstOrNull() ?: EmptyAppState.create().device
+            } else {
+                state.device
+            }
+            state.copy(
+                device = next,
+                connectedDevices = remaining,
+                selectedDeviceId = next.id.takeIf { it.isNotBlank() },
+                streamState = StreamRelayState.Idle,
+                deviceCapabilities = DeviceCapabilities(),
+                deviceWifiState = DeviceWifiState(),
+                realtimeAudioSyncing = false,
+                operationMessage = operationMessage("${target?.name?.ifBlank { "设备" } ?: "设备"} 已解绑", OperationMessageType.Success)
+            )
+        }
+    }
+
+    fun refreshScannedDevices(showFailureMessage: Boolean = true) {
         scannedDevicesJob?.cancel()
         scannedDevicesJob = viewModelScope.launch {
             runCatching {
@@ -597,7 +820,11 @@ class PatrolViewModel(
                 _uiState.update { state ->
                     state.copy(
                         scannedDevices = emptyList(),
-                        operationMessage = operationMessage("设备扫描失败，请先登录或检查后台连接", OperationMessageType.Error)
+                        operationMessage = if (showFailureMessage) {
+                            operationMessage("设备扫描失败，请先登录或检查后台连接", OperationMessageType.Error)
+                        } else {
+                            state.operationMessage
+                        }
                     )
                 }
             }
@@ -659,6 +886,26 @@ class PatrolViewModel(
         }.onFailure {
             simulateMediaTransfer(fileId, TransferTarget.Cloud, local)
         }
+    }
+
+    private suspend fun ensureMediaFileForCerebellum(file: MediaFile): MediaFile? {
+        val existingLocal = _uiState.value.mediaFiles.firstOrNull { it.id == file.id && it.local && it.contentUri.hasUsableValue() }
+            ?: file.takeIf { it.local && it.contentUri.hasUsableValue() }
+        if (existingLocal != null) return existingLocal
+        showOperationMessage("正在补齐 ${file.name} 到手机沙盒，准备上传小脑", OperationMessageType.Info)
+        return runCatching {
+            var finalMedia: MediaFile? = null
+            coordinator.transferMedia(file.id, TransferTarget.PhoneSandbox).collect { updated ->
+                updatePhoneTransfer(file.id, updated.markTransferTarget(TransferTarget.PhoneSandbox))
+                if (updated.transferStatus == TransferStatus.Done) {
+                    finalMedia = updated.copy(local = true)
+                } else {
+                    delay(220)
+                }
+            }
+            finalMedia?.takeIf { it.contentUri.hasUsableValue() }
+                ?: _uiState.value.mediaFiles.firstOrNull { it.id == file.id && it.local && it.contentUri.hasUsableValue() }
+        }.getOrNull()
     }
 
     private suspend fun simulateMediaTransfer(fileId: String, target: TransferTarget, local: Boolean = target != TransferTarget.PhoneSandbox) {
@@ -764,8 +1011,21 @@ class PatrolViewModel(
 
     fun selectMedia(fileId: String) = _uiState.update { it.copy(selectedMediaFileId = fileId) }
 
-    fun openMediaPreview(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = _uiState.update { state ->
-        state.copy(previewMediaFile = state.mediaFiles.firstOrNull { it.id == fileId && it.local == local }, selectedMediaFileId = fileId)
+    fun openMediaPreview(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = viewModelScope.launch {
+        val target = _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local == local }
+            ?: return@launch showOperationMessage("媒体文件不存在", OperationMessageType.Error)
+        val preview = materializeMediaForPreview(target)
+        _uiState.update { state ->
+            state.copy(
+                previewMediaFile = preview,
+                selectedMediaFileId = fileId,
+                operationMessage = if (preview == null) {
+                    operationMessage("媒体还没有可播放的本地文件，请先完成上传手机或检查云端下载地址", OperationMessageType.Error)
+                } else {
+                    state.operationMessage
+                }
+            )
+        }
     }
 
     fun closeMediaPreview() = _uiState.update { it.copy(previewMediaFile = null) }
@@ -877,27 +1137,137 @@ class PatrolViewModel(
     }
 
     private fun operationMessage(text: String, type: OperationMessageType) = OperationMessage(text, type)
+
+    private suspend fun materializeMediaForPreview(file: MediaFile): MediaFile? {
+        val existing = file.withShareableLocalUri(appContext)
+        if (existing != null) return existing
+        showOperationMessage("正在下载 ${file.name} 到手机沙盒后播放", OperationMessageType.Info)
+        val downloaded = ensureMediaFileForCerebellum(file) ?: return null
+        downloaded.withShareableLocalUri(appContext)?.let { return it }
+        val cached = localFileForCerebellumUpload(downloaded, appContext, backendBaseUrl, secureStore)
+            ?: localFileForCerebellumUpload(file, appContext, backendBaseUrl, secureStore)
+            ?: return null
+        return downloaded.copy(local = true, contentUri = Uri.fromFile(cached).toString()).withShareableLocalUri(appContext)
+    }
 }
 
-private fun localFileForCerebellumUpload(file: MediaFile, context: Context?): File? {
-    val value = file.contentUri?.takeIf { it.isNotBlank() } ?: return null
-    val direct = if (value.startsWith("/")) File(value) else null
-    if (direct?.exists() == true && direct.isFile) return direct
-    val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return null
-    if (uri.scheme == "file") {
-        val path = uri.path ?: return null
-        return File(path).takeIf { it.exists() && it.isFile }
+private fun dailyReportOperatorNote(
+    note: String,
+    selectedMedia: List<MediaFile>,
+    skippedMedia: List<MediaFile>
+): String? {
+    val parts = buildList {
+        note.trim().takeIf { it.isNotBlank() }?.let { add(it) }
+        if (selectedMedia.isNotEmpty()) {
+            add("App选择分析媒体：${selectedMedia.joinToString { it.name }}")
+        }
+        if (skippedMedia.isNotEmpty()) {
+            add("以下媒体暂无可上传的手机本地文件，仅按文件名纳入日报线索：${skippedMedia.joinToString { it.name }}")
+        }
     }
-    if (uri.scheme == "content" && context != null) {
-        val targetDir = File(context.cacheDir, "cerebellum_uploads").also { it.mkdirs() }
-        val safeName = file.name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "${file.id}.bin" }
-        val target = File(targetDir, "${file.id}-$safeName")
+    return parts.takeIf { it.isNotEmpty() }?.joinToString("\n")
+}
+
+private fun List<MediaFile>.reportableMedia(): List<MediaFile> =
+    filter { it.kind == MediaKind.Video || it.kind == MediaKind.Audio || it.kind == MediaKind.Photo }
+        .preferPhoneCopies()
+
+private fun List<MediaFile>.preferPhoneCopies(): List<MediaFile> =
+    groupBy { it.id }
+        .values
+        .map { copies ->
+            copies.firstOrNull { it.local && it.contentUri.hasUsableValue() }
+                ?: copies.firstOrNull { it.local }
+                ?: copies.first()
+        }
+
+private fun String?.hasUsableValue(): Boolean = !isNullOrBlank()
+
+private fun MediaFile.withShareableLocalUri(context: Context?): MediaFile? {
+    val value = contentUri?.takeIf { it.isNotBlank() } ?: return null
+    val uri = runCatching { Uri.parse(value) }.getOrNull()
+    val localFile = when {
+        uri?.scheme == "file" -> uri.path?.let(::File)
+        uri?.scheme == null && value.startsWith("/") -> File(value)
+        else -> null
+    }?.takeIf { it.exists() && it.isFile && it.length() > 0 }
+    if (localFile == null) return this.takeIf { uri?.scheme == "content" || value.startsWith("http://") || value.startsWith("https://") }
+    if (context == null) return copy(contentUri = Uri.fromFile(localFile).toString())
+    val shareUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", localFile)
+    return copy(local = true, contentUri = shareUri.toString())
+}
+
+private fun com.patrollink.domain.DeviceStatus.canReceiveDeviceCommand(): Boolean =
+    id.isNotBlank() && online
+
+private fun Long.toUptimeLabel(): String {
+    val days = this / 86_400
+    val hours = (this % 86_400) / 3_600
+    val minutes = (this % 3_600) / 60
+    return when {
+        days > 0 -> "${days}天${hours}小时"
+        hours > 0 -> "${hours}小时${minutes}分钟"
+        else -> "${minutes}分钟"
+    }
+}
+
+private fun String.toCerebellumCommandLabel(): String = when (this) {
+    "refresh_files" -> "刷新文件索引"
+    "sync_face_library" -> "同步人脸库"
+    "health_check" -> "健康检查"
+    else -> this
+}
+
+private suspend fun localFileForCerebellumUpload(
+    file: MediaFile,
+    context: Context?,
+    backendBaseUrl: String,
+    secureStore: SecureStore?
+): File? = withContext(Dispatchers.IO) {
+    val value = file.contentUri?.takeIf { it.isNotBlank() } ?: return@withContext null
+    val uri = runCatching { Uri.parse(value) }.getOrNull()
+    if (uri?.scheme == null && !value.startsWith("/")) {
+        File(value).takeIf { it.exists() && it.isFile }?.let { return@withContext it }
+    }
+    val direct = if (value.startsWith("/") && backendBaseUrl.isBlank()) File(value) else null
+    if (direct?.exists() == true && direct.isFile) return@withContext direct
+    if (uri?.scheme == "file") {
+        val path = uri.path ?: return@withContext null
+        return@withContext File(path).takeIf { it.exists() && it.isFile }
+    }
+    val targetDir = context?.cacheDir?.let { File(it, "cerebellum_uploads").also { dir -> dir.mkdirs() } }
+        ?: return@withContext null
+    val safeName = file.name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "${file.id}.bin" }
+    val target = File(targetDir, "${file.id}-$safeName")
+    if (uri?.scheme == "content") {
         context.contentResolver.openInputStream(uri)?.use { input ->
             target.outputStream().use { output -> input.copyTo(output) }
-        } ?: return null
-        return target.takeIf { it.exists() && it.isFile }
+        } ?: return@withContext null
+        return@withContext target.takeIf { it.exists() && it.isFile }
     }
-    return null
+    val remoteUrl = when {
+        value.startsWith("http://") || value.startsWith("https://") -> value
+        value.startsWith("/") && backendBaseUrl.isNotBlank() -> backendBaseUrl.trimEnd('/') + value
+        else -> null
+    } ?: return@withContext null
+    val connection = (URL(remoteUrl).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 10_000
+        readTimeout = 20_000
+        setRequestProperty("Accept", "*/*")
+        secureStore?.readSession()?.accessToken?.takeIf { it.isNotBlank() }?.let {
+            setRequestProperty("Authorization", "Bearer $it")
+        }
+    }
+    try {
+        if (connection.responseCode !in 200..299) return@withContext null
+        connection.inputStream.use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+        target.takeIf { it.exists() && it.isFile && it.length() > 0 }
+    } finally {
+        connection.disconnect()
+    }
 }
 
 private fun MediaKind.toCerebellumEvidenceType(): String = when (this) {
@@ -905,3 +1275,6 @@ private fun MediaKind.toCerebellumEvidenceType(): String = when (this) {
     MediaKind.Photo -> "image"
     MediaKind.Audio -> "audio"
 }
+
+private fun AuthSession.hasUsableTokens(): Boolean =
+    accessToken.isNotBlank() && refreshToken.isNotBlank()

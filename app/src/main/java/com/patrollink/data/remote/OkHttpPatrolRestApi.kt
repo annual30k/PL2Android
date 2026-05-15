@@ -51,6 +51,9 @@ class OkHttpPatrolRestApi(
     override suspend fun bindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto> =
         post("api/v1/devices/${deviceId.pathId()}/bind", emptyMap<String, String>())
 
+    override suspend fun unbindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto> =
+        post("api/v1/devices/${deviceId.pathId()}/unbind", emptyMap<String, String>())
+
     override suspend fun sendDeviceCommand(deviceId: String, request: DeviceCommandRequestDto): ApiEnvelope<DeviceStatusDto> =
         post("api/v1/devices/${deviceId.pathId()}/commands", request)
 
@@ -175,6 +178,9 @@ class OkHttpPatrolRestApi(
     override suspend fun readMessage(messageId: String): ApiEnvelope<PatrolMessageDto> =
         post("api/v1/messages/${messageId.pathId()}/read", emptyMap<String, String>())
 
+    override suspend fun updateDailyReportContent(reportId: String, request: DailyReportContentUpdateDto): ApiEnvelope<DailyReportDto> =
+        patch("patrol/daily-reports/${reportId.pathId()}/content", request)
+
     override suspend fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto> =
         post("api/v1/stream/start", request)
 
@@ -215,6 +221,9 @@ class OkHttpPatrolRestApi(
 
     private suspend inline fun <reified T> post(path: String, body: Any): T =
         execute("POST", path, gson.toJson(body))
+
+    private suspend inline fun <reified T> patch(path: String, body: Any): T =
+        execute("PATCH", path, gson.toJson(body))
 
     private suspend inline fun <reified T> delete(path: String): T = execute("DELETE", path, null)
 

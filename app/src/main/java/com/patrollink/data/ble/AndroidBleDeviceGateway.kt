@@ -95,6 +95,18 @@ class AndroidBleDeviceGateway(
 
     @SuppressLint("MissingPermission")
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    override suspend fun unbind(deviceId: String): DeviceStatus? = mutex.withLock {
+        closeGatt()
+        boundDevice = null
+        commandCharacteristic = null
+        statusCharacteristic = null
+        val next = fallbackStatus.copy(id = deviceId, online = false, isRecording = false, isTalking = false)
+        status.value = next
+        next
+    }
+
+    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus = mutex.withLock {
         val payload = BleCommandCodec.encode(command)
         check(payload.isNotEmpty()) { "empty BLE command" }

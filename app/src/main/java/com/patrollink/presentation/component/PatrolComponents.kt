@@ -272,9 +272,9 @@ private fun SegmentButton(text: String, selected: Boolean, onClick: () -> Unit, 
 }
 
 @Composable
-fun ActionTile(label: String, glyph: String, active: Boolean = false, danger: Boolean = false, onClick: () -> Unit) {
+fun ActionTile(label: String, glyph: String, active: Boolean = false, danger: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     val colors = PatrolDisplay.colors
-    val accent = when {
+    val accent = if (!enabled) colors.textSubtle else when {
         danger || active && label.contains("录像") -> Danger
         active -> Success
         else -> TechBlue
@@ -282,7 +282,7 @@ fun ActionTile(label: String, glyph: String, active: Boolean = false, danger: Bo
     PatrolCard(
         modifier = Modifier
             .height(128.dp)
-            .clickable(onClick = onClick),
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
         padding = PaddingValues(0.dp)
     ) {
         Column(
@@ -302,7 +302,7 @@ fun ActionTile(label: String, glyph: String, active: Boolean = false, danger: Bo
             Spacer(Modifier.height(18.dp))
             Text(
                 label,
-                color = colors.textMuted,
+                color = if (enabled) colors.textMuted else colors.textSubtle,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Black,
                 maxLines = 1,

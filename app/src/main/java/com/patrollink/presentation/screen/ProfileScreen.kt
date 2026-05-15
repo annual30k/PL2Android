@@ -1,6 +1,7 @@
 package com.patrollink.presentation.screen
 
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,15 +28,20 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -93,6 +99,7 @@ import com.patrollink.presentation.component.StatusTag
 import com.patrollink.presentation.component.SystemBars
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.PatrolTextStyle
+import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
 import java.util.Locale
@@ -258,64 +265,301 @@ fun SystemSettingsScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack
 @Composable
 fun CerebellumConfigScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () -> Unit) {
     val colors = PatrolDisplay.colors
+    var activePage by remember { mutableStateOf<CerebellumConfigPage?>(null) }
+    val page = activePage
+    BackHandler(enabled = page != null) {
+        activePage = null
+    }
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
-    SettingsPageScaffold(title = "小脑配置", onBack = onBack) {
-        item {
-            PatrolCard(radius = 12, dark = true) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SectionHeading("小脑连接", Icons.Filled.Router, TechBlue)
-                    Text(
-                        "模拟器访问本机小脑用 http://10.0.2.2:8088；真机或现场设备填写小脑热点/局域网地址。",
-                        color = colors.textMuted,
-                        style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold)
-                    )
-                    RuntimeTextField(
-                        label = "小脑服务地址",
-                        value = uiState.cerebellumSettings.baseUrl,
-                        placeholder = "http://192.168.4.1:8088",
-                        keyboardType = KeyboardType.Uri,
-                        onValueChange = viewModel::updateCerebellumBaseUrl
-                    )
-                    RuntimeTextField(
-                        label = "API Key",
-                        value = uiState.cerebellumSettings.apiKey,
-                        placeholder = "未启用鉴权时可留空",
-                        keyboardType = KeyboardType.Text,
-                        onValueChange = viewModel::updateCerebellumApiKey
-                    )
-                    PrimaryAction(
-                        text = if (uiState.cerebellumSettings.saving) "保存中" else "保存小脑连接",
-                        onClick = viewModel::saveCerebellumSettings,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        PrimaryAction(
-                            text = "读取小脑文件",
-                            onClick = viewModel::refreshCerebellumFiles,
-                            modifier = Modifier.weight(1f)
-                        )
-                        PrimaryAction(
-                            text = "健康检查",
-                            onClick = { viewModel.sendCerebellumCommand("health_check") },
-                            modifier = Modifier.weight(1f)
-                        )
+    SettingsPageScaffold(
+        title = page?.title ?: "小脑配置",
+        onBack = {
+            if (page == null) onBack() else activePage = null
+        }
+    ) {
+        when (page) {
+            null -> {
+                item { CerebellumOverviewCard(uiState = uiState) }
+                item {
+                    PatrolCard(radius = 12, dark = true, padding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            CerebellumMenuRow(
+                                icon = Icons.Filled.Router,
+                                title = "连接设置",
+                                accent = TechBlue,
+                                status = if (uiState.cerebellumSettings.baseUrl.isBlank()) "待配置" else "已配置",
+                                onClick = { activePage = CerebellumConfigPage.Connection }
+                            )
+                            CerebellumMenuRow(
+                                icon = Icons.Filled.Folder,
+                                title = "文件管理",
+                                accent = Color(0xFF0EA5E9),
+                                status = uiState.cerebellumSettings.lastFileCount?.let { "$it 个" } ?: "未读取",
+                                onClick = { activePage = CerebellumConfigPage.Files }
+                            )
+                            CerebellumMenuRow(
+                                icon = Icons.Filled.HealthAndSafety,
+                                title = "健康诊断",
+                                accent = Success,
+                                status = if (uiState.cerebellumSettings.healthStatus.isBlank()) "未检查" else "正常",
+                                onClick = { activePage = CerebellumConfigPage.Health }
+                            )
+                            CerebellumMenuRow(
+                                icon = Icons.Filled.Face,
+                                title = "人脸库同步",
+                                accent = Color(0xFF8B5CF6),
+                                status = if (uiState.cerebellumSettings.lastFaceLibrarySyncResult.isNotBlank()) "已同步" else "未同步",
+                                onClick = { activePage = CerebellumConfigPage.FaceLibrary }
+                            )
+                        }
                     }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        PrimaryAction(
-                            text = "刷新文件索引",
-                            onClick = { viewModel.sendCerebellumCommand("refresh_files") },
-                            modifier = Modifier.weight(1f)
-                        )
-                        PrimaryAction(
-                            text = "同步人脸库",
-                            onClick = { viewModel.sendCerebellumCommand("sync_face_library") },
-                            modifier = Modifier.weight(1f)
-                        )
+                }
+            }
+            CerebellumConfigPage.Connection -> {
+                item {
+                    PatrolCard(radius = 12, dark = true) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeading("连接设置", Icons.Filled.Router, TechBlue)
+                            RuntimeTextField(
+                                label = "小脑服务地址",
+                                value = uiState.cerebellumSettings.baseUrl,
+                                placeholder = "http://192.168.4.1:8088",
+                                keyboardType = KeyboardType.Uri,
+                                onValueChange = viewModel::updateCerebellumBaseUrl
+                            )
+                            RuntimeTextField(
+                                label = "API Key",
+                                value = uiState.cerebellumSettings.apiKey,
+                                placeholder = "未启用鉴权时可留空",
+                                keyboardType = KeyboardType.Text,
+                                onValueChange = viewModel::updateCerebellumApiKey
+                            )
+                            PrimaryAction(
+                                text = if (uiState.cerebellumSettings.saving) "保存中" else "保存连接设置",
+                                onClick = viewModel::saveCerebellumSettings,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+            CerebellumConfigPage.Files -> {
+                item {
+                    PatrolCard(radius = 12, dark = true) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeading("文件管理", Icons.Filled.Folder, Color(0xFF0EA5E9))
+                            CerebellumActionRow(
+                                icon = Icons.Filled.Folder,
+                                title = "读取小脑文件",
+                                accent = TechBlue,
+                                onClick = viewModel::refreshCerebellumFiles
+                            )
+                            CerebellumActionRow(
+                                icon = Icons.Filled.Refresh,
+                                title = "刷新文件索引",
+                                accent = Color(0xFF0EA5E9),
+                                onClick = { viewModel.sendCerebellumCommand("refresh_files") }
+                            )
+                            CerebellumFileResult(uiState)
+                            CerebellumCommandResult(
+                                result = uiState.cerebellumSettings.lastFileCommandResult
+                            )
+                        }
+                    }
+                }
+            }
+            CerebellumConfigPage.Health -> {
+                item {
+                    PatrolCard(radius = 12, dark = true) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeading("健康诊断", Icons.Filled.HealthAndSafety, Success)
+                            CerebellumActionRow(
+                                icon = Icons.Filled.HealthAndSafety,
+                                title = "开始健康检查",
+                                accent = Success,
+                                onClick = viewModel::checkCerebellumHealth
+                            )
+                            CerebellumHealthResult(uiState)
+                        }
+                    }
+                }
+            }
+            CerebellumConfigPage.FaceLibrary -> {
+                item {
+                    PatrolCard(radius = 12, dark = true) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeading("人脸库同步", Icons.Filled.Face, Color(0xFF8B5CF6))
+                            CerebellumActionRow(
+                                icon = Icons.Filled.Sync,
+                                title = "同步人脸库",
+                                accent = Color(0xFF8B5CF6),
+                                onClick = { viewModel.sendCerebellumCommand("sync_face_library") }
+                            )
+                            CerebellumCommandResult(
+                                result = uiState.cerebellumSettings.lastFaceLibrarySyncResult
+                            )
+                        }
                     }
                 }
             }
         }
     }
+}
+
+private enum class CerebellumConfigPage(val title: String) {
+    Connection("连接设置"),
+    Files("文件管理"),
+    Health("健康诊断"),
+    FaceLibrary("人脸库同步")
+}
+
+@Composable
+private fun CerebellumOverviewCard(uiState: AppUiState) {
+    val colors = PatrolDisplay.colors
+    val configured = uiState.cerebellumSettings.baseUrl.isNotBlank()
+    PatrolCard(radius = 12, dark = true) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                SectionHeading("小脑中心", Icons.Filled.Router, TechBlue)
+                StatusTag(if (configured) "已配置" else "待配置", if (configured) Success else Warning, filled = true)
+            }
+            Text(
+                uiState.cerebellumSettings.baseUrl.ifBlank { "未配置服务地址" },
+                color = colors.text,
+                style = PatrolTextStyle.BodyStrong.copy(fontSize = 15.sp, lineHeight = 21.sp),
+                maxLines = 1
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CerebellumSmallPill(if (uiState.cerebellumSettings.apiKey.isBlank()) "无 Key" else "Key 已填", TechBlue)
+                CerebellumSmallPill(uiState.cerebellumSettings.lastFileCount?.let { "文件 $it" } ?: "文件未读取", Color(0xFF0EA5E9))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CerebellumMenuRow(
+    icon: ImageVector,
+    title: String,
+    accent: Color,
+    status: String,
+    onClick: () -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 2.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(accent.copy(alpha = if (colors.dark) 0.2f else 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
+        }
+        Text(title, color = colors.text, style = PatrolTextStyle.BodyStrong.copy(fontSize = 16.sp, lineHeight = 21.sp), maxLines = 1, modifier = Modifier.weight(1f))
+        Text(status, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 1)
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = colors.textSubtle, modifier = Modifier.size(24.dp))
+    }
+}
+
+@Composable
+private fun CerebellumActionRow(icon: ImageVector, title: String, accent: Color, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(accent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.White.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+        }
+        Text(title, color = Color.White, style = PatrolTextStyle.BodyStrong.copy(fontSize = 16.sp, lineHeight = 21.sp), modifier = Modifier.weight(1f))
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = Color.White.copy(alpha = 0.82f), modifier = Modifier.size(24.dp))
+    }
+}
+
+@Composable
+private fun CerebellumFileResult(uiState: AppUiState) {
+    val count = uiState.cerebellumSettings.lastFileCount ?: return
+    val names = uiState.cerebellumSettings.lastFileNames
+    CerebellumResultPanel(
+        title = "已读取 $count 个小脑文件",
+        subtitle = names.takeIf { it.isNotEmpty() }?.joinToString(" / ").orEmpty(),
+        accent = Color(0xFF0EA5E9)
+    )
+}
+
+@Composable
+private fun CerebellumCommandResult(result: String) {
+    if (result.isBlank()) return
+    CerebellumResultPanel(
+        title = result,
+        subtitle = "",
+        accent = Success
+    )
+}
+
+@Composable
+private fun CerebellumResultPanel(title: String, subtitle: String, accent: Color) {
+    val colors = PatrolDisplay.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(accent.copy(alpha = if (colors.dark) 0.16f else 0.1f))
+            .border(1.dp, accent.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Text(title, color = colors.text, style = PatrolTextStyle.BodyStrong.copy(fontSize = 15.sp, lineHeight = 20.sp))
+        if (subtitle.isNotBlank()) {
+            Text(subtitle, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun CerebellumHealthResult(uiState: AppUiState) {
+    val status = uiState.cerebellumSettings.healthStatus
+    if (status.isBlank()) return
+    CerebellumResultPanel(
+        title = status,
+        subtitle = uiState.cerebellumSettings.healthDetail,
+        accent = Success
+    )
+}
+
+@Composable
+private fun CerebellumSmallPill(text: String, accent: Color) {
+    Text(
+        text,
+        color = accent,
+        style = PatrolTextStyle.Caption,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(accent.copy(alpha = 0.1f))
+            .border(1.dp, accent.copy(alpha = 0.14f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 5.dp)
+    )
 }
 
 @Composable

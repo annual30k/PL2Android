@@ -20,9 +20,13 @@ class PatrolCoordinator(
         return session
     }
 
+    suspend fun currentUser(): UserProfile = authGateway.currentUser()
+
     fun scanDevices(): Flow<List<ScannedDevice>> = deviceGateway.scan()
 
     suspend fun bindDevice(deviceId: String): DeviceStatus = deviceGateway.bind(deviceId)
+
+    suspend fun unbindDevice(deviceId: String): DeviceStatus? = deviceGateway.unbind(deviceId)
 
     suspend fun takePhoto(device: DeviceStatus): DeviceStatus =
         deviceGateway.sendCommand(device.id, DeviceCommand.TakePhoto)

@@ -6,6 +6,7 @@ interface PatrolRestApi {
     suspend fun currentUser(): ApiEnvelope<UserProfileDto>
     suspend fun scanDevices(): ApiEnvelope<List<ScannedDeviceDto>>
     suspend fun bindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto>
+    suspend fun unbindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto>
     suspend fun sendDeviceCommand(deviceId: String, request: DeviceCommandRequestDto): ApiEnvelope<DeviceStatusDto>
     suspend fun deviceCapabilities(deviceId: String): ApiEnvelope<DeviceCapabilitiesDto>
     suspend fun deviceWifi(deviceId: String): ApiEnvelope<DeviceWifiStateDto>
@@ -26,6 +27,7 @@ interface PatrolRestApi {
     suspend fun heartbeat(request: HeartbeatRequestDto): ApiEnvelope<HeartbeatAckDto>
     suspend fun messages(targetId: String, page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<PatrolMessageDto>>
     suspend fun readMessage(messageId: String): ApiEnvelope<PatrolMessageDto>
+    suspend fun updateDailyReportContent(reportId: String, request: DailyReportContentUpdateDto): ApiEnvelope<DailyReportDto>
     suspend fun startStream(request: StreamRelayRequestDto): ApiEnvelope<StreamRelayStateDto>
     suspend fun stopStream(): ApiEnvelope<StreamRelayStateDto>
     suspend fun createIntercomSession(request: IntercomSessionRequestDto): ApiEnvelope<IntercomSessionDto>

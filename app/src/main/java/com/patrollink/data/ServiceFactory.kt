@@ -15,7 +15,6 @@ import com.patrollink.data.remote.OkHttpPatrolRestApi
 import com.patrollink.data.remote.toDomain
 import com.patrollink.data.realtime.OkHttpWebSocketRealtimeGateway
 import com.patrollink.data.sos.AndroidSosEvidenceRecorder
-import com.patrollink.data.sos.MockEmergencyContactGateway
 import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.data.ute.UteSdkDeviceControlGateway
 import com.patrollink.data.ute.UteSdkDeviceGateway
@@ -43,15 +42,15 @@ import kotlinx.coroutines.flow.flow
 
 object ServiceFactory {
     fun createCoordinator(): PatrolCoordinator = PatrolCoordinator(
-        authGateway = MockAuthGateway(),
-        deviceGateway = MockDeviceGateway(),
-        alertGateway = MockAlertGateway(),
-        mediaGateway = MockMediaGateway(),
-        realtimeGateway = MockRealtimeGateway(),
-        streamRelayGateway = MockStreamRelayGateway(),
-        sosGateway = MockSosGateway(),
-        patrolAreaGateway = MockPatrolAreaGateway(),
-        intercomGateway = MockIntercomGateway()
+        authGateway = EmptyAuthGateway(),
+        deviceGateway = EmptyDeviceGateway(),
+        alertGateway = EmptyAlertGateway(),
+        mediaGateway = EmptyMediaGateway(),
+        realtimeGateway = EmptyRealtimeGateway(),
+        streamRelayGateway = EmptyStreamRelayGateway(),
+        sosGateway = EmptySosGateway(),
+        patrolAreaGateway = EmptyPatrolAreaGateway(),
+        intercomGateway = EmptyIntercomGateway()
     )
 
     fun createRestCoordinator(
@@ -78,27 +77,20 @@ object ServiceFactory {
         config: RuntimeConfig,
         tokenProvider: () -> String?,
         operatorIdProvider: () -> String = { "UNKNOWN_OPERATOR" },
-        fallbackState: AppUiState = MockPatrolRepository().initialState(),
+        fallbackState: AppUiState,
         sharedUteBridge: UteSdkBridge? = null
     ): PatrolCoordinator {
         val restApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let {
             OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)
         }
-        val mockAuth = MockAuthGateway()
-        val mockDevice = MockDeviceGateway()
-        val mockAlert = MockAlertGateway()
-        val mockMedia = MockMediaGateway()
-        val mockRealtime = MockRealtimeGateway()
-        val mockStream = MockStreamRelayGateway()
-        val mockSos = MockSosGateway()
-        val mockPatrolArea = MockPatrolAreaGateway()
         val uteBridge = if (config.useRealBle) sharedUteBridge ?: UteSdkBridge(context) else null
         val restMediaGateway = restApi?.let(::RestMediaGateway)
+        val emptyMediaGateway = EmptyMediaGateway()
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
             val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
             WifiBackedMediaGateway(
                 wifiClient = WifiFileServiceClient(baseUrl, tokenProvider = tokenProvider),
-                fallbackGateway = restMediaGateway ?: mockMedia,
+                fallbackGateway = restMediaGateway ?: emptyMediaGateway,
                 mediaDirectory = File(context.filesDir, "patrol_media/device"),
                 officerBadgeNo = fallbackState.user.badgeNo,
                 mediaIndex = mediaIndex
@@ -106,7 +98,7 @@ object ServiceFactory {
         }
 
         return PatrolCoordinator(
-            authGateway = restApi?.let(::RestAuthGateway) ?: mockAuth,
+            authGateway = restApi?.let(::RestAuthGateway) ?: EmptyAuthGateway(),
             deviceGateway = when {
                 config.useRealBle -> AndroidBleDeviceGateway(
                     context = context,
@@ -119,33 +111,33 @@ object ServiceFactory {
                 ).takeIf { config.bleServiceUuid.isNotBlank() }
                     ?: UteSdkDeviceGateway(uteBridge ?: UteSdkBridge(context), fallbackState.device)
                 restApi != null -> RestDeviceGateway(restApi, operatorIdProvider)
-                else -> mockDevice
+                else -> EmptyDeviceGateway()
             },
-            alertGateway = restApi?.let { RestAlertGateway(it, operatorIdProvider) } ?: mockAlert,
+            alertGateway = restApi?.let { RestAlertGateway(it, operatorIdProvider) } ?: EmptyAlertGateway(),
             mediaGateway = when {
                 wifiMediaGateway != null -> wifiMediaGateway
                 uteBridge != null -> UteSdkMediaGateway(
                     bridge = uteBridge,
-                    fallbackGateway = restMediaGateway ?: mockMedia,
+                    fallbackGateway = restMediaGateway ?: emptyMediaGateway,
                     mediaDirectory = File(context.filesDir, "patrol_media/ute"),
                     officerBadgeNo = fallbackState.user.badgeNo
                 )
                 restMediaGateway != null -> restMediaGateway
-                else -> mockMedia
+                else -> emptyMediaGateway
             },
             realtimeGateway = when {
                 config.webSocketUrl.isNotBlank() -> OkHttpWebSocketRealtimeGateway(config.webSocketUrl)
                 restApi != null -> RestRealtimeGateway(restApi)
-                else -> mockRealtime
+                else -> EmptyRealtimeGateway()
             },
             streamRelayGateway = when {
                 restApi != null -> RestStreamRelayGateway(restApi)
                 config.streamRelayUrl.isNotBlank() -> ConfiguredStreamRelayGateway(config.streamRelayUrl)
                 uteBridge != null -> UteSdkStreamRelayGateway(uteBridge)
-                else -> mockStream
+                else -> EmptyStreamRelayGateway()
             },
-            sosGateway = restApi?.let(::RestSosGateway) ?: mockSos,
-            patrolAreaGateway = restApi?.let(::RestPatrolAreaGateway) ?: mockPatrolArea,
+            sosGateway = restApi?.let(::RestSosGateway) ?: EmptySosGateway(),
+            patrolAreaGateway = restApi?.let(::RestPatrolAreaGateway) ?: EmptyPatrolAreaGateway(),
             intercomGateway = restApi?.let {
                 val audioRouter = BluetoothVoipAudioRouter(context)
                 RestIntercomGateway(
@@ -153,7 +145,7 @@ object ServiceFactory {
                     audioRouter = audioRouter,
                     webRtcClient = AndroidWebRtcIntercomClient(context, it, audioRouter)
                 )
-            } ?: MockIntercomGateway()
+            } ?: EmptyIntercomGateway()
         )
     }
 
@@ -162,7 +154,7 @@ object ServiceFactory {
         config: RuntimeConfig,
         sharedUteBridge: UteSdkBridge? = null,
         tokenProvider: () -> String? = { null },
-        deviceIdProvider: () -> String = { "HEADSET_001" }
+        deviceIdProvider: () -> String = { "" }
     ): DeviceControlGateway =
         when {
             config.useRealBle -> UteSdkDeviceControlGateway(sharedUteBridge ?: UteSdkBridge(context))
@@ -170,15 +162,15 @@ object ServiceFactory {
                 OkHttpPatrolRestApi(baseUrl = config.restBaseUrl, tokenProvider = tokenProvider),
                 deviceIdProvider
             )
-            else -> MockDeviceControlGateway()
+            else -> EmptyDeviceControlGateway()
         }
 
-    fun createLocationGateway(context: Context, fallbackState: AppUiState = MockPatrolRepository().initialState()) =
+    fun createLocationGateway(context: Context, fallbackState: AppUiState) =
         AndroidLocationGateway(context, fallbackState.sosLocation)
 
     fun createSosEvidenceRecorder(context: Context) = AndroidSosEvidenceRecorder(context)
 
-    fun createEmergencyContactGateway() = MockEmergencyContactGateway()
+    fun createEmergencyContactGateway() = EmptyEmergencyContactGateway()
 
     fun createNotificationGateway(context: Context) = AndroidPatrolNotificationGateway(context)
 
@@ -187,7 +179,7 @@ object ServiceFactory {
     fun createVersionGateway(config: RuntimeConfig, tokenProvider: () -> String? = { null }): VersionGateway =
         config.restBaseUrl.takeIf { it.isNotBlank() }
             ?.let { RestVersionGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
-            ?: MockVersionGateway()
+            ?: EmptyVersionGateway()
 
     fun createCerebellumApi(config: RuntimeConfig): CerebellumApi? =
         config.cerebellumBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->

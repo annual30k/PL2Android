@@ -81,6 +81,13 @@ class UteSdkDeviceGateway(
         activeDevice
     }
 
+    override suspend fun unbind(deviceId: String): DeviceStatus? = mutex.withLock {
+        withContext(Dispatchers.IO) { runCatching { bridge.disconnect() } }
+        connectResult = null
+        activeDevice = fallbackStatus.copy(id = deviceId, online = false, isRecording = false, isTalking = false)
+        activeDevice
+    }
+
     override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus = mutex.withLock {
         val connection = bridge.connection
         withContext(Dispatchers.IO) {

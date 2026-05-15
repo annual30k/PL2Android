@@ -107,6 +107,7 @@ data class VersionUpdateUiState(
 )
 
 data class DailyReport(
+    val reportId: String? = null,
     val missionId: String,
     val generatedAt: String,
     val content: String,
@@ -120,6 +121,7 @@ data class DailyReportUiState(
     val operatorNote: String = "",
     val selectedMediaIds: Set<String> = emptySet(),
     val generating: Boolean = false,
+    val contentSaving: Boolean = false,
     val report: DailyReport? = null,
     val lastError: String? = null
 )
@@ -127,11 +129,18 @@ data class DailyReportUiState(
 data class CerebellumSettingsUiState(
     val baseUrl: String = "",
     val apiKey: String = "",
-    val saving: Boolean = false
+    val saving: Boolean = false,
+    val lastFileCount: Int? = null,
+    val lastFileNames: List<String> = emptyList(),
+    val lastFileCommandResult: String = "",
+    val healthStatus: String = "",
+    val healthDetail: String = "",
+    val lastFaceLibrarySyncResult: String = ""
 )
 
 data class AppUiState(
     val isLoggedIn: Boolean = false,
+    val sessionRestoring: Boolean = true,
     val networkOnline: Boolean = true,
     val loginLoading: Boolean = false,
     val selectedAlertTab: AlertStatus = AlertStatus.Pending,
@@ -162,3 +171,49 @@ data class AppUiState(
     val mediaFiles: List<MediaFile>,
     val user: UserProfile
 )
+
+object EmptyAppState {
+    fun create(): AppUiState = AppUiState(
+        device = DeviceStatus(
+            id = "",
+            name = "未连接设备",
+            online = false,
+            battery = 0,
+            signalBars = 0,
+            onlineDuration = "",
+            storageUsedGb = 0f,
+            storageTotalGb = 0f,
+            firmware = "",
+            isRecording = false,
+            isTalking = false,
+            cloudConnected = false
+        ),
+        sosLocation = GpsLocation(
+            latitude = 0.0,
+            longitude = 0.0,
+            accuracyMeters = 0f,
+            address = "暂无定位"
+        ),
+        patrolArea = PatrolArea(
+            id = "",
+            name = "",
+            teamId = "",
+            teamName = "",
+            boundary = emptyList(),
+            route = emptyList()
+        ),
+        alerts = emptyList(),
+        mediaFiles = emptyList(),
+        user = UserProfile(
+            name = "",
+            badgeNo = "",
+            department = "",
+            phone = "",
+            email = "",
+            dutyArea = "",
+            shiftDuration = "",
+            patrolGroup = "",
+            systemNode = ""
+        )
+    )
+}

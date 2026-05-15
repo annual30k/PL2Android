@@ -173,11 +173,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                     },
                     onPlay = {
                         selected?.let {
-                            if (it.kind == MediaKind.Audio) {
-                                viewModel.showOperationMessage("${it.name} 暂不支持本地音频预览", OperationMessageType.Warning)
-                            } else {
-                                viewModel.openMediaPreview(it.id, it.local)
-                            }
+                            viewModel.openMediaPreview(it.id, it.local)
                         }
                     },
                     onVerify = {
@@ -303,7 +299,7 @@ private fun StorageSummaryCard(title: String, usedGb: Float, totalGb: Float, onH
             Text("${usedGb}GB / ${totalGb.toInt()}GB", color = colors.textMuted, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
         LinearProgressIndicator(
-            progress = { (usedGb / totalGb).coerceIn(0f, 1f) },
+            progress = { storageProgress(usedGb, totalGb) },
             color = TechBlue,
             trackColor = colors.control.copy(alpha = 0.55f),
             modifier = Modifier
@@ -416,7 +412,7 @@ private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Uni
             }
             if (file.transferStatus.inProgress) {
                 LinearProgressIndicator(
-                    progress = { file.progress.coerceIn(0f, 1f) },
+                    progress = { file.progress.safeProgress() },
                     color = TechBlue,
                     trackColor = Color.White.copy(alpha = 0.22f),
                     modifier = Modifier
@@ -522,7 +518,7 @@ private fun MediaArtwork(file: MediaFile, modifier: Modifier) {
 @Composable
 private fun FloatingTransferProgress(file: MediaFile, modifier: Modifier = Modifier) {
     val colors = PatrolDisplay.colors
-    val percent = (file.progress.coerceIn(0f, 1f) * 100).toInt()
+    val percent = (file.progress.safeProgress() * 100).toInt()
     Column(
         modifier
             .widthIn(max = 310.dp)
@@ -541,7 +537,7 @@ private fun FloatingTransferProgress(file: MediaFile, modifier: Modifier = Modif
             Text("${mediaStatusLabel(file)} · $percent%", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
         LinearProgressIndicator(
-            progress = { file.progress.coerceIn(0f, 1f) },
+            progress = { file.progress.safeProgress() },
             color = TechBlue,
             trackColor = colors.control.copy(alpha = 0.65f),
             modifier = Modifier
@@ -676,10 +672,10 @@ private fun MediaPreviewDialog(file: MediaFile, onDismiss: () -> Unit) {
                 Text("大小：${file.size}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 Text("同步状态：${mediaStatusLabel(file)}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 Text("完整性：${if (file.verified) "SHA-256 已校验 / 水印令牌已登记" else "待校验"}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Text("存储：${if (file.local) "App 私有沙盒" else "耳机设备端"}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("存储：${if (file.local) "App 私有沙盒，可本地播放并上传小脑" else "设备端，播放/日报前会先同步到手机"}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 if (file.progress > 0f && file.progress < 1f) {
                     LinearProgressIndicator(
-                        progress = { file.progress },
+                        progress = { file.progress.safeProgress() },
                         color = TechBlue,
                         trackColor = colors.control,
                         modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(99.dp))
@@ -786,7 +782,7 @@ private fun openSystemMediaViewer(context: Context, file: MediaFile): Boolean {
     val mimeType = when (file.kind) {
         MediaKind.Video -> "video/*"
         MediaKind.Photo -> "image/*"
-        MediaKind.Audio -> return false
+        MediaKind.Audio -> "audio/*"
     }
     val intent = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, mimeType)
@@ -798,6 +794,8 @@ private fun openSystemMediaViewer(context: Context, file: MediaFile): Boolean {
     } catch (_: ActivityNotFoundException) {
         false
     } catch (_: SecurityException) {
+        false
+    } catch (_: RuntimeException) {
         false
     }
 }
@@ -864,6 +862,16 @@ private fun transferColor(status: TransferStatus) = when (status) {
 
 private val TransferStatus.inProgress: Boolean
     get() = this == TransferStatus.Hashing || this == TransferStatus.Uploading || this == TransferStatus.Verifying
+
+private fun storageProgress(usedGb: Float, totalGb: Float): Float =
+    if (usedGb.isFinite() && totalGb.isFinite() && totalGb > 0f) {
+        (usedGb / totalGb).safeProgress()
+    } else {
+        0f
+    }
+
+private fun Float.safeProgress(): Float =
+    if (isFinite()) coerceIn(0f, 1f) else 0f
 
 private fun mediaStatusLabel(file: MediaFile): String = when (file.transferStatus) {
     TransferStatus.Done -> if (file.local) "已上传" else "已上传手机"

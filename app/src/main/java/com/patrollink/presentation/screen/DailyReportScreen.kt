@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -102,7 +103,7 @@ fun DailyReportScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                         onValueChange = viewModel::updateDailyReportOperatorNote
                     )
                     ReportMediaSelector(
-                        files = uiState.mediaFiles.filter { it.kind == MediaKind.Video || it.kind == MediaKind.Audio || it.kind == MediaKind.Photo },
+                        files = uiState.mediaFiles.filter { it.kind == MediaKind.Video || it.kind == MediaKind.Audio },
                         selectedIds = reportState.selectedMediaIds,
                         onToggle = viewModel::toggleDailyReportMedia,
                         onClear = viewModel::clearDailyReportMediaSelection
@@ -138,7 +139,14 @@ fun DailyReportScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         }
 
         reportState.report?.let { report ->
-            item { ReportResultCard(report) }
+            item {
+                ReportResultCard(
+                    report = report,
+                    contentSaving = reportState.contentSaving,
+                    onContentChange = viewModel::updateDailyReportContent,
+                    onSaveContent = viewModel::saveDailyReportContent
+                )
+            }
         }
     }
 }
@@ -156,7 +164,7 @@ private fun ReportMediaSelector(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
                 Text("分析媒体", color = colors.text, style = PatrolTextStyle.BodyStrong)
                 Text(
-                    if (selectedIds.isEmpty()) "未选择时默认分析今天全部视频、录音和图片" else "已选择 ${selectedIds.size} 个媒体文件",
+                    if (selectedIds.isEmpty()) "未选择时默认分析今天全部视频音轨和录音" else "已选择 ${selectedIds.size} 个音频来源",
                     color = colors.textSubtle,
                     style = PatrolTextStyle.Caption
                 )
@@ -172,7 +180,7 @@ private fun ReportMediaSelector(
             }
         }
         if (files.isEmpty()) {
-            Text("暂无可选视频、录音或图片", color = colors.textMuted, style = PatrolTextStyle.BodySmall)
+            Text("暂无可选视频或录音", color = colors.textMuted, style = PatrolTextStyle.BodySmall)
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 files.take(12).forEach { file ->
@@ -271,7 +279,12 @@ private fun ReportStatusCard(error: String) {
 }
 
 @Composable
-private fun ReportResultCard(report: DailyReport) {
+private fun ReportResultCard(
+    report: DailyReport,
+    contentSaving: Boolean,
+    onContentChange: (String) -> Unit,
+    onSaveContent: () -> Unit
+) {
     val colors = PatrolDisplay.colors
     PatrolCard(radius = 12, padding = PaddingValues(0.dp)) {
         Column {
@@ -286,12 +299,39 @@ private fun ReportResultCard(report: DailyReport) {
                 Text("生成时间：${report.generatedAt}", color = colors.textSubtle, style = PatrolTextStyle.Caption)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
-            Text(
-                text = report.content,
+            OutlinedTextField(
+                value = report.content,
+                onValueChange = onContentChange,
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
-                color = colors.text,
-                style = PatrolTextStyle.Body.copy(lineHeight = 23.sp)
+                label = { Text("日报正文（可编辑）", fontWeight = FontWeight.Bold) },
+                minLines = 16,
+                maxLines = 32,
+                shape = RoundedCornerShape(10.dp),
+                textStyle = PatrolTextStyle.Body.copy(color = colors.text, lineHeight = 23.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = TechBlue,
+                    unfocusedBorderColor = colors.border,
+                    focusedContainerColor = colors.surface,
+                    unfocusedContainerColor = colors.surface,
+                    cursorColor = TechBlue,
+                    focusedLabelColor = TechBlue,
+                    unfocusedLabelColor = colors.textMuted
+                )
             )
+            Button(
+                onClick = onSaveContent,
+                enabled = !contentSaving,
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = TechBlue, disabledContainerColor = colors.control)
+            ) {
+                Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(19.dp))
+                Text(
+                    if (contentSaving) "保存中" else "保存正文",
+                    modifier = Modifier.padding(start = 8.dp),
+                    fontWeight = FontWeight.Black
+                )
+            }
             if (report.requiresHumanConfirmation) {
                 Row(
                     Modifier

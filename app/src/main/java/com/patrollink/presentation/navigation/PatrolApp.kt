@@ -113,6 +113,10 @@ fun PatrolApp(
         displayThemeMode = uiState.displayThemeMode
     ) {
         PermissionGate {
+            if (uiState.sessionRestoring) {
+                SessionRestoreScreen()
+                return@PermissionGate
+            }
             if (!uiState.isLoggedIn) {
                 LoginScreen(uiState, onLogin = viewModel::login)
                 return@PermissionGate
@@ -127,7 +131,7 @@ fun PatrolApp(
                 Route.VersionInfo.path
             ) && !currentRoute.startsWith("alertDetail")
             val showTopBar = showBottomBar
-            val lowBattery = uiState.device.battery < 15
+            val lowBattery = uiState.device.id.isNotBlank() && uiState.device.online && uiState.device.battery < 15
             var dismissedLowBatteryReminder by rememberSaveable(uiState.device.id, lowBattery) { mutableStateOf(false) }
 
             Scaffold(
@@ -229,6 +233,22 @@ fun PatrolApp(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SessionRestoreScreen() {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(PatrolDisplay.colors.page),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "ForceLink",
+            color = TechBlue,
+            style = PatrolTextStyle.PageTitle.copy(fontSize = 26.sp, lineHeight = 32.sp)
+        )
     }
 }
 

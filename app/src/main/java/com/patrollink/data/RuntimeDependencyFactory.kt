@@ -4,6 +4,8 @@ import android.content.Context
 import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.local.AndroidKeystoreSecureStore
 import com.patrollink.data.local.UiSettingsStore
+import com.patrollink.data.remote.OkHttpPatrolRestApi
+import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.DeviceControlGateway
@@ -14,6 +16,7 @@ import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SosEvidenceRecorder
 import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.VersionInstaller
+import com.patrollink.domain.EmptyAppState
 
 data class RuntimeDependencies(
     val coordinator: PatrolCoordinator,
@@ -27,6 +30,7 @@ data class RuntimeDependencies(
     val versionGateway: VersionGateway,
     val versionInstaller: VersionInstaller,
     val cerebellumApi: CerebellumApi?,
+    val patrolRestApi: PatrolRestApi?,
     val tokenStore: RuntimeTokenStore,
     val configStore: RuntimeConfigStore,
     val config: RuntimeConfig
@@ -38,14 +42,14 @@ object RuntimeDependencyFactory {
         val config = RuntimeConfigStore(appContext).read()
         val tokenStore = RuntimeTokenStore()
         val secureStore = AndroidKeystoreSecureStore(appContext)
-        val fallbackState = MockPatrolRepository().initialState()
+        val emptyState = EmptyAppState.create()
         val uteBridge = if (config.useRealBle) UteSdkBridge(appContext) else null
         val coordinator = ServiceFactory.createRuntimeCoordinator(
             context = appContext,
             config = config,
             tokenProvider = tokenStore::token,
-            operatorIdProvider = { fallbackState.user.badgeNo },
-            fallbackState = fallbackState,
+            operatorIdProvider = { emptyState.user.badgeNo },
+            fallbackState = emptyState,
             sharedUteBridge = uteBridge
         )
         val deviceControlGateway = ServiceFactory.createDeviceControlGateway(
@@ -53,20 +57,21 @@ object RuntimeDependencyFactory {
             config = config,
             sharedUteBridge = uteBridge,
             tokenProvider = tokenStore::token,
-            deviceIdProvider = { fallbackState.device.id }
+            deviceIdProvider = { emptyState.device.id }
         )
         return RuntimeDependencies(
             coordinator = coordinator,
             deviceControlGateway = deviceControlGateway,
             secureStore = secureStore,
             settingsStore = UiSettingsStore(appContext),
-            locationGateway = ServiceFactory.createLocationGateway(appContext, fallbackState),
+            locationGateway = ServiceFactory.createLocationGateway(appContext, emptyState),
             sosEvidenceRecorder = ServiceFactory.createSosEvidenceRecorder(appContext),
             emergencyContactGateway = ServiceFactory.createEmergencyContactGateway(),
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
             versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
             versionInstaller = ServiceFactory.createVersionInstaller(appContext),
             cerebellumApi = ServiceFactory.createCerebellumApi(config),
+            patrolRestApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let { OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenStore::token) },
             tokenStore = tokenStore,
             configStore = RuntimeConfigStore(appContext),
             config = config

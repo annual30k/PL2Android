@@ -28,6 +28,7 @@ data class RuntimeDependencies(
     val versionInstaller: VersionInstaller,
     val cerebellumApi: CerebellumApi?,
     val tokenStore: RuntimeTokenStore,
+    val configStore: RuntimeConfigStore,
     val config: RuntimeConfig
 )
 
@@ -67,6 +68,7 @@ object RuntimeDependencyFactory {
             versionInstaller = ServiceFactory.createVersionInstaller(appContext),
             cerebellumApi = ServiceFactory.createCerebellumApi(config),
             tokenStore = tokenStore,
+            configStore = RuntimeConfigStore(appContext),
             config = config
         )
     }

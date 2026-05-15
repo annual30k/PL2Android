@@ -17,6 +17,7 @@ PL2Android 是 PatrolLink 执法耳机 App 的 Android 原生实现版本，用�
 - 设备扫描、绑定、拍照指令、录音开关和对讲开关。
 - 告警监听、确认、关闭、误报和请求增援处理路径。
 - 媒体列表、SHA-256 校验状态、下载/上传进度状态机和删除操作。
+- 日报模块，已通过小脑直连接口 `POST /api/v1/llm/report` 生成执勤日报草稿。
 - 类 WebSocket 连接与心跳确认流程。
 - 低延迟、均衡、证据质量三种模式的流转发状态机。
 - SOS 激活和取消流程，包含位置、录音和增援 ETA 状态。
@@ -86,6 +87,25 @@ PATROL_CEREBELLUM_API_KEY=change-this-key \
 ```
 
 Android 模拟器访问宿主机 Docker 时可用 `http://10.0.2.2:8088`。局域网直连工程样机时可用设备热点或 Wi-Fi Direct 分配的 `192.168.x.x` 地址；公网或跨网段访问必须改为 HTTPS/mTLS 网关。
+
+安装后也可以在 App 内配置：进入 **我的 → 小脑连接**，填写小脑服务地址和 API Key 后保存。运行时配置会写入本机 `patrol_runtime_config`，保存后立即用于日报生成，不需要重新打包。不同民警或不同小脑设备可分别填写自己的热点/局域网地址，例如 `http://192.168.4.1:8088`。
+
+当前安卓端日报页签会调用小脑：
+
+```http
+POST /api/v1/llm/report
+Content-Type: application/json
+
+{
+  "mission_id": "mission-20260515-POLICE_9527",
+  "report_type": "daily",
+  "prefer_quality": true,
+  "operator_note": "今日重点巡逻商业街区域",
+  "max_tokens": 1200
+}
+```
+
+App 解析 `report.content/backend/model/generated_at/requires_human_confirmation` 并在页面展示；AI 草稿默认提示需要执勤人员复核后入库。
 
 后续生产化需要补齐真实后端 URL 和接口契约、耳机 GATT UUID、指令确认协议、Wi-Fi 热点文件 API 细节、小脑发现/配对流程以及音视频流 SDK 接入点。
 

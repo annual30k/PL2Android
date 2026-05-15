@@ -18,10 +18,13 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
@@ -30,9 +33,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -44,14 +51,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -87,8 +98,19 @@ import com.patrollink.presentation.theme.Warning
 import java.util.Locale
 import android.graphics.Color as AndroidColor
 
+private val ProfileIconSlotSize = 44.dp
+private val ProfileMenuIconBoxSize = 32.dp
+private val ProfileIconTextGap = 12.dp
+private val ProfileTextStartPadding = ProfileIconSlotSize + ProfileIconTextGap
+
 @Composable
-fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onOpenVersionInfo: () -> Unit) {
+fun ProfileScreen(
+    uiState: AppUiState,
+    viewModel: PatrolViewModel,
+    onOpenVersionInfo: () -> Unit,
+    onOpenSystemSettings: () -> Unit,
+    onOpenCerebellumConfig: () -> Unit
+) {
     val colors = PatrolDisplay.colors
     val titleColor = profileTitleColor()
     LaunchedEffect(Unit) {
@@ -129,19 +151,19 @@ fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onOpenVersion
             }
             item {
                 PatrolCard(radius = 12, dark = true) {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         SectionHeading("执勤辖区", Icons.Filled.LocationOn, TechBlue)
-                        Spacer(Modifier.height(10.dp))
-                        Text(uiState.patrolArea.name, color = titleColor, style = PatrolTextStyle.BodyStrong.copy(fontSize = 15.sp, lineHeight = 21.sp))
-                        Spacer(Modifier.height(3.dp))
-                        Text("${uiState.patrolArea.teamName} | ${user.patrolGroup.substringAfter("| ", user.patrolGroup)}", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
+                        Column(Modifier.padding(start = ProfileTextStartPadding), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(uiState.patrolArea.name, color = titleColor, style = PatrolTextStyle.BodyStrong.copy(fontSize = 15.sp, lineHeight = 21.sp))
+                            Text("${uiState.patrolArea.teamName} | ${user.patrolGroup.substringAfter("| ", user.patrolGroup)}", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
+                        }
                         PatrolAreaMap(location = uiState.sosLocation, dutyArea = uiState.patrolArea.name, patrolArea = uiState.patrolArea)
                     }
                 }
             }
             item {
                 PatrolCard(radius = 12, dark = true) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         SectionHeading("联络方式", Icons.Filled.ContactPhone, Color(0xFF22C55E))
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             ContactInfo(Icons.Filled.Phone, "手机号码", user.phone, Color(0xFF22C55E))
@@ -152,28 +174,22 @@ fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onOpenVersion
             }
             item {
                 PatrolCard(radius = 12, dark = true) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SectionHeading("显示设置", Icons.Filled.Settings, Color(0xFF8B5CF6))
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            DisplaySettingGroup(
-                                title = "字体大小",
-                                options = listOf(
-                                    DisplayOption("紧凑", FontSizeMode.Compact),
-                                    DisplayOption("标准", FontSizeMode.Standard),
-                                    DisplayOption("大号", FontSizeMode.Large)
-                                ),
-                                selected = uiState.fontSizeMode,
-                                onSelect = viewModel::setFontSizeMode
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SectionHeading("设置", Icons.Filled.Settings, Color(0xFF8B5CF6))
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            SettingsNavRow(
+                                icon = Icons.Filled.Tune,
+                                title = "系统设置",
+                                subtitle = "字体大小、主题模式",
+                                accent = Color(0xFF8B5CF6),
+                                onClick = onOpenSystemSettings
                             )
-                            DisplaySettingGroup(
-                                title = "主题模式",
-                                options = listOf(
-                                    DisplayOption("跟随系统", DisplayThemeMode.System),
-                                    DisplayOption("浅色", DisplayThemeMode.Light),
-                                    DisplayOption("深色", DisplayThemeMode.Dark)
-                                ),
-                                selected = uiState.displayThemeMode,
-                                onSelect = viewModel::setDisplayThemeMode
+                            SettingsNavRow(
+                                icon = Icons.Filled.Router,
+                                title = "小脑配置",
+                                subtitle = uiState.cerebellumSettings.baseUrl.ifBlank { "未配置服务地址" },
+                                accent = TechBlue,
+                                onClick = onOpenCerebellumConfig
                             )
                         }
                     }
@@ -185,10 +201,12 @@ fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onOpenVersion
                     radius = 12,
                     dark = true
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         SectionHeading("版本信息", Icons.Filled.Info, Warning)
-                        Text("执法链路 v${uiState.versionUpdate.currentVersionName} · 加密通道已启用 · 核心服务已同步", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
-                        StatusTag(uiState.versionUpdate.latestVersionName?.let { "发现新版本 v$it" } ?: "点击检查更新", Warning)
+                        Column(Modifier.padding(start = ProfileTextStartPadding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("执法链路 v${uiState.versionUpdate.currentVersionName} · 加密通道已启用 · 核心服务已同步", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
+                            StatusTag(uiState.versionUpdate.latestVersionName?.let { "发现新版本 v$it" } ?: "点击检查更新", Warning)
+                        }
                     }
                 }
             }
@@ -198,6 +216,201 @@ fun ProfileScreen(uiState: AppUiState, viewModel: PatrolViewModel, onOpenVersion
             }
         }
     }
+}
+
+@Composable
+fun SystemSettingsScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
+    SettingsPageScaffold(title = "系统设置", onBack = onBack) {
+        item {
+            PatrolCard(radius = 12, dark = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionHeading("显示设置", Icons.Filled.Settings, Color(0xFF8B5CF6))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DisplaySettingGroup(
+                            title = "字体大小",
+                            options = listOf(
+                                DisplayOption("紧凑", FontSizeMode.Compact),
+                                DisplayOption("标准", FontSizeMode.Standard),
+                                DisplayOption("大号", FontSizeMode.Large)
+                            ),
+                            selected = uiState.fontSizeMode,
+                            onSelect = viewModel::setFontSizeMode
+                        )
+                        DisplaySettingGroup(
+                            title = "主题模式",
+                            options = listOf(
+                                DisplayOption("跟随系统", DisplayThemeMode.System),
+                                DisplayOption("浅色", DisplayThemeMode.Light),
+                                DisplayOption("深色", DisplayThemeMode.Dark)
+                            ),
+                            selected = uiState.displayThemeMode,
+                            onSelect = viewModel::setDisplayThemeMode
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CerebellumConfigScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
+    SettingsPageScaffold(title = "小脑配置", onBack = onBack) {
+        item {
+            PatrolCard(radius = 12, dark = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionHeading("小脑连接", Icons.Filled.Router, TechBlue)
+                    Text(
+                        "模拟器访问本机小脑用 http://10.0.2.2:8088；真机或现场设备填写小脑热点/局域网地址。",
+                        color = colors.textMuted,
+                        style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                    RuntimeTextField(
+                        label = "小脑服务地址",
+                        value = uiState.cerebellumSettings.baseUrl,
+                        placeholder = "http://192.168.4.1:8088",
+                        keyboardType = KeyboardType.Uri,
+                        onValueChange = viewModel::updateCerebellumBaseUrl
+                    )
+                    RuntimeTextField(
+                        label = "API Key",
+                        value = uiState.cerebellumSettings.apiKey,
+                        placeholder = "未启用鉴权时可留空",
+                        keyboardType = KeyboardType.Text,
+                        onValueChange = viewModel::updateCerebellumApiKey
+                    )
+                    PrimaryAction(
+                        text = if (uiState.cerebellumSettings.saving) "保存中" else "保存小脑连接",
+                        onClick = viewModel::saveCerebellumSettings,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPageScaffold(
+    title: String,
+    onBack: () -> Unit,
+    content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    Box(Modifier.fillMaxSize().background(colors.page)) {
+        Column(Modifier.fillMaxSize()) {
+            SettingsTopBar(title = title, onBack = onBack)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(top = 14.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                content = content
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsTopBar(title: String, onBack: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .background(colors.topBar)
+            .drawBehind {
+                val stroke = 1.dp.toPx()
+                drawLine(
+                    color = colors.border.copy(alpha = 0.45f),
+                    start = Offset(0f, size.height - stroke / 2f),
+                    end = Offset(size.width, size.height - stroke / 2f),
+                    strokeWidth = stroke
+                )
+            }
+            .padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(40.dp).clickable(onClick = onBack), contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = TechBlue, modifier = Modifier.size(28.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(title, color = TechBlue, fontSize = 22.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
+private fun SettingsNavRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ProfileIconTextGap)
+    ) {
+        Box(
+            Modifier.size(ProfileIconSlotSize),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                Modifier
+                    .size(ProfileMenuIconBoxSize)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(accent.copy(alpha = if (colors.dark) 0.18f else 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, color = colors.text, style = PatrolTextStyle.BodyStrong.copy(fontSize = 16.sp, lineHeight = 21.sp))
+            Text(subtitle, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 1)
+        }
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = colors.textSubtle, modifier = Modifier.size(26.dp))
+    }
+}
+
+@Composable
+private fun RuntimeTextField(
+    label: String,
+    value: String,
+    placeholder: String,
+    keyboardType: KeyboardType,
+    onValueChange: (String) -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(label, fontWeight = FontWeight.Bold) },
+        placeholder = { Text(placeholder, color = colors.textSubtle) },
+        singleLine = true,
+        shape = RoundedCornerShape(10.dp),
+        textStyle = PatrolTextStyle.Body.copy(color = colors.text),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = TechBlue,
+            unfocusedBorderColor = colors.border,
+            focusedContainerColor = colors.surface,
+            unfocusedContainerColor = colors.surface,
+            cursorColor = TechBlue,
+            focusedLabelColor = TechBlue,
+            unfocusedLabelColor = colors.textMuted
+        )
+    )
 }
 
 private data class DisplayOption<T>(val label: String, val value: T)
@@ -212,15 +425,15 @@ private fun profileTitleColor(): Color {
 private fun SectionHeading(title: String, icon: ImageVector, accent: Color) {
     val colors = PatrolDisplay.colors
     val titleColor = profileTitleColor()
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ProfileIconTextGap)) {
         Box(
             Modifier
-                .size(30.dp)
-                .clip(RoundedCornerShape(9.dp))
+                .size(ProfileIconSlotSize)
+                .clip(RoundedCornerShape(12.dp))
                 .background(accent.copy(alpha = if (colors.dark) 0.18f else 0.12f)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(17.dp))
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(25.dp))
         }
         Text(title, color = titleColor, style = PatrolTextStyle.CardTitle.copy(fontSize = 16.sp, lineHeight = 21.sp))
     }
@@ -498,13 +711,21 @@ private fun ContactInfo(icon: ImageVector, label: String, value: String, accent:
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(ProfileIconTextGap)
     ) {
         Box(
-            Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(accent.copy(alpha = 0.12f)),
+            Modifier.size(ProfileIconSlotSize),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+            Box(
+                Modifier
+                    .size(ProfileMenuIconBoxSize)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(accent.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
+            }
         }
         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(label, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Black))

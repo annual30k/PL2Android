@@ -116,6 +116,8 @@ private class PatrolViewModelFactory(
             notificationGateway = dependencies.notificationGateway,
             versionGateway = dependencies.versionGateway,
             versionInstaller = dependencies.versionInstaller,
+            cerebellumApi = dependencies.cerebellumApi,
+            runtimeConfigStore = dependencies.configStore,
             onSessionChanged = dependencies.tokenStore::update
         ) as T
     }

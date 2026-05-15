@@ -15,6 +15,7 @@ interface CerebellumApi {
     suspend fun listSyncTasks(): CerebellumSyncTaskListResponseDto
     suspend fun runSyncTask(taskId: String): CerebellumSyncTaskResponseDto
     suspend fun summarizeVideo(request: CerebellumVideoSummaryRequestDto): CerebellumVideoSummaryResponseDto
+    suspend fun createReport(request: CerebellumReportRequestDto): CerebellumReportResponseDto
 }
 
 data class CerebellumHealthDto(
@@ -181,4 +182,29 @@ data class CerebellumVideoSummaryRequestDto(
 data class CerebellumVideoSummaryResponseDto(
     val summary: JsonElement,
     val event: CerebellumEventDto
+)
+
+data class CerebellumReportRequestDto(
+    @SerializedName("mission_id") val missionId: String,
+    @SerializedName("report_type") val reportType: String = "daily",
+    @SerializedName("prefer_quality") val preferQuality: Boolean = false,
+    @SerializedName("operator_note") val operatorNote: String? = null,
+    @SerializedName("max_tokens") val maxTokens: Int = 1200
+)
+
+data class CerebellumReportResponseDto(
+    val report: CerebellumReportDto,
+    val event: CerebellumEventDto
+)
+
+data class CerebellumReportDto(
+    @SerializedName("mission_id") val missionId: String,
+    @SerializedName("report_type") val reportType: String,
+    val model: String,
+    @SerializedName("context_tokens") val contextTokens: Int? = null,
+    @SerializedName("max_context_tokens") val maxContextTokens: Int? = null,
+    @SerializedName("generated_at") val generatedAt: String,
+    val content: String,
+    @SerializedName("requires_human_confirmation") val requiresHumanConfirmation: Boolean,
+    val backend: String
 )

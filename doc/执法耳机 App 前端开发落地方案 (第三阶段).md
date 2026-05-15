@@ -24,7 +24,7 @@
 │   │   └── usecase         # 登录、绑定设备、上传证据、处置预警等用例
 │   ├── presentation        # 展示层
 │   │   ├── navigation      # Jetpack Navigation 路由
-│   │   ├── screen          # 登录、设备、媒体、预警、SOS、我的页面
+│   │   ├── screen          # 登录、设备、媒体、预警、日报、SOS、我的页面
 │   │   ├── component       # 私有 Compose 组件库
 │   │   └── theme           # 色彩、字号、间距、形状规范
 │   ├── service             # 前台服务、定位/心跳/推流保活
@@ -43,6 +43,7 @@
 - **设备状态机**: `Disconnected` -> `Scanning` -> `Connecting` -> `Connected` -> `Syncing(同步配置)` -> `Ready`
 - **上传状态机**: `Pending` -> `Hashing(计算哈希)` -> `Uploading(分片)` -> `Verifying(校验)` -> `Success/Fail`
 - **预警状态机**: `Received` -> `Acknowledged(已接警)` -> `Handling(处理中)` -> `Closed`
+- **日报生成状态机**: `Idle` -> `Generating(请求小脑)` -> `Ready(草稿可复核)` -> `Failed`
 
 ### 2.2 异常可视化体系 (Visualized Exceptions)
 全方位覆盖用户提到的异常场景，不让用户处于信息盲区：
@@ -54,6 +55,7 @@
 | **WebSocket 断开** | `wsService.onClose`         | 状态栏“云端连接”图标变红并闪烁       | 自动重连逻辑，显示倒计时 |
 | **推流异常**       | `streamRelay.onFail`        | 预览窗覆盖半透明黑色，显示“推流中断” | 增加“切换线路”按钮       |
 | **存储不足**       | `fileService.preCheck`      | 媒体下载前强制弹窗提示               | 引导清理手机空间         |
+| **小脑不可达**     | `cerebellumApi.createReport` | 日报页展示错误卡片和全局提示         | 检查小脑热点、Base URL 或 API Key |
 
 ### 2.3 关键操作二次确认 (Confirmation Strategy)
 - **SOS 触发**: 采用“长按 3 秒”或“防误触滑块”，并伴随强震动反馈。
@@ -79,6 +81,13 @@
 - **难点**: 移动端作为 RTSP -> RTMP 的中转站，功耗极高。
 - **方案**: 优先使用 `MediaCodec` H.264 硬编硬解；低延迟对讲使用 WebRTC Native SDK。
 - **保活**: 推流和对讲期间启动 Android 前台服务，展示常驻通知；网络变化后自动重建链路。
+
+### 3.4 小脑日报接口 (Cerebellum Report)
+- **配置**: 通过 `PATROL_CEREBELLUM_BASE_URL` 和 `PATROL_CEREBELLUM_API_KEY` 注入小脑地址和密钥。
+- **运行时配置**: App 内“我的 → 小脑连接”可保存小脑服务地址和 API Key 到 `patrol_runtime_config`，保存后立即重建小脑客户端，不需要重新打包。
+- **客户端**: `data/edge/OkHttpCerebellumApi.kt` 负责访问小脑 REST，公网或跨网段必须使用 HTTPS/mTLS 网关。
+- **日报接口**: `POST /api/v1/llm/report`，请求 `mission_id`、`report_type=daily`、`prefer_quality`、`operator_note`、`max_tokens`。
+- **页面**: `presentation/screen/DailyReportScreen.kt` 展示任务编号、人工备注、生成进度、报告正文和人工复核提示。
 
 ---
 

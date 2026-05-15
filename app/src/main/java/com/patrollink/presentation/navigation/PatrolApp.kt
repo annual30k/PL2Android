@@ -29,7 +29,10 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -67,11 +70,14 @@ import com.patrollink.presentation.permission.PermissionGate
 import com.patrollink.presentation.screen.AddDeviceScreen
 import com.patrollink.presentation.screen.AlertDetailScreen
 import com.patrollink.presentation.screen.AlertListScreen
+import com.patrollink.presentation.screen.CerebellumConfigScreen
 import com.patrollink.presentation.screen.DeviceScreen
+import com.patrollink.presentation.screen.DailyReportScreen
 import com.patrollink.presentation.screen.LoginScreen
 import com.patrollink.presentation.screen.MediaScreen
 import com.patrollink.presentation.screen.ProfileScreen
 import com.patrollink.presentation.screen.SosScreen
+import com.patrollink.presentation.screen.SystemSettingsScreen
 import com.patrollink.presentation.screen.VersionInfoScreen
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.PatrolTheme
@@ -84,7 +90,10 @@ private enum class Route(val path: String, val label: String) {
     Device("device", "设备"),
     Alert("alert", "预警"),
     Media("media", "媒体"),
+    Report("report", "日报"),
     Profile("profile", "我的"),
+    SystemSettings("systemSettings", "系统设置"),
+    CerebellumConfig("cerebellumConfig", "小脑配置"),
     VersionInfo("versionInfo", "版本"),
     AddDevice("addDevice", "添加设备"),
     Sos("sos", "SOS")
@@ -111,7 +120,12 @@ fun PatrolApp(
 
             val backStack by navController.currentBackStackEntryAsState()
             val currentRoute = backStack?.destination?.route.orEmpty()
-            val showBottomBar = currentRoute !in setOf(Route.Sos.path, Route.VersionInfo.path) && !currentRoute.startsWith("alertDetail")
+            val showBottomBar = currentRoute !in setOf(
+                Route.Sos.path,
+                Route.SystemSettings.path,
+                Route.CerebellumConfig.path,
+                Route.VersionInfo.path
+            ) && !currentRoute.startsWith("alertDetail")
             val showTopBar = showBottomBar
             val lowBattery = uiState.device.battery < 15
             var dismissedLowBatteryReminder by rememberSaveable(uiState.device.id, lowBattery) { mutableStateOf(false) }
@@ -171,12 +185,23 @@ fun PatrolApp(
                             composable(Route.Media.path) {
                                 MediaScreen(uiState, viewModel)
                             }
+                            composable(Route.Report.path) {
+                                DailyReportScreen(uiState, viewModel)
+                            }
                             composable(Route.Profile.path) {
                                 ProfileScreen(
                                     uiState = uiState,
                                     viewModel = viewModel,
-                                    onOpenVersionInfo = { navController.navigate(Route.VersionInfo.path) }
+                                    onOpenVersionInfo = { navController.navigate(Route.VersionInfo.path) },
+                                    onOpenSystemSettings = { navController.navigate(Route.SystemSettings.path) },
+                                    onOpenCerebellumConfig = { navController.navigate(Route.CerebellumConfig.path) }
                                 )
+                            }
+                            composable(Route.SystemSettings.path) {
+                                SystemSettingsScreen(uiState = uiState, viewModel = viewModel, onBack = { navController.popBackStack() })
+                            }
+                            composable(Route.CerebellumConfig.path) {
+                                CerebellumConfigScreen(uiState = uiState, viewModel = viewModel, onBack = { navController.popBackStack() })
                             }
                             composable(Route.VersionInfo.path) {
                                 VersionInfoScreen(uiState = uiState, viewModel = viewModel, onBack = { navController.popBackStack() })
@@ -409,7 +434,7 @@ private fun messageStyleFor(type: OperationMessageType, dark: Boolean): MessageV
 private fun PatrolBottomBar(navController: NavHostController) {
     val backStack by navController.currentBackStackEntryAsState()
     val current = backStack?.destination?.route.orEmpty()
-    val tabs = listOf(Route.Device, Route.Alert, Route.Media, Route.Profile)
+    val tabs = listOf(Route.Device, Route.Alert, Route.Media, Route.Report, Route.Profile)
     val colors = PatrolDisplay.colors
     val barBg = colors.bottomBar
     val inactive = colors.textSubtle
@@ -448,7 +473,7 @@ private fun PatrolBottomBar(navController: NavHostController) {
                             launchSingleTop = true
                         }
                     }
-                    .padding(horizontal = 15.dp, vertical = 7.dp)
+                    .padding(horizontal = 9.dp, vertical = 7.dp)
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
@@ -456,16 +481,19 @@ private fun PatrolBottomBar(navController: NavHostController) {
                             Route.Device -> Icons.Filled.Devices
                             Route.Alert -> Icons.Filled.Warning
                             Route.Media -> Icons.Filled.Folder
+                            Route.Report -> Icons.AutoMirrored.Filled.ReceiptLong
                             Route.Profile -> Icons.Filled.Person
+                            Route.SystemSettings -> Icons.Filled.Settings
+                            Route.CerebellumConfig -> Icons.Filled.Router
                             Route.VersionInfo -> Icons.Filled.Folder
                             Route.AddDevice -> Icons.Filled.Devices
                             Route.Sos -> Icons.Filled.Warning
                         },
                         contentDescription = tab.label,
                         tint = color,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(25.dp)
                     )
-                    Text(tab.label, fontWeight = FontWeight.Bold, color = color, fontSize = 12.sp, lineHeight = 16.sp)
+                    Text(tab.label, fontWeight = FontWeight.Bold, color = color, fontSize = 11.sp, lineHeight = 15.sp)
                 }
             }
         }

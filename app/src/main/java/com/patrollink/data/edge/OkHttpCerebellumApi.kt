@@ -10,11 +10,13 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 class OkHttpCerebellumApi(
     private val baseUrl: String,
     private val apiKeyProvider: () -> String? = { null },
-    private val client: OkHttpClient = OkHttpClient(),
+    private val client: OkHttpClient = defaultClient(),
+    private val reportClient: OkHttpClient = defaultReportClient(),
     private val gson: Gson = Gson()
 ) : CerebellumApi {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
@@ -59,24 +61,35 @@ class OkHttpCerebellumApi(
     override suspend fun summarizeVideo(request: CerebellumVideoSummaryRequestDto): CerebellumVideoSummaryResponseDto =
         post("api/v1/video/summary", request)
 
+    override suspend fun createReport(request: CerebellumReportRequestDto): CerebellumReportResponseDto =
+        post("api/v1/llm/report", request, reportClient)
+
     private suspend inline fun <reified T> get(path: String): T = execute("GET", path, null)
 
     private suspend inline fun <reified T> post(path: String, body: Any): T =
-        execute("POST", path, gson.toJson(body))
+        post(path, body, client)
 
-    private suspend inline fun <reified T> execute(method: String, path: String, bodyJson: String?): T {
+    private suspend inline fun <reified T> post(path: String, body: Any, callClient: OkHttpClient): T =
+        execute("POST", path, gson.toJson(body), callClient)
+
+    private suspend inline fun <reified T> execute(
+        method: String,
+        path: String,
+        bodyJson: String?,
+        callClient: OkHttpClient = client
+    ): T {
         val body = bodyJson?.toRequestBody(jsonMediaType)
         val builder = Request.Builder()
             .url(urlFor(path))
             .method(method, if (method == "GET") null else body ?: ByteArray(0).toRequestBody(jsonMediaType))
             .header("Accept", "application/json")
         apiKeyProvider()?.takeIf { it.isNotBlank() }?.let { builder.header("X-API-Key", it) }
-        return executeRequest(builder.build(), object : TypeToken<T>() {}.type)
+        return executeRequest(callClient, builder.build(), object : TypeToken<T>() {}.type)
     }
 
-    private suspend fun <T> executeRequest(request: Request, type: java.lang.reflect.Type): T =
+    private suspend fun <T> executeRequest(callClient: OkHttpClient, request: Request, type: java.lang.reflect.Type): T =
         withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { response ->
+            callClient.newCall(request).execute().use { response ->
                 val raw = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
                     error("Cerebellum HTTP ${response.code}: $raw")
@@ -108,5 +121,23 @@ class OkHttpCerebellumApi(
         return parts[0] == 10 ||
             (parts[0] == 172 && parts[1] in 16..31) ||
             (parts[0] == 192 && parts[1] == 168)
+    }
+
+    private companion object {
+        fun defaultClient(): OkHttpClient =
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .callTimeout(30, TimeUnit.SECONDS)
+                .build()
+
+        fun defaultReportClient(): OkHttpClient =
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(240, TimeUnit.SECONDS)
+                .callTimeout(260, TimeUnit.SECONDS)
+                .build()
     }
 }

@@ -1,6 +1,7 @@
 package com.patrollink.data.edge
 
 import kotlinx.coroutines.test.runTest
+import com.google.gson.JsonParser
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
@@ -96,6 +97,65 @@ class OkHttpCerebellumApiTest {
             assertEquals("person", response.result.detections.first().label)
             assertTrue(body.contains("frame_id"))
             assertTrue(body.contains("target_classes"))
+        }
+    }
+
+    @Test
+    fun createReportPostsDailyReportRequestAndParsesContent() = runTest {
+        val server = MockWebServer()
+        server.use {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody(
+                        """
+                        {
+                          "report":{
+                            "mission_id":"mission-20260515-POLICE_9527",
+                            "report_type":"daily",
+                            "model":"Qwen3.5-4B-Q4_K_M",
+                            "context_tokens":8192,
+                            "max_context_tokens":32768,
+                            "generated_at":"2026-05-15T08:00:00Z",
+                            "content":"今日巡逻日报草稿",
+                            "requires_human_confirmation":true,
+                            "backend":"llama.cpp"
+                          },
+                          "event":{
+                            "event_id":"evt-report-1",
+                            "event_type":"report_generated",
+                            "created_at":"2026-05-15T08:00:00Z",
+                            "payload":{},
+                            "human_status":"unconfirmed"
+                          }
+                        }
+                        """.trimIndent()
+                    )
+            )
+
+            val api = OkHttpCerebellumApi(baseUrl = server.url("/").toString())
+            val response = api.createReport(
+                CerebellumReportRequestDto(
+                    missionId = "mission-20260515-POLICE_9527",
+                    reportType = "daily",
+                    preferQuality = true,
+                    operatorNote = "重点巡逻商业街",
+                    maxTokens = 1200
+                )
+            )
+            val request = server.takeRequest()
+            val body = request.body.readUtf8()
+            val json = JsonParser.parseString(body).asJsonObject
+
+            assertEquals("/api/v1/llm/report", request.path)
+            assertEquals("今日巡逻日报草稿", response.report.content)
+            assertEquals("llama.cpp", response.report.backend)
+            assertEquals("mission-20260515-POLICE_9527", json["mission_id"].asString)
+            assertEquals("daily", json["report_type"].asString)
+            assertTrue(json["prefer_quality"].asBoolean)
+            assertEquals("重点巡逻商业街", json["operator_note"].asString)
+            assertEquals(1200, json["max_tokens"].asInt)
         }
     }
 }

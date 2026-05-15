@@ -7,11 +7,12 @@
 - 执法耳机接入与控制
 - 媒体采集与文件处理
 - 预警接收与处置联动
+- 调用边缘小脑生成执勤日报草稿
 - SOS 上报
 - 流媒体中继与音频对讲
 - 与云端保持会话、心跳、位置、状态同步
 
-文档中明确 App 模块拆分为：**登录页、设备页、媒体页、预警页、SOS 页、我的页**，网络层包含 **REST API + WebSocket + BLE Service + Wi-Fi File Service + Stream Relay Service**。
+文档中明确 App 模块拆分为：**登录页、设备页、媒体页、预警页、日报页、SOS 页、我的页**，网络层包含 **REST API + WebSocket + BLE Service + Wi-Fi File Service + Stream Relay Service + Cerebellum REST**。
 
 ## 2）移动端功能模块拆分
 
@@ -113,6 +114,18 @@
 
 文档后部还能看到 App 版本检查与更新步骤。
 
+### G. 日报 / 小脑报告生成
+
+- 日报页
+- 输入或自动生成 `mission_id`
+- 填写人工补充说明
+- 调用小脑 `POST /api/v1/llm/report`
+- 固定使用 `report_type=daily`
+- 展示日报正文、模型、生成后端、生成时间
+- 明确提示 AI 草稿需要执勤人员复核后入库
+
+这个模块用于把现场采集、识别候选、人工备注和小脑本地大模型报告能力连接起来。弱网或离线执勤场景下，日报优先由小脑本地生成，网络恢复后再同步到后台。
+
 ## 3）移动端技术栈
 
 - 开发语言：Kotlin
@@ -120,7 +133,7 @@
 - 架构：MVVM + Clean Architecture
 - 异步与状态：Kotlin Coroutines + Flow + ViewModel
 - 依赖注入：Hilt
-- 网络通信：Retrofit + OkHttp + WebSocket
+- 网络通信：Retrofit + OkHttp + WebSocket + 小脑直连 REST
 - 本地存储：Room + DataStore + Android Keystore
 - BLE：BluetoothLeScanner / BluetoothGatt
 - 文件：Wi-Fi File Service、本地沙盒、MediaStore / Storage Access Framework

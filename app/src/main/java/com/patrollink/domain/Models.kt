@@ -106,6 +106,29 @@ data class VersionUpdateUiState(
     val message: String? = null
 )
 
+data class DailyReport(
+    val missionId: String,
+    val generatedAt: String,
+    val content: String,
+    val backend: String,
+    val model: String,
+    val requiresHumanConfirmation: Boolean
+)
+
+data class DailyReportUiState(
+    val missionId: String = "",
+    val operatorNote: String = "",
+    val generating: Boolean = false,
+    val report: DailyReport? = null,
+    val lastError: String? = null
+)
+
+data class CerebellumSettingsUiState(
+    val baseUrl: String = "",
+    val apiKey: String = "",
+    val saving: Boolean = false
+)
+
 data class AppUiState(
     val isLoggedIn: Boolean = false,
     val networkOnline: Boolean = true,
@@ -119,6 +142,8 @@ data class AppUiState(
     val fontSizeMode: FontSizeMode = FontSizeMode.Standard,
     val displayThemeMode: DisplayThemeMode = DisplayThemeMode.System,
     val versionUpdate: VersionUpdateUiState = VersionUpdateUiState(),
+    val dailyReport: DailyReportUiState = DailyReportUiState(),
+    val cerebellumSettings: CerebellumSettingsUiState = CerebellumSettingsUiState(),
     val operationMessage: OperationMessage? = null,
     val deviceCapabilities: DeviceCapabilities = DeviceCapabilities(),
     val deviceWifiState: DeviceWifiState = DeviceWifiState(),

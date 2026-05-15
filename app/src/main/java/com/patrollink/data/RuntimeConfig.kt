@@ -22,6 +22,11 @@ data class RuntimeConfig(
     val hasCerebellum: Boolean get() = cerebellumBaseUrl.isNotBlank()
 }
 
+data class CerebellumRuntimeSettings(
+    val baseUrl: String,
+    val apiKey: String
+)
+
 class RuntimeConfigStore(context: Context) {
     private val prefs = context.getSharedPreferences("patrol_runtime_config", Context.MODE_PRIVATE)
 
@@ -37,6 +42,22 @@ class RuntimeConfigStore(context: Context) {
         streamRelayUrl = prefs.getString(KEY_STREAM_RELAY_URL, null).orBuildConfig(BuildConfig.STREAM_RELAY_URL),
         useRealBle = prefs.getBoolean(KEY_USE_REAL_BLE, BuildConfig.USE_REAL_BLE)
     )
+
+    fun readCerebellumSettings(): CerebellumRuntimeSettings =
+        read().let { config ->
+            CerebellumRuntimeSettings(
+                baseUrl = config.cerebellumBaseUrl,
+                apiKey = config.cerebellumApiKey
+            )
+        }
+
+    fun saveCerebellumSettings(baseUrl: String, apiKey: String): CerebellumRuntimeSettings {
+        prefs.edit()
+            .putString(KEY_CEREBELLUM_BASE_URL, baseUrl.trim())
+            .putString(KEY_CEREBELLUM_API_KEY, apiKey.trim())
+            .apply()
+        return readCerebellumSettings()
+    }
 
     private fun String?.orBuildConfig(buildConfigValue: String): String =
         this?.trim().takeUnless { it.isNullOrBlank() } ?: buildConfigValue.trim()

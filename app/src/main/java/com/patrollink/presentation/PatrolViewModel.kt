@@ -4,13 +4,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.patrollink.data.MockVersionGateway
 import com.patrollink.data.MockPatrolRepository
+import com.patrollink.data.RuntimeConfigStore
 import com.patrollink.data.ServiceFactory
+import com.patrollink.data.edge.CerebellumApi
+import com.patrollink.data.edge.CerebellumReportRequestDto
+import com.patrollink.data.edge.OkHttpCerebellumApi
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.remote.AlertDraftRequestDto
 import com.patrollink.data.remote.UploadAttachmentDto
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthSession
+import com.patrollink.domain.DailyReport
 import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCapabilities
@@ -62,13 +67,18 @@ class PatrolViewModel(
     private val emergencyContactGateway: EmergencyContactGateway? = null,
     private val notificationGateway: PatrolNotificationGateway? = null,
     private val versionInstaller: VersionInstaller? = null,
+    private var cerebellumApi: CerebellumApi? = null,
+    private val runtimeConfigStore: RuntimeConfigStore? = null,
     private val onSessionChanged: (AuthSession?) -> Unit = {}
 ) : ViewModel() {
     private val repository = MockPatrolRepository()
     private val _uiState = MutableStateFlow(
         repository.initialState().copy(
             fontSizeMode = settingsStore?.readFontSizeMode() ?: FontSizeMode.Standard,
-            displayThemeMode = settingsStore?.readDisplayThemeMode() ?: DisplayThemeMode.System
+            displayThemeMode = settingsStore?.readDisplayThemeMode() ?: DisplayThemeMode.System,
+            cerebellumSettings = runtimeConfigStore?.readCerebellumSettings()?.let {
+                com.patrollink.domain.CerebellumSettingsUiState(baseUrl = it.baseUrl, apiKey = it.apiKey)
+            } ?: com.patrollink.domain.CerebellumSettingsUiState()
         )
     )
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
@@ -253,6 +263,103 @@ class PatrolViewModel(
     fun refreshPatrolArea() = viewModelScope.launch {
         runCatching { coordinator.currentPatrolArea() }
             .onSuccess { patrolArea -> _uiState.update { it.copy(patrolArea = patrolArea) } }
+    }
+
+    fun updateDailyReportMissionId(missionId: String) = _uiState.update { state ->
+        state.copy(dailyReport = state.dailyReport.copy(missionId = missionId, lastError = null))
+    }
+
+    fun updateDailyReportOperatorNote(note: String) = _uiState.update { state ->
+        state.copy(dailyReport = state.dailyReport.copy(operatorNote = note, lastError = null))
+    }
+
+    fun updateCerebellumBaseUrl(baseUrl: String) = _uiState.update { state ->
+        state.copy(cerebellumSettings = state.cerebellumSettings.copy(baseUrl = baseUrl))
+    }
+
+    fun updateCerebellumApiKey(apiKey: String) = _uiState.update { state ->
+        state.copy(cerebellumSettings = state.cerebellumSettings.copy(apiKey = apiKey))
+    }
+
+    fun saveCerebellumSettings() = viewModelScope.launch {
+        val store = runtimeConfigStore ?: return@launch showOperationMessage("运行时配置存储不可用", OperationMessageType.Error)
+        val settings = _uiState.value.cerebellumSettings
+        val baseUrl = settings.baseUrl.trim()
+        val apiKey = settings.apiKey.trim()
+        val nextApi = if (baseUrl.isBlank()) {
+            null
+        } else {
+            runCatching {
+                OkHttpCerebellumApi(baseUrl = baseUrl, apiKeyProvider = { apiKey })
+            }.getOrElse {
+                return@launch showOperationMessage("小脑地址格式不正确", OperationMessageType.Error)
+            }
+        }
+        _uiState.update { state -> state.copy(cerebellumSettings = state.cerebellumSettings.copy(saving = true)) }
+        val saved = withContext(Dispatchers.IO) { store.saveCerebellumSettings(baseUrl, apiKey) }
+        cerebellumApi = nextApi
+        _uiState.update { state ->
+            state.copy(
+                cerebellumSettings = state.cerebellumSettings.copy(baseUrl = saved.baseUrl, apiKey = saved.apiKey, saving = false),
+                operationMessage = operationMessage(
+                    if (saved.baseUrl.isBlank()) "小脑连接已清空" else "小脑连接设置已保存",
+                    OperationMessageType.Success
+                )
+            )
+        }
+    }
+
+    fun generateDailyReport() = viewModelScope.launch {
+        val api = cerebellumApi ?: return@launch showOperationMessage("小脑服务地址未配置", OperationMessageType.Warning)
+        val current = _uiState.value
+        val missionId = current.dailyReport.missionId.ifBlank { defaultMissionId(current.user.badgeNo) }
+        val note = current.dailyReport.operatorNote.ifBlank { null }
+        _uiState.update { state ->
+            state.copy(
+                dailyReport = state.dailyReport.copy(
+                    missionId = missionId,
+                    generating = true,
+                    lastError = null
+                ),
+                operationMessage = operationMessage("正在请求小脑生成日报", OperationMessageType.Info)
+            )
+        }
+        runCatching {
+            api.createReport(
+                CerebellumReportRequestDto(
+                    missionId = missionId,
+                    reportType = "daily",
+                    preferQuality = true,
+                    operatorNote = note
+                )
+            ).report
+        }.onSuccess { report ->
+            _uiState.update { state ->
+                state.copy(
+                    dailyReport = state.dailyReport.copy(
+                        generating = false,
+                        report = DailyReport(
+                            missionId = report.missionId,
+                            generatedAt = report.generatedAt,
+                            content = report.content,
+                            backend = report.backend,
+                            model = report.model,
+                            requiresHumanConfirmation = report.requiresHumanConfirmation
+                        ),
+                        lastError = null
+                    ),
+                    operationMessage = operationMessage("小脑日报已生成", OperationMessageType.Success)
+                )
+            }
+        }.onFailure { throwable ->
+            val message = throwable.message?.takeIf { it.isNotBlank() } ?: "小脑日报生成失败"
+            _uiState.update { state ->
+                state.copy(
+                    dailyReport = state.dailyReport.copy(generating = false, lastError = message),
+                    operationMessage = operationMessage("小脑日报生成失败", OperationMessageType.Error)
+                )
+            }
+        }
     }
 
     fun closeAlert(
@@ -602,6 +709,11 @@ class PatrolViewModel(
 
     fun showOperationMessage(message: String, type: OperationMessageType) = _uiState.update {
         it.copy(operationMessage = operationMessage(message, type))
+    }
+
+    private fun defaultMissionId(badgeNo: String): String {
+        val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
+        return "mission-$day-${badgeNo.ifBlank { "operator" }}"
     }
 
     private fun observeDeviceEvents() = viewModelScope.launch {

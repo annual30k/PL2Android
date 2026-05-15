@@ -13,6 +13,7 @@ import com.patrollink.data.edge.CerebellumReportRequestDto
 import com.patrollink.data.edge.OkHttpCerebellumApi
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.remote.AlertDraftRequestDto
+import com.patrollink.data.remote.CerebellumSettingsDto
 import com.patrollink.data.remote.DailyReportContentUpdateDto
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.remote.UploadAttachmentDto
@@ -85,10 +86,7 @@ class PatrolViewModel(
     private val _uiState = MutableStateFlow(
         EmptyAppState.create().copy(
             fontSizeMode = settingsStore?.readFontSizeMode() ?: FontSizeMode.Standard,
-            displayThemeMode = settingsStore?.readDisplayThemeMode() ?: DisplayThemeMode.System,
-            cerebellumSettings = runtimeConfigStore?.readCerebellumSettings()?.let {
-                com.patrollink.domain.CerebellumSettingsUiState(baseUrl = it.baseUrl, apiKey = it.apiKey)
-            } ?: com.patrollink.domain.CerebellumSettingsUiState()
+            displayThemeMode = settingsStore?.readDisplayThemeMode() ?: DisplayThemeMode.System
         )
     )
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
@@ -134,7 +132,8 @@ class PatrolViewModel(
                     state.copy(
                         isLoggedIn = false,
                         sessionRestoring = false,
-                        networkOnline = false
+                        networkOnline = false,
+                        cerebellumSettings = com.patrollink.domain.CerebellumSettingsUiState()
                     )
                 }
             }
@@ -183,7 +182,16 @@ class PatrolViewModel(
         scannedDevicesJob = null
         onSessionChanged(null)
         secureStore?.let { store -> withContext(Dispatchers.IO) { store.clearSession() } }
-        _uiState.update { it.copy(isLoggedIn = false, sessionRestoring = false, scannedDevices = emptyList(), operationMessage = operationMessage("已退出登录", OperationMessageType.Info)) }
+        cerebellumApi = null
+        _uiState.update {
+            it.copy(
+                isLoggedIn = false,
+                sessionRestoring = false,
+                scannedDevices = emptyList(),
+                cerebellumSettings = com.patrollink.domain.CerebellumSettingsUiState(),
+                operationMessage = operationMessage("已退出登录", OperationMessageType.Info)
+            )
+        }
     }
 
     private fun startAuthenticatedRefreshes() {
@@ -192,6 +200,7 @@ class PatrolViewModel(
         refreshMediaFiles()
         refreshDeviceCapabilities()
         refreshPatrolArea()
+        refreshCerebellumSettings()
     }
 
     fun toggleRecord() = viewModelScope.launch {
@@ -427,7 +436,7 @@ class PatrolViewModel(
     }
 
     fun saveCerebellumSettings() = viewModelScope.launch {
-        val store = runtimeConfigStore ?: return@launch showOperationMessage("运行时配置存储不可用", OperationMessageType.Error)
+        val api = patrolRestApi ?: return@launch showOperationMessage("后台服务未配置，无法保存小脑连接", OperationMessageType.Error)
         val settings = _uiState.value.cerebellumSettings
         val baseUrl = settings.baseUrl.trim()
         val apiKey = settings.apiKey.trim()
@@ -441,14 +450,56 @@ class PatrolViewModel(
             }
         }
         _uiState.update { state -> state.copy(cerebellumSettings = state.cerebellumSettings.copy(saving = true)) }
-        val saved = withContext(Dispatchers.IO) { store.saveCerebellumSettings(baseUrl, apiKey) }
-        cerebellumApi = nextApi
+        runCatching { api.saveCerebellumSettings(CerebellumSettingsDto(baseUrl = baseUrl, apiKey = apiKey)).data }
+            .onSuccess { saved ->
+                cerebellumApi = nextApi
+                _uiState.update { state ->
+                    state.copy(
+                        cerebellumSettings = state.cerebellumSettings.copy(baseUrl = saved.baseUrl, apiKey = saved.apiKey, saving = false),
+                        operationMessage = operationMessage(
+                            if (saved.baseUrl.isBlank()) "小脑连接已清空" else "小脑连接设置已保存",
+                            OperationMessageType.Success
+                        )
+                    )
+                }
+            }
+            .onFailure { throwable ->
+                _uiState.update { state ->
+                    state.copy(
+                        cerebellumSettings = state.cerebellumSettings.copy(saving = false),
+                        operationMessage = operationMessage(
+                            throwable.message?.takeIf { it.isNotBlank() } ?: "小脑连接设置保存失败",
+                            OperationMessageType.Error
+                        )
+                    )
+                }
+            }
+    }
+
+    private fun refreshCerebellumSettings() = viewModelScope.launch {
+        val api = patrolRestApi ?: return@launch
+        runCatching { api.cerebellumSettings().data }
+            .onSuccess { settings ->
+                applyCerebellumSettings(settings.baseUrl, settings.apiKey)
+            }
+    }
+
+    private fun applyCerebellumSettings(baseUrl: String, apiKey: String) {
+        val normalizedBaseUrl = baseUrl.trim()
+        val normalizedApiKey = apiKey.trim()
+        cerebellumApi = if (normalizedBaseUrl.isBlank()) {
+            null
+        } else {
+            runCatching {
+                OkHttpCerebellumApi(baseUrl = normalizedBaseUrl, apiKeyProvider = { normalizedApiKey })
+            }.getOrNull()
+        }
         _uiState.update { state ->
             state.copy(
-                cerebellumSettings = state.cerebellumSettings.copy(baseUrl = saved.baseUrl, apiKey = saved.apiKey, saving = false),
-                operationMessage = operationMessage(
-                    if (saved.baseUrl.isBlank()) "小脑连接已清空" else "小脑连接设置已保存",
-                    OperationMessageType.Success
+                cerebellumSettings = state.cerebellumSettings.copy(
+                    baseUrl = normalizedBaseUrl,
+                    apiKey = normalizedApiKey,
+                    saving = false
                 )
             )
         }

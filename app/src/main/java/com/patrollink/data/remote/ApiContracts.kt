@@ -47,6 +47,11 @@ data class UserProfileDto(
     val systemNode: String
 )
 
+data class CerebellumSettingsDto(
+    val baseUrl: String = "",
+    val apiKey: String = ""
+)
+
 data class DeviceStatusDto(
     val deviceId: String,
     val deviceName: String,

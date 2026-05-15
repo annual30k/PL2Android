@@ -4,6 +4,8 @@ interface PatrolRestApi {
     suspend fun login(request: LoginRequestDto): ApiEnvelope<AuthSessionDto>
     suspend fun refresh(refreshToken: String): ApiEnvelope<AuthSessionDto>
     suspend fun currentUser(): ApiEnvelope<UserProfileDto>
+    suspend fun cerebellumSettings(): ApiEnvelope<CerebellumSettingsDto>
+    suspend fun saveCerebellumSettings(request: CerebellumSettingsDto): ApiEnvelope<CerebellumSettingsDto>
     suspend fun scanDevices(): ApiEnvelope<List<ScannedDeviceDto>>
     suspend fun bindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto>
     suspend fun unbindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto>

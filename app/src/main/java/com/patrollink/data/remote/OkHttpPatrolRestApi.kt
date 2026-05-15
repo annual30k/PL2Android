@@ -45,6 +45,12 @@ class OkHttpPatrolRestApi(
     override suspend fun currentUser(): ApiEnvelope<UserProfileDto> =
         get("api/v1/users/me")
 
+    override suspend fun cerebellumSettings(): ApiEnvelope<CerebellumSettingsDto> =
+        get("api/v1/cerebellum/settings")
+
+    override suspend fun saveCerebellumSettings(request: CerebellumSettingsDto): ApiEnvelope<CerebellumSettingsDto> =
+        post("api/v1/cerebellum/settings", request)
+
     override suspend fun scanDevices(): ApiEnvelope<List<ScannedDeviceDto>> =
         get("api/v1/devices/scan")
 

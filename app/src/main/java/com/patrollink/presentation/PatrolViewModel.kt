@@ -19,6 +19,7 @@ import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.FontSizeMode
+import com.patrollink.domain.IntercomState
 import com.patrollink.domain.LocationGateway
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
@@ -44,8 +45,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class PatrolViewModel(
     private val coordinator: PatrolCoordinator = ServiceFactory.createCoordinator(),
@@ -68,17 +72,17 @@ class PatrolViewModel(
         )
     )
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
+    private var scannedDevicesJob: Job? = null
 
     init {
-        refreshScannedDevices()
         refreshEmergencyContacts()
         observeDeviceEvents()
-        refreshDeviceCapabilities()
-        refreshPatrolArea()
+        observeIntercomState()
         viewModelScope.launch {
-            secureStore?.readSession()?.let {
+            secureStore?.let { store -> withContext(Dispatchers.IO) { store.readSession() } }?.let {
                 onSessionChanged(it)
                 _uiState.update { state -> state.copy(isLoggedIn = true, networkOnline = true) }
+                startAuthenticatedRefreshes()
                 runCatching { coordinator.currentRealtimeState() }
             }
         }
@@ -91,17 +95,26 @@ class PatrolViewModel(
             runCatching { coordinator.loginAndStartSession(account, password) }
                 .onSuccess { session ->
                     onSessionChanged(session)
-                    secureStore?.saveSession(session)
+                    secureStore?.let { store -> withContext(Dispatchers.IO) { store.saveSession(session) } }
                     _uiState.update { it.copy(isLoggedIn = true, loginLoading = false, networkOnline = true, operationMessage = operationMessage("登录成功", OperationMessageType.Success)) }
+                    startAuthenticatedRefreshes()
                 }
                 .onFailure { _uiState.update { it.copy(loginLoading = false, networkOnline = false) } }
         }
     }
 
     fun logout() = viewModelScope.launch {
+        scannedDevicesJob?.cancel()
+        scannedDevicesJob = null
         onSessionChanged(null)
-        secureStore?.clearSession()
-        _uiState.update { it.copy(isLoggedIn = false, operationMessage = operationMessage("已退出登录", OperationMessageType.Info)) }
+        secureStore?.let { store -> withContext(Dispatchers.IO) { store.clearSession() } }
+        _uiState.update { it.copy(isLoggedIn = false, scannedDevices = emptyList(), operationMessage = operationMessage("已退出登录", OperationMessageType.Info)) }
+    }
+
+    private fun startAuthenticatedRefreshes() {
+        refreshScannedDevices()
+        refreshDeviceCapabilities()
+        refreshPatrolArea()
     }
 
     fun toggleRecord() = viewModelScope.launch {
@@ -112,8 +125,44 @@ class PatrolViewModel(
 
     fun toggleTalk() = viewModelScope.launch {
         val device = _uiState.value.device
-        val next = coordinator.setTalk(device, !device.isTalking)
-        updateCurrentDevice(next)
+        runCatching { coordinator.setTalk(device, !device.isTalking) }
+            .onSuccess { next -> updateCurrentDevice(next) }
+            .onFailure {
+                _uiState.update { state ->
+                    state.copy(
+                        device = state.device.copy(isTalking = false),
+                        operationMessage = operationMessage("语音对讲启动失败，请重新登录或检查后台连接", OperationMessageType.Error)
+                    )
+                }
+            }
+    }
+
+    private fun observeIntercomState() {
+        val intercomState = coordinator.intercomState() ?: return
+        viewModelScope.launch {
+            intercomState.collect { state ->
+                val talking = when (state) {
+                    IntercomState.Idle,
+                    IntercomState.Closed,
+                    IntercomState.Failed -> false
+                    IntercomState.WaitingApp,
+                    IntercomState.Signaling,
+                    IntercomState.Active -> true
+                }
+                _uiState.update { current ->
+                    val message = when (state) {
+                        IntercomState.Closed -> operationMessage("对讲已结束", OperationMessageType.Info)
+                        IntercomState.Failed -> operationMessage("对讲连接失败", OperationMessageType.Error)
+                        else -> current.operationMessage
+                    }
+                    if (current.device.isTalking == talking && message == current.operationMessage) {
+                        current
+                    } else {
+                        current.copy(device = current.device.copy(isTalking = talking), operationMessage = message)
+                    }
+                }
+            }
+        }
     }
 
     fun refreshDeviceCapabilities() = viewModelScope.launch {
@@ -365,9 +414,21 @@ class PatrolViewModel(
         }
     }
 
-    fun refreshScannedDevices() = viewModelScope.launch {
-        coordinator.scanDevices().collect { devices ->
-            _uiState.update { it.copy(scannedDevices = devices) }
+    fun refreshScannedDevices() {
+        scannedDevicesJob?.cancel()
+        scannedDevicesJob = viewModelScope.launch {
+            runCatching {
+                coordinator.scanDevices().collect { devices ->
+                    _uiState.update { it.copy(scannedDevices = devices) }
+                }
+            }.onFailure {
+                _uiState.update { state ->
+                    state.copy(
+                        scannedDevices = emptyList(),
+                        operationMessage = operationMessage("设备扫描失败，请先登录或检查后台连接", OperationMessageType.Error)
+                    )
+                }
+            }
         }
     }
 

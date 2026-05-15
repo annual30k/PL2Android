@@ -14,6 +14,7 @@ import com.patrollink.data.remote.toDomain
 import com.patrollink.data.remote.toDomainEvent
 import com.patrollink.data.remote.toDomainState
 import com.patrollink.data.remote.toDto
+import com.patrollink.data.voip.AndroidWebRtcIntercomClient
 import com.patrollink.domain.AlertGateway
 import com.patrollink.domain.AlertItem
 import com.patrollink.domain.AlertResult
@@ -208,7 +209,8 @@ class RestStreamRelayGateway(private val api: PatrolRestApi) : StreamRelayGatewa
 
 class RestIntercomGateway(
     private val api: PatrolRestApi,
-    private val audioRouter: BluetoothVoipAudioRouter? = null
+    private val audioRouter: BluetoothVoipAudioRouter? = null,
+    private val webRtcClient: AndroidWebRtcIntercomClient? = null
 ) : IntercomGateway {
     private val state = MutableStateFlow(IntercomState.Idle)
     private var activeSessionId: String? = null
@@ -221,9 +223,13 @@ class RestIntercomGateway(
         val session = api.pendingIntercomSession(deviceId).data
             ?: api.createIntercomSession(IntercomSessionRequestDto(deviceId = deviceId)).data
         activeSessionId = session.sessionId
-        audioRouter?.startBluetoothRoute()
-        api.acceptIntercomSession(session.sessionId)
-        api.sendIntercomSignal(session.sessionId, IntercomSignalRequestDto(type = "ready", payload = """{"audioRoute":"BLUETOOTH_HEADSET"}"""))
+        if (webRtcClient != null) {
+            webRtcClient.start(session) { state.value = it }
+        } else {
+            audioRouter?.startBluetoothRoute()
+            api.acceptIntercomSession(session.sessionId)
+            api.sendIntercomSignal(session.sessionId, IntercomSignalRequestDto(type = "ready", payload = """{"audioRoute":"BLUETOOTH_HEADSET"}"""))
+        }
         val domain = session.toDomain().copy(state = IntercomState.Signaling)
         state.value = domain.state
         return domain
@@ -231,12 +237,14 @@ class RestIntercomGateway(
 
     override suspend fun stop() {
         val sessionId = activeSessionId
-        if (sessionId != null) {
+        if (webRtcClient != null) {
+            webRtcClient.stop(sendHangup = sessionId != null)
+        } else if (sessionId != null) {
             api.sendIntercomSignal(sessionId, IntercomSignalRequestDto(type = "hangup"))
             api.closeIntercomSession(sessionId)
+            audioRouter?.stopBluetoothRoute()
         }
         activeSessionId = null
-        audioRouter?.stopBluetoothRoute()
         state.value = IntercomState.Idle
     }
 }

@@ -85,7 +85,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
         OfflineBanner(uiState.networkOnline)
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {

@@ -2,12 +2,14 @@ package com.patrollink.data.remote
 
 data class ApiEnvelope<T>(
     val code: Int,
-    val message: String,
+    val message: String = "",
+    val msg: String? = null,
     val data: T,
-    val traceId: String,
-    val timestamp: Long
+    val traceId: String = "",
+    val timestamp: Long = 0
 ) {
     val success: Boolean get() = code == 200
+    val displayMessage: String get() = listOf(message, msg).firstOrNull { !it.isNullOrBlank() } ?: "API request failed"
 }
 
 data class PageEnvelope<T>(

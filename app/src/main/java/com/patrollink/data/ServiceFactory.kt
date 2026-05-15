@@ -22,6 +22,7 @@ import com.patrollink.data.ute.UteSdkDeviceGateway
 import com.patrollink.data.ute.UteSdkMediaGateway
 import com.patrollink.data.ute.UteSdkStreamRelayGateway
 import com.patrollink.data.update.AndroidVersionInstaller
+import com.patrollink.data.voip.AndroidWebRtcIntercomClient
 import com.patrollink.data.voip.BluetoothVoipAudioRouter
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DeviceControlGateway
@@ -145,7 +146,14 @@ object ServiceFactory {
             },
             sosGateway = restApi?.let(::RestSosGateway) ?: mockSos,
             patrolAreaGateway = restApi?.let(::RestPatrolAreaGateway) ?: mockPatrolArea,
-            intercomGateway = restApi?.let { RestIntercomGateway(it, BluetoothVoipAudioRouter(context)) } ?: MockIntercomGateway()
+            intercomGateway = restApi?.let {
+                val audioRouter = BluetoothVoipAudioRouter(context)
+                RestIntercomGateway(
+                    api = it,
+                    audioRouter = audioRouter,
+                    webRtcClient = AndroidWebRtcIntercomClient(context, it, audioRouter)
+                )
+            } ?: MockIntercomGateway()
         )
     }
 

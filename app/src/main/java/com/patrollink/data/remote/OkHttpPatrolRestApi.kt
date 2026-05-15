@@ -31,8 +31,8 @@ class OkHttpPatrolRestApi(
     private val endpoint = baseUrl.trimEnd('/').toHttpUrl()
 
     init {
-        require(endpoint.isHttps || endpoint.host in setOf("localhost", "127.0.0.1", "::1")) {
-            "REST baseUrl must use HTTPS outside local development"
+        require(endpoint.isHttps || endpoint.host.isLocalDevelopmentHost() || endpoint.host.isPrivateLanHost()) {
+            "REST baseUrl must use HTTPS outside local development or private device LAN"
         }
     }
 
@@ -237,7 +237,11 @@ class OkHttpPatrolRestApi(
                 if (!response.isSuccessful) {
                     error("HTTP ${response.code}: $raw")
                 }
-                gson.fromJson(raw, type)
+                val parsed = gson.fromJson<T>(raw, type)
+                if (parsed is ApiEnvelope<*> && !parsed.success) {
+                    error("API ${parsed.code}: ${parsed.displayMessage}")
+                }
+                parsed
             }
         }
     }
@@ -263,6 +267,17 @@ class OkHttpPatrolRestApi(
             lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".aac") || lower.endsWith(".m4a") || lower.endsWith(".amr") || lower.endsWith(".opus") -> "AUDIO"
             else -> "VIDEO"
         }
+    }
+
+    private fun String.isLocalDevelopmentHost(): Boolean =
+        this == "localhost" || this == "127.0.0.1" || this == "::1" || this == "10.0.2.2"
+
+    private fun String.isPrivateLanHost(): Boolean {
+        val parts = split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4 || parts.any { it !in 0..255 }) return false
+        return parts[0] == 10 ||
+            (parts[0] == 172 && parts[1] in 16..31) ||
+            (parts[0] == 192 && parts[1] == 168)
     }
 
     private fun sha256(file: File): String {

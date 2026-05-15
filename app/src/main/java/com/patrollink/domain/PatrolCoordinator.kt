@@ -73,6 +73,8 @@ class PatrolCoordinator(
 
     fun streamState(): Flow<StreamRelayState> = streamRelayGateway.state()
 
+    fun intercomState(): Flow<IntercomState>? = intercomGateway?.state()
+
     suspend fun activateSos(location: GpsLocation): SosEvent = sosGateway.activate(location)
 
     suspend fun cancelSos(): SosEvent = sosGateway.cancel()

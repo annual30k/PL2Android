@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
@@ -27,6 +26,8 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -242,39 +244,35 @@ private fun LoginInput(
     trailingIcon: (@Composable () -> Unit)? = null
 ) {
     val colors = PatrolDisplay.colors
-    Row(
-        modifier
+    TextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier
             .fillMaxWidth()
-            .height(52.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(colors.control)
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        leadingIcon()
-        Spacer(Modifier.width(14.dp))
-        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            if (value.isEmpty()) {
-                Text(placeholder, color = colors.textSubtle, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-            }
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                singleLine = true,
-                visualTransformation = visualTransformation,
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    color = colors.text,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Medium
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        if (trailingIcon != null) {
-            Spacer(Modifier.width(10.dp))
-            trailingIcon()
-        }
-    }
+            .height(58.dp),
+        singleLine = true,
+        visualTransformation = visualTransformation,
+        textStyle = TextStyle(
+            color = colors.text,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Medium
+        ),
+        placeholder = {
+            Text(placeholder, color = colors.textSubtle, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+        },
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        shape = RoundedCornerShape(12.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = colors.control,
+            unfocusedContainerColor = colors.control,
+            disabledContainerColor = colors.control,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
+            cursorColor = TechBlue
+        )
+    )
 }
 
 @Composable

@@ -127,6 +127,58 @@ data class VersionInstallPackage(
     val verified: Boolean
 )
 
+data class FirmwareDeviceMetadata(
+    val vendor: String = "",
+    val chipset: String = "",
+    val deviceModel: String = "",
+    val hardwareVersion: String = ""
+)
+
+data class FirmwareCheckResult(
+    val hasUpdate: Boolean,
+    val firmwareId: String?,
+    val deviceType: String,
+    val vendor: String,
+    val chipset: String,
+    val deviceModel: String,
+    val hardwareVersion: String,
+    val firmwareType: String,
+    val versionCode: Int?,
+    val versionName: String,
+    val forceUpdate: Boolean,
+    val changelog: List<String>,
+    val downloadUrl: String?,
+    val sha256: String?,
+    val fileId: String?,
+    val fileSizeBytes: Long,
+    val packageFormat: String,
+    val upgradeMode: String,
+    val currentFirmwareVersion: String,
+    val message: String
+)
+
+data class FirmwareUpgradeState(
+    val status: String,
+    val progress: Float,
+    val errorCode: String = "",
+    val errorMessage: String = ""
+)
+
+data class FirmwareUpgradeTask(
+    val taskId: String,
+    val deviceId: String,
+    val firmwareId: String,
+    val operatorId: String,
+    val fromVersion: String,
+    val toVersion: String,
+    val status: String,
+    val progress: Float,
+    val errorCode: String,
+    val errorMessage: String,
+    val startedAt: String,
+    val finishedAt: String
+)
+
 data class EmergencyContact(
     val id: String,
     val name: String,

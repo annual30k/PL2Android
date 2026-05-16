@@ -2,6 +2,7 @@ package com.patrollink.data.ute
 
 import android.net.Uri
 import com.patrollink.data.DefaultEvidenceIntegrityGateway
+import com.patrollink.data.local.RoomMediaIndex
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaGateway
 import com.patrollink.domain.MediaKind
@@ -27,10 +28,13 @@ class UteSdkMediaGateway(
     private val fallbackGateway: MediaGateway,
     private val mediaDirectory: File,
     private val officerBadgeNo: String,
+    private val mediaIndex: RoomMediaIndex? = null,
     private val integrityGateway: DefaultEvidenceIntegrityGateway = DefaultEvidenceIntegrityGateway()
 ) : MediaGateway {
     override suspend fun listFiles(local: Boolean): List<MediaFile> {
-        if (local) return localFiles().ifEmpty { fallbackGateway.listFiles(local = true) }
+        if (local) return (mediaIndex?.files(local = true).orEmpty() + localFiles())
+            .distinctBy { it.id to it.local }
+            .ifEmpty { fallbackGateway.listFiles(local = true) }
         val audioFiles = queryAudioRecordFiles()
         return audioFiles.ifEmpty { fallbackGateway.listFiles(local = false) }
     }
@@ -79,17 +83,18 @@ class UteSdkMediaGateway(
                     )
                 emit(local.copy(transferStatus = TransferStatus.Uploading, progress = 0.18f, lastTransferTarget = TransferTarget.Cloud))
                 val uploaded = fallbackGateway.uploadLocalFile(localFile, storageSide = "PHONE", bizType = "MEDIA", bizId = fileId)
-                emit(
-                    (uploaded ?: local).copy(
-                        id = fileId,
-                        local = true,
-                        verified = true,
-                        transferStatus = TransferStatus.Done,
-                        progress = 1f,
-                        contentUri = Uri.fromFile(localFile).toString(),
-                        lastTransferTarget = TransferTarget.Cloud
-                    )
+                val completed = (uploaded ?: local).copy(
+                    id = fileId,
+                    local = true,
+                    verified = true,
+                    transferStatus = TransferStatus.Done,
+                    progress = 1f,
+                    contentUri = Uri.fromFile(localFile).toString(),
+                    lastTransferTarget = TransferTarget.Cloud
                 )
+                val sha256 = runCatching { integrityGateway.sha256(localFile.readBytes()) }.getOrNull()
+                mediaIndex?.upsert(completed, localPath = completed.contentUri, sha256 = sha256)
+                emit(completed)
             }
         }
         if (!fileId.startsWith(AudioPrefix) || target != TransferTarget.PhoneSandbox) {

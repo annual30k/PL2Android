@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
+import com.patrollink.domain.FirmwareUpdatePhase
 import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.presentation.PatrolViewModel
@@ -117,6 +118,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                         item { RecorderLiveFeed(uiState, viewModel, device) }
                         item { HeadsetCapabilityCard(device) }
                         item { HeadsetActions(device, viewModel) }
+                        item { FirmwareUpdateCard(uiState, device, viewModel) }
                     }
                     DeviceType.Sensor -> {
                         item { SensorCapabilityCard(device) }
@@ -127,6 +129,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                         item { RecorderLiveFeed(uiState, viewModel, device) }
                         item { GlassesCapabilityCard(device) }
                         item { GlassesActions(device, viewModel) }
+                        item { FirmwareUpdateCard(uiState, device, viewModel) }
                         item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
                         item { MetricTile("眼镜电量", "${device.battery}%", Success, device.battery / 100f) }
                     }
@@ -381,6 +384,54 @@ private fun GlassesActions(device: DeviceStatus, viewModel: PatrolViewModel) {
             )
         }
         Box(Modifier.weight(1f)) { CapabilityTile("AR 取证", "已就绪", device.type.accent()) }
+    }
+}
+
+@Composable
+private fun FirmwareUpdateCard(uiState: AppUiState, device: DeviceStatus, viewModel: PatrolViewModel) {
+    val colors = PatrolDisplay.colors
+    val firmware = uiState.firmwareUpdate
+    val statusText = when (firmware.phase) {
+        FirmwareUpdatePhase.Checking -> "检查中"
+        FirmwareUpdatePhase.Available -> firmware.latestVersionName?.let { "可升级到 $it" } ?: "发现新固件"
+        FirmwareUpdatePhase.UpToDate -> "已是最新"
+        FirmwareUpdatePhase.Failed -> "检查失败"
+        FirmwareUpdatePhase.Idle -> "待检查"
+    }
+    val accent = when (firmware.phase) {
+        FirmwareUpdatePhase.Available -> Warning
+        FirmwareUpdatePhase.Failed -> Danger
+        FirmwareUpdatePhase.UpToDate -> Success
+        else -> device.type.accent()
+    }
+    PatrolCard(radius = 16, padding = PaddingValues(14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text("固件升级", color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 16.sp, lineHeight = 21.sp))
+                    Text("当前版本 ${device.firmware.ifBlank { "未知" }}", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 1)
+                }
+                StatusTag(statusText, accent, filled = firmware.phase == FirmwareUpdatePhase.Available)
+            }
+            firmware.message?.takeIf { it.isNotBlank() }?.let {
+                Text(it, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            if (firmware.phase == FirmwareUpdatePhase.Available && firmware.changelog.isNotEmpty()) {
+                Text(firmware.changelog.take(2).joinToString(" / "), color = colors.text, style = PatrolTextStyle.BodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accent.copy(alpha = 0.12f))
+                    .clickable(enabled = firmware.phase != FirmwareUpdatePhase.Checking, onClick = viewModel::checkFirmwareUpdate),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(if (firmware.phase == FirmwareUpdatePhase.Checking) "检查中" else "检查固件", color = accent, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Black), maxLines = 1)
+            }
+        }
     }
 }
 

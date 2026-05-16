@@ -17,6 +17,7 @@ import com.patrollink.domain.SosEvidenceRecorder
 import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.VersionInstaller
 import com.patrollink.domain.EmptyAppState
+import com.patrollink.domain.FirmwareGateway
 
 data class RuntimeDependencies(
     val coordinator: PatrolCoordinator,
@@ -28,6 +29,7 @@ data class RuntimeDependencies(
     val emergencyContactGateway: EmergencyContactGateway,
     val notificationGateway: PatrolNotificationGateway,
     val versionGateway: VersionGateway,
+    val firmwareGateway: FirmwareGateway,
     val versionInstaller: VersionInstaller,
     val cerebellumApi: CerebellumApi?,
     val patrolRestApi: PatrolRestApi?,
@@ -69,6 +71,7 @@ object RuntimeDependencyFactory {
             emergencyContactGateway = ServiceFactory.createEmergencyContactGateway(),
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
             versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
+            firmwareGateway = ServiceFactory.createFirmwareGateway(config, tokenStore::token),
             versionInstaller = ServiceFactory.createVersionInstaller(appContext),
             cerebellumApi = ServiceFactory.createCerebellumApi(config),
             patrolRestApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let { OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenStore::token) },

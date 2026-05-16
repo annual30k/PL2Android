@@ -163,18 +163,22 @@ class UteSdkDeviceGateway(
         )
     }
 
+    @SuppressLint("MissingPermission")
     private fun UteScanDevice.toScannedDevice(): ScannedDevice? {
         val bluetoothDevice = device ?: return null
         val name = runCatching { bluetoothDevice.name }.getOrNull().orEmpty()
         if (name.isBlank()) return null
         if (!isSupportedUteDevice(name, scanRecord)) return null
         val id = bluetoothDevice.address ?: return null
+        val bonded = runCatching {
+            bluetoothDevice.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED
+        }.getOrDefault(false)
         return ScannedDevice(
             id = id,
             name = name,
             signalBars = rssi.toSignalBars(),
             serviceUuid = "",
-            bonded = bluetoothDevice.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED,
+            bonded = bonded,
             macAddress = id,
             type = name.toPatrolDeviceType(scanRecord)
         )

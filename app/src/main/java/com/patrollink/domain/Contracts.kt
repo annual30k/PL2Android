@@ -96,6 +96,12 @@ interface VersionGateway {
     suspend fun check(currentVersionCode: Int): VersionCheckResult
 }
 
+interface FirmwareGateway {
+    suspend fun check(device: DeviceStatus, metadata: FirmwareDeviceMetadata = FirmwareDeviceMetadata()): FirmwareCheckResult
+    suspend fun createUpgradeTask(device: DeviceStatus, firmware: FirmwareCheckResult, operatorId: String = ""): FirmwareUpgradeTask
+    suspend fun updateUpgradeTask(taskId: String, state: FirmwareUpgradeState): FirmwareUpgradeTask
+}
+
 interface LocationGateway {
     suspend fun currentLocation(): GpsLocation
 }

@@ -106,6 +106,20 @@ data class VersionUpdateUiState(
     val message: String? = null
 )
 
+enum class FirmwareUpdatePhase { Idle, Checking, Available, UpToDate, Failed }
+
+data class FirmwareUpdateUiState(
+    val phase: FirmwareUpdatePhase = FirmwareUpdatePhase.Idle,
+    val currentVersionName: String = "",
+    val latestVersionName: String? = null,
+    val changelog: List<String> = emptyList(),
+    val downloadUrl: String? = null,
+    val firmwareId: String? = null,
+    val packageFormat: String = "",
+    val forceUpdate: Boolean = false,
+    val message: String? = null
+)
+
 data class DailyReport(
     val reportId: String? = null,
     val missionId: String,
@@ -152,6 +166,7 @@ data class AppUiState(
     val fontSizeMode: FontSizeMode = FontSizeMode.Standard,
     val displayThemeMode: DisplayThemeMode = DisplayThemeMode.System,
     val versionUpdate: VersionUpdateUiState = VersionUpdateUiState(),
+    val firmwareUpdate: FirmwareUpdateUiState = FirmwareUpdateUiState(),
     val dailyReport: DailyReportUiState = DailyReportUiState(),
     val cerebellumSettings: CerebellumSettingsUiState = CerebellumSettingsUiState(),
     val operationMessage: OperationMessage? = null,

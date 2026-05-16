@@ -2,6 +2,9 @@ package com.patrollink.data
 
 import com.patrollink.data.remote.AlertCloseRequestDto
 import com.patrollink.data.remote.DeviceCommandRequestDto
+import com.patrollink.data.remote.FirmwareCheckRequestDto
+import com.patrollink.data.remote.FirmwareUpgradeTaskCreateDto
+import com.patrollink.data.remote.FirmwareUpgradeTaskUpdateDto
 import com.patrollink.data.remote.HeartbeatRequestDto
 import com.patrollink.data.remote.IntercomSessionRequestDto
 import com.patrollink.data.remote.IntercomSignalRequestDto
@@ -28,6 +31,11 @@ import com.patrollink.domain.DeviceEvent
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceWifiState
+import com.patrollink.domain.FirmwareCheckResult
+import com.patrollink.domain.FirmwareDeviceMetadata
+import com.patrollink.domain.FirmwareGateway
+import com.patrollink.domain.FirmwareUpgradeState
+import com.patrollink.domain.FirmwareUpgradeTask
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.IntercomGateway
@@ -162,6 +170,49 @@ class RestDeviceControlGateway(
 class RestVersionGateway(private val api: PatrolRestApi) : VersionGateway {
     override suspend fun check(currentVersionCode: Int): VersionCheckResult =
         api.checkVersion(currentVersionCode).data.toDomain()
+}
+
+class RestFirmwareGateway(private val api: PatrolRestApi) : FirmwareGateway {
+    override suspend fun check(device: DeviceStatus, metadata: FirmwareDeviceMetadata): FirmwareCheckResult =
+        api.checkFirmware(
+            device.id,
+            FirmwareCheckRequestDto(
+                deviceType = when (device.type) {
+                    com.patrollink.domain.DeviceType.Glasses -> "GLASSES"
+                    com.patrollink.domain.DeviceType.Recorder -> "RECORDER"
+                    com.patrollink.domain.DeviceType.Sensor -> "SENSOR"
+                    else -> "HEADSET"
+                },
+                vendor = metadata.vendor,
+                chipset = metadata.chipset,
+                deviceModel = metadata.deviceModel,
+                hardwareVersion = metadata.hardwareVersion,
+                currentFirmwareVersion = device.firmware
+            )
+        ).data.toDomain()
+
+    override suspend fun createUpgradeTask(device: DeviceStatus, firmware: FirmwareCheckResult, operatorId: String): FirmwareUpgradeTask {
+        val firmwareId = requireNotNull(firmware.firmwareId) { "firmwareId required" }
+        return api.createFirmwareUpgradeTask(
+            device.id,
+            FirmwareUpgradeTaskCreateDto(
+                firmwareId = firmwareId,
+                operatorId = operatorId,
+                fromVersion = device.firmware
+            )
+        ).data.toDomain()
+    }
+
+    override suspend fun updateUpgradeTask(taskId: String, state: FirmwareUpgradeState): FirmwareUpgradeTask =
+        api.updateFirmwareUpgradeTask(
+            taskId,
+            FirmwareUpgradeTaskUpdateDto(
+                status = state.status,
+                progress = state.progress,
+                errorCode = state.errorCode,
+                errorMessage = state.errorMessage
+            )
+        ).data.toDomain()
 }
 
 class RestRealtimeGateway(private val api: PatrolRestApi) : RealtimeGateway {

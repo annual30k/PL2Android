@@ -16,6 +16,11 @@ import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.EmergencyContact
 import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.EmptyAppState
+import com.patrollink.domain.FirmwareCheckResult
+import com.patrollink.domain.FirmwareDeviceMetadata
+import com.patrollink.domain.FirmwareGateway
+import com.patrollink.domain.FirmwareUpgradeState
+import com.patrollink.domain.FirmwareUpgradeTask
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.IntercomGateway
@@ -54,7 +59,7 @@ class EmptyAuthGateway : AuthGateway {
     }
 
     override suspend fun currentUser(): UserProfile {
-        return EmptyAppState.create().user
+        error("后端地址未配置")
     }
 }
 
@@ -138,4 +143,36 @@ class EmptyVersionGateway : VersionGateway {
             changelog = emptyList(),
             downloadUrl = null
         )
+}
+
+class EmptyFirmwareGateway : FirmwareGateway {
+    override suspend fun check(device: DeviceStatus, metadata: FirmwareDeviceMetadata): FirmwareCheckResult =
+        FirmwareCheckResult(
+            hasUpdate = false,
+            firmwareId = null,
+            deviceType = device.type.name.uppercase(),
+            vendor = metadata.vendor,
+            chipset = metadata.chipset,
+            deviceModel = metadata.deviceModel,
+            hardwareVersion = metadata.hardwareVersion,
+            firmwareType = "",
+            versionCode = null,
+            versionName = device.firmware,
+            forceUpdate = false,
+            changelog = emptyList(),
+            downloadUrl = null,
+            sha256 = null,
+            fileId = null,
+            fileSizeBytes = 0L,
+            packageFormat = "",
+            upgradeMode = "",
+            currentFirmwareVersion = device.firmware,
+            message = "当前已是最新固件"
+        )
+
+    override suspend fun createUpgradeTask(device: DeviceStatus, firmware: FirmwareCheckResult, operatorId: String): FirmwareUpgradeTask =
+        FirmwareUpgradeTask("", device.id, firmware.firmwareId.orEmpty(), operatorId, device.firmware, firmware.versionName, "PENDING", 0f, "", "", "", "")
+
+    override suspend fun updateUpgradeTask(taskId: String, state: FirmwareUpgradeState): FirmwareUpgradeTask =
+        FirmwareUpgradeTask(taskId, "", "", "", "", "", state.status, state.progress, state.errorCode, state.errorMessage, "", "")
 }

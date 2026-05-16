@@ -9,6 +9,8 @@ import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
+import com.patrollink.domain.FirmwareCheckResult
+import com.patrollink.domain.FirmwareUpgradeTask
 import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.IntercomSession
@@ -23,6 +25,7 @@ import com.patrollink.domain.SosPhase
 import com.patrollink.domain.SosState
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferStatus
+import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.UserProfile
 import com.patrollink.domain.VersionCheckResult
 
@@ -121,54 +124,62 @@ fun AlertDto.toDomain() = AlertItem(
     confidence = confidence
 )
 
-fun MediaFileDto.toDomain() = MediaFile(
-    id = fileId,
-    name = fileName,
-    kind = when (mediaType) {
-        "PHOTO" -> MediaKind.Photo
-        "AUDIO" -> MediaKind.Audio
-        else -> MediaKind.Video
-    },
-    time = capturedAt,
-    size = sizeText,
-    duration = durationText,
-    verified = sha256Verified,
-    local = storageSide == "PHONE",
-    transferStatus = when (transferStatus) {
+fun MediaFileDto.toDomain(): MediaFile {
+    val status = when (transferStatus) {
         "HASHING" -> TransferStatus.Hashing
         "UPLOADING" -> TransferStatus.Uploading
         "VERIFYING" -> TransferStatus.Verifying
         "DONE" -> TransferStatus.Done
         "FAILED" -> TransferStatus.Failed
         else -> TransferStatus.Idle
-    },
-    progress = progress,
-    contentUri = contentUri
-)
+    }
+    return MediaFile(
+        id = fileId,
+        name = fileName,
+        kind = when (mediaType) {
+            "PHOTO" -> MediaKind.Photo
+            "AUDIO" -> MediaKind.Audio
+            else -> MediaKind.Video
+        },
+        time = capturedAt,
+        size = sizeText,
+        duration = durationText,
+        verified = sha256Verified,
+        local = storageSide == "PHONE",
+        transferStatus = status,
+        progress = progress,
+        contentUri = contentUri,
+        lastTransferTarget = if (storageSide == "PHONE" && status == TransferStatus.Done) TransferTarget.Cloud else null
+    )
+}
 
-fun MediaUploadTaskDto.toDomain() = MediaFile(
-    id = fileId ?: taskId,
-    name = fileName,
-    kind = when (mediaType) {
-        "PHOTO" -> MediaKind.Photo
-        "AUDIO" -> MediaKind.Audio
-        else -> MediaKind.Video
-    },
-    time = completedAt.orEmpty(),
-    size = fileSizeBytes.toSizeText(),
-    duration = null,
-    verified = status == "DONE" && !actualSha256.isNullOrBlank(),
-    local = storageSide == "PHONE",
-    transferStatus = when (status) {
+fun MediaUploadTaskDto.toDomain(): MediaFile {
+    val transferStatus = when (status) {
         "MERGING", "VERIFYING" -> TransferStatus.Verifying
         "UPLOADING", "UPLOADED" -> TransferStatus.Uploading
         "DONE" -> TransferStatus.Done
         "FAILED", "CANCELLED", "EXPIRED" -> TransferStatus.Failed
         else -> TransferStatus.Idle
-    },
-    progress = progress,
-    contentUri = fileId?.let { "/files/$it/download" }
-)
+    }
+    return MediaFile(
+        id = fileId ?: taskId,
+        name = fileName,
+        kind = when (mediaType) {
+            "PHOTO" -> MediaKind.Photo
+            "AUDIO" -> MediaKind.Audio
+            else -> MediaKind.Video
+        },
+        time = completedAt.orEmpty(),
+        size = fileSizeBytes.toSizeText(),
+        duration = null,
+        verified = status == "DONE" && !actualSha256.isNullOrBlank(),
+        local = storageSide == "PHONE",
+        transferStatus = transferStatus,
+        progress = progress,
+        contentUri = fileId?.let { "/files/$it/download" },
+        lastTransferTarget = if (storageSide == "PHONE" && transferStatus == TransferStatus.Done) TransferTarget.Cloud else null
+    )
+}
 
 fun HeartbeatAckDto.toDomain() = HeartbeatAck(accepted, serverTime)
 
@@ -232,6 +243,44 @@ fun VersionCheckResultDto.toDomain() = VersionCheckResult(
     changelog = changelog,
     downloadUrl = downloadUrl,
     sha256 = sha256
+)
+
+fun FirmwareCheckResultDto.toDomain() = FirmwareCheckResult(
+    hasUpdate = hasUpdate,
+    firmwareId = firmwareId,
+    deviceType = deviceType,
+    vendor = vendor,
+    chipset = chipset,
+    deviceModel = deviceModel,
+    hardwareVersion = hardwareVersion,
+    firmwareType = firmwareType,
+    versionCode = versionCode,
+    versionName = versionName,
+    forceUpdate = forceUpdate,
+    changelog = changelog,
+    downloadUrl = downloadUrl,
+    sha256 = sha256,
+    fileId = fileId,
+    fileSizeBytes = fileSizeBytes,
+    packageFormat = packageFormat,
+    upgradeMode = upgradeMode,
+    currentFirmwareVersion = currentFirmwareVersion,
+    message = message
+)
+
+fun FirmwareUpgradeTaskDto.toDomain() = FirmwareUpgradeTask(
+    taskId = taskId,
+    deviceId = deviceId,
+    firmwareId = firmwareId,
+    operatorId = operatorId,
+    fromVersion = fromVersion,
+    toVersion = toVersion,
+    status = status,
+    progress = progress,
+    errorCode = errorCode,
+    errorMessage = errorMessage,
+    startedAt = startedAt,
+    finishedAt = finishedAt
 )
 
 private fun String.toSosPhase() = when (this) {

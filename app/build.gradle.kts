@@ -61,6 +61,11 @@ kotlin {
 
 dependencies {
     implementation(files("libs/uteWatchSdk_Android_v1.3.5.aar"))
+    implementation(files("libs/ActionsIbluz_v1.0.8.1.aar"))
+    implementation(files("libs/ActionsOta_v1.0.8.aar"))
+    implementation(files("libs/jl_bt_ota_V1.10.0_10932-release.aar"))
+    implementation(files("libs/jl_rcsp_V0.7.2_527-release.aar"))
+    implementation(files("libs/JL_Watch_V1.13.1_11214-release.aar"))
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")

@@ -116,6 +116,7 @@ private class PatrolViewModelFactory(
             emergencyContactGateway = dependencies.emergencyContactGateway,
             notificationGateway = dependencies.notificationGateway,
             versionGateway = dependencies.versionGateway,
+            firmwareGateway = dependencies.firmwareGateway,
             versionInstaller = dependencies.versionInstaller,
             cerebellumApi = dependencies.cerebellumApi,
             patrolRestApi = dependencies.patrolRestApi,

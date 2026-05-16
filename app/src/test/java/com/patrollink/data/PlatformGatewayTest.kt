@@ -80,6 +80,14 @@ class PlatformGatewayTest {
     }
 
     @Test
+    fun emptyAuthGatewayDoesNotTreatMissingBackendAsValidSession() = runTest {
+        val result = runCatching { EmptyAuthGateway().currentUser() }
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("后端地址未配置") == true)
+    }
+
+    @Test
     fun backgroundTaskGatewayQueuesListsAndCompletesTasks() = runTest {
         val gateway = InMemoryBackgroundTaskGateway()
         val task = BackgroundTask("TASK-1", BackgroundTaskType.UploadEvidence, "VID-042", 1715832000L)

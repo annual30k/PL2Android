@@ -337,3 +337,63 @@ data class VersionCheckResultDto(
     val downloadUrl: String?,
     val sha256: String?
 )
+
+data class FirmwareCheckRequestDto(
+    val deviceType: String,
+    val vendor: String = "",
+    val chipset: String = "",
+    val deviceModel: String = "",
+    val hardwareVersion: String = "",
+    val currentFirmwareVersion: String
+)
+
+data class FirmwareCheckResultDto(
+    val hasUpdate: Boolean,
+    val firmwareId: String?,
+    val deviceType: String,
+    val vendor: String,
+    val chipset: String,
+    val deviceModel: String,
+    val hardwareVersion: String,
+    val firmwareType: String,
+    val versionCode: Int?,
+    val versionName: String,
+    val forceUpdate: Boolean,
+    val changelog: List<String>,
+    val downloadUrl: String?,
+    val sha256: String?,
+    val fileId: String?,
+    val fileSizeBytes: Long,
+    val packageFormat: String,
+    val upgradeMode: String,
+    val currentFirmwareVersion: String,
+    val message: String
+)
+
+data class FirmwareUpgradeTaskCreateDto(
+    val firmwareId: String,
+    val operatorId: String = "",
+    val fromVersion: String = ""
+)
+
+data class FirmwareUpgradeTaskUpdateDto(
+    val status: String,
+    val progress: Float,
+    val errorCode: String = "",
+    val errorMessage: String = ""
+)
+
+data class FirmwareUpgradeTaskDto(
+    val taskId: String,
+    val deviceId: String,
+    val firmwareId: String,
+    val operatorId: String,
+    val fromVersion: String,
+    val toVersion: String,
+    val status: String,
+    val progress: Float,
+    val errorCode: String,
+    val errorMessage: String,
+    val startedAt: String,
+    val finishedAt: String
+)

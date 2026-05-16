@@ -34,6 +34,7 @@ import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.VersionGateway
+import com.patrollink.domain.FirmwareGateway
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,8 +87,8 @@ object ServiceFactory {
         val uteBridge = if (config.useRealBle) sharedUteBridge ?: UteSdkBridge(context) else null
         val restMediaGateway = restApi?.let(::RestMediaGateway)
         val emptyMediaGateway = EmptyMediaGateway()
+        val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
-            val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
             WifiBackedMediaGateway(
                 wifiClient = WifiFileServiceClient(baseUrl, tokenProvider = tokenProvider),
                 fallbackGateway = restMediaGateway ?: emptyMediaGateway,
@@ -120,7 +121,8 @@ object ServiceFactory {
                     bridge = uteBridge,
                     fallbackGateway = restMediaGateway ?: emptyMediaGateway,
                     mediaDirectory = File(context.filesDir, "patrol_media/ute"),
-                    officerBadgeNo = fallbackState.user.badgeNo
+                    officerBadgeNo = fallbackState.user.badgeNo,
+                    mediaIndex = mediaIndex
                 )
                 restMediaGateway != null -> restMediaGateway
                 else -> emptyMediaGateway
@@ -180,6 +182,11 @@ object ServiceFactory {
         config.restBaseUrl.takeIf { it.isNotBlank() }
             ?.let { RestVersionGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
             ?: EmptyVersionGateway()
+
+    fun createFirmwareGateway(config: RuntimeConfig, tokenProvider: () -> String? = { null }): FirmwareGateway =
+        config.restBaseUrl.takeIf { it.isNotBlank() }
+            ?.let { RestFirmwareGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
+            ?: EmptyFirmwareGateway()
 
     fun createCerebellumApi(config: RuntimeConfig): CerebellumApi? =
         config.cerebellumBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
@@ -269,17 +276,18 @@ private class WifiBackedMediaGateway(
                     ?: deviceFile(fileId).copy(local = true, contentUri = Uri.fromFile(localFile).toString())
                 emit(local.copy(transferStatus = TransferStatus.Uploading, progress = 0.18f, lastTransferTarget = target))
                 val uploaded = fallbackGateway.uploadLocalFile(localFile, storageSide = "PHONE", bizType = "MEDIA", bizId = fileId)
-                emit(
-                    (uploaded ?: local).copy(
-                        id = fileId,
-                        local = true,
-                        transferStatus = TransferStatus.Done,
-                        progress = 1f,
-                        verified = true,
-                        contentUri = Uri.fromFile(localFile).toString(),
-                        lastTransferTarget = target
-                    )
+                val completed = (uploaded ?: local).copy(
+                    id = fileId,
+                    local = true,
+                    transferStatus = TransferStatus.Done,
+                    progress = 1f,
+                    verified = true,
+                    contentUri = Uri.fromFile(localFile).toString(),
+                    lastTransferTarget = target
                 )
+                val sha256 = runCatching { integrityGateway.sha256(localFile.readBytes()) }.getOrNull()
+                mediaIndex?.upsert(completed, localPath = completed.contentUri, sha256 = sha256)
+                emit(completed)
             }
         }
         return flow {

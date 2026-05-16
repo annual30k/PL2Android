@@ -42,4 +42,7 @@ interface PatrolRestApi {
     suspend fun activateSos(location: GpsLocationDto): ApiEnvelope<SosEventDto>
     suspend fun cancelSos(): ApiEnvelope<SosEventDto>
     suspend fun checkVersion(currentVersionCode: Int): ApiEnvelope<VersionCheckResultDto>
+    suspend fun checkFirmware(deviceId: String, request: FirmwareCheckRequestDto): ApiEnvelope<FirmwareCheckResultDto>
+    suspend fun createFirmwareUpgradeTask(deviceId: String, request: FirmwareUpgradeTaskCreateDto): ApiEnvelope<FirmwareUpgradeTaskDto>
+    suspend fun updateFirmwareUpgradeTask(taskId: String, request: FirmwareUpgradeTaskUpdateDto): ApiEnvelope<FirmwareUpgradeTaskDto>
 }

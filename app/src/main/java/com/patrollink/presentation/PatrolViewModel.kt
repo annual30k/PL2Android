@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.patrollink.data.EmptyFirmwareGateway
 import com.patrollink.data.EmptyVersionGateway
 import com.patrollink.data.RuntimeConfigStore
 import com.patrollink.data.ServiceFactory
@@ -30,6 +31,10 @@ import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.EmptyAppState
 import com.patrollink.domain.FontSizeMode
+import com.patrollink.domain.FirmwareDeviceMetadata
+import com.patrollink.domain.FirmwareGateway
+import com.patrollink.domain.FirmwareUpdatePhase
+import com.patrollink.domain.FirmwareUpdateUiState
 import com.patrollink.domain.IntercomState
 import com.patrollink.domain.LocationGateway
 import com.patrollink.domain.MediaFile
@@ -77,6 +82,7 @@ class PatrolViewModel(
     private val emergencyContactGateway: EmergencyContactGateway? = null,
     private val notificationGateway: PatrolNotificationGateway? = null,
     private val versionInstaller: VersionInstaller? = null,
+    private val firmwareGateway: FirmwareGateway = EmptyFirmwareGateway(),
     private var cerebellumApi: CerebellumApi? = null,
     private val patrolRestApi: PatrolRestApi? = null,
     private val runtimeConfigStore: RuntimeConfigStore? = null,
@@ -196,11 +202,17 @@ class PatrolViewModel(
 
     private fun startAuthenticatedRefreshes() {
         refreshCurrentUser()
+        refreshAlerts()
         refreshScannedDevices(showFailureMessage = false)
         refreshMediaFiles()
         refreshDeviceCapabilities()
         refreshPatrolArea()
         refreshCerebellumSettings()
+    }
+
+    private fun refreshAlerts() = viewModelScope.launch {
+        runCatching { coordinator.observeAlerts().first() }
+            .onSuccess { alerts -> _uiState.update { it.copy(alerts = alerts) } }
     }
 
     fun toggleRecord() = viewModelScope.launch {
@@ -416,10 +428,14 @@ class PatrolViewModel(
         val loaded = (phoneMedia + deviceMedia).distinctBy { it.id to it.local }
         if (loaded.isEmpty()) return@launch
         _uiState.update { state ->
-            val transient = state.mediaFiles.filter { current ->
-                loaded.none { it.id == current.id && it.local == current.local }
+            val loadedWithState = loaded.map { incoming ->
+                val current = state.mediaFiles.firstOrNull { it.id == incoming.id && it.local == incoming.local }
+                incoming.inheritCompletedCloudState(current)
             }
-            val next = (loaded + transient).distinctBy { it.id to it.local }
+            val transient = state.mediaFiles.filter { current ->
+                loadedWithState.none { it.id == current.id && it.local == current.local }
+            }
+            val next = (loadedWithState + transient).distinctBy { it.id to it.local }
             state.copy(
                 mediaFiles = next,
                 selectedMediaFileId = state.selectedMediaFileId ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
@@ -1060,6 +1076,42 @@ class PatrolViewModel(
         }
     }
 
+    fun deleteMediaBatch(fileIds: Set<String>, local: Boolean = _uiState.value.selectedMediaLocal) = viewModelScope.launch {
+        if (fileIds.isEmpty()) {
+            showOperationMessage("请选择要删除的媒体文件", OperationMessageType.Warning)
+            return@launch
+        }
+        val currentFiles = _uiState.value.mediaFiles.filter { it.local == local && it.id in fileIds }
+        val busyIds = currentFiles.filter { it.transferStatus.inProgress }.map { it.id }.toSet()
+        val deleteIds = fileIds - busyIds
+        val successIds = mutableSetOf<String>()
+        var successCount = 0
+        var failedCount = 0
+        deleteIds.forEach { id ->
+            if (runCatching { coordinator.deleteMedia(id, local) }.getOrDefault(false)) {
+                successCount += 1
+                successIds += id
+            } else {
+                failedCount += 1
+            }
+        }
+        _uiState.update { state ->
+            state.copy(
+                mediaFiles = state.mediaFiles.filterNot { it.local == local && it.id in successIds },
+                selectedMediaFileId = state.selectedMediaFileId?.takeUnless { it in successIds },
+                previewMediaFile = state.previewMediaFile?.takeUnless { it.local == local && it.id in successIds },
+                operationMessage = operationMessage(
+                    buildString {
+                        append("已删除 $successCount 个媒体文件")
+                        if (busyIds.isNotEmpty()) append("，跳过处理中 ${busyIds.size} 个")
+                        if (failedCount > 0) append("，失败 $failedCount 个")
+                    },
+                    if (failedCount > 0) OperationMessageType.Warning else OperationMessageType.Success
+                )
+            )
+        }
+    }
+
     fun selectMedia(fileId: String) = _uiState.update { it.copy(selectedMediaFileId = fileId) }
 
     fun openMediaPreview(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = viewModelScope.launch {
@@ -1127,6 +1179,70 @@ class PatrolViewModel(
             .onFailure {
                 _uiState.update { state -> state.copy(versionUpdate = state.versionUpdate.copy(phase = VersionUpdatePhase.Failed, message = "检查更新失败")) }
             }
+    }
+
+    fun checkFirmwareUpdate() = viewModelScope.launch {
+        val device = _uiState.value.device
+        if (!device.online || device.id.isBlank()) {
+            _uiState.update { state ->
+                state.copy(operationMessage = operationMessage("请先连接耳机或眼镜后再检查固件", OperationMessageType.Warning))
+            }
+            return@launch
+        }
+        _uiState.update {
+            it.copy(
+                firmwareUpdate = it.firmwareUpdate.copy(
+                    phase = FirmwareUpdatePhase.Checking,
+                    currentVersionName = device.firmware,
+                    message = "正在检查设备固件"
+                )
+            )
+        }
+        runCatching {
+            firmwareGateway.check(device = device, metadata = FirmwareDeviceMetadata(vendor = "UTE"))
+        }.onSuccess { result ->
+            _uiState.update { state ->
+                val next = if (result.hasUpdate) {
+                    FirmwareUpdateUiState(
+                        phase = FirmwareUpdatePhase.Available,
+                        currentVersionName = result.currentFirmwareVersion.ifBlank { device.firmware },
+                        latestVersionName = result.versionName,
+                        changelog = result.changelog,
+                        downloadUrl = result.downloadUrl,
+                        firmwareId = result.firmwareId,
+                        packageFormat = result.packageFormat,
+                        forceUpdate = result.forceUpdate,
+                        message = "发现设备固件 ${result.versionName}"
+                    )
+                } else {
+                    state.firmwareUpdate.copy(
+                        phase = FirmwareUpdatePhase.UpToDate,
+                        currentVersionName = result.currentFirmwareVersion.ifBlank { device.firmware },
+                        latestVersionName = null,
+                        changelog = emptyList(),
+                        downloadUrl = null,
+                        firmwareId = null,
+                        packageFormat = "",
+                        forceUpdate = false,
+                        message = result.message.ifBlank { "当前已是最新固件" }
+                    )
+                }
+                state.copy(
+                    firmwareUpdate = next,
+                    operationMessage = operationMessage(
+                        next.message ?: "固件检查完成",
+                        if (result.hasUpdate) OperationMessageType.Warning else OperationMessageType.Success
+                    )
+                )
+            }
+        }.onFailure {
+            _uiState.update { state ->
+                state.copy(
+                    firmwareUpdate = state.firmwareUpdate.copy(phase = FirmwareUpdatePhase.Failed, message = "设备固件检查失败"),
+                    operationMessage = operationMessage("设备固件检查失败", OperationMessageType.Error)
+                )
+            }
+        }
     }
 
     fun installVersionUpdate() = viewModelScope.launch {
@@ -1329,3 +1445,20 @@ private fun MediaKind.toCerebellumEvidenceType(): String = when (this) {
 
 private fun AuthSession.hasUsableTokens(): Boolean =
     accessToken.isNotBlank() && refreshToken.isNotBlank()
+
+private val TransferStatus.inProgress: Boolean
+    get() = this == TransferStatus.Hashing || this == TransferStatus.Uploading || this == TransferStatus.Verifying
+
+private fun MediaFile.inheritCompletedCloudState(current: MediaFile?): MediaFile {
+    if (current == null) return this
+    if (transferStatus.inProgress) return this
+    val currentUploaded = current.transferStatus == TransferStatus.Done && current.lastTransferTarget == TransferTarget.Cloud
+    if (!currentUploaded) return this
+    return copy(
+        transferStatus = TransferStatus.Done,
+        progress = 1f,
+        verified = verified || current.verified,
+        contentUri = contentUri ?: current.contentUri,
+        lastTransferTarget = TransferTarget.Cloud
+    )
+}

@@ -1,14 +1,20 @@
 package com.patrollink.presentation.screen
 
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
+import android.widget.MediaController
+import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -33,10 +39,12 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Image
@@ -46,6 +54,7 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
@@ -56,6 +65,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,12 +75,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.patrollink.domain.AppUiState
@@ -88,6 +101,15 @@ import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
+import java.net.HttpURLConnection
+import java.net.URL
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -95,14 +117,28 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     var filter by remember { mutableStateOf(MediaFilter.All) }
+    var timeFilter by remember { mutableStateOf(MediaTimeFilter.All) }
+    var batchMode by remember { mutableStateOf(false) }
+    var batchSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
     val files = uiState.mediaFiles
         .filter { it.local == uiState.selectedMediaLocal }
         .filter { filter.matches(it.kind) }
+        .filter { timeFilter.matches(it.time) }
     val selected = files.firstOrNull { it.id == uiState.selectedMediaFileId } ?: files.firstOrNull()
     val primaryAction = selected?.mediaPrimaryAction(uiState.selectedMediaLocal)
     var pendingDelete by remember { mutableStateOf<MediaFile?>(null) }
+    var pendingBatchDelete by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showIntegrityHelp by remember { mutableStateOf(false) }
     var dismissedTransferFileId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(uiState.selectedMediaLocal) {
+        batchSelection = emptySet()
+        batchMode = false
+    }
+    LaunchedEffect(uiState.selectedMediaLocal, filter, timeFilter, files) {
+        val visibleIds = files.map { it.id }.toSet()
+        batchSelection = batchSelection.intersect(visibleIds)
+        if (batchSelection.isEmpty()) batchMode = false
+    }
     Box(Modifier.fillMaxSize().background(colors.page)) {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -129,9 +165,36 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                     item {
                         MediaFilterRow(selected = filter, onSelected = { filter = it })
                     }
-                item {
+                    item {
+                        MediaTimeFilterRow(selected = timeFilter, onSelected = { timeFilter = it })
+                    }
+                    if (files.isNotEmpty()) {
+                        item {
+                            MediaBatchToolbar(
+                                batchMode = batchMode,
+                                selectedCount = batchSelection.size,
+                                totalCount = files.size,
+                                onToggleBatch = {
+                                    batchMode = !batchMode
+                                    if (!batchMode) batchSelection = emptySet()
+                                },
+                                onSelectAll = {
+                                    batchMode = true
+                                    batchSelection = files.map { it.id }.toSet()
+                                },
+                                onDelete = {
+                                    if (batchSelection.isEmpty()) {
+                                        viewModel.showOperationMessage("请选择要删除的媒体文件", OperationMessageType.Warning)
+                                    } else {
+                                        pendingBatchDelete = batchSelection
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    item {
                     if (files.isEmpty()) {
-                        MediaEmptyState(filter = filter, phoneSelected = uiState.selectedMediaLocal)
+                        MediaEmptyState(filter = filter, timeFilter = timeFilter, phoneSelected = uiState.selectedMediaLocal)
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             files.chunked(2).forEach { row ->
@@ -140,7 +203,20 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                                         MediaGridCard(
                                             file = file,
                                             selected = selected?.id == file.id,
-                                            onClick = { viewModel.selectMedia(file.id) },
+                                            checked = file.id in batchSelection,
+                                            batchMode = batchMode,
+                                            onClick = {
+                                                if (batchMode) {
+                                                    batchSelection = if (file.id in batchSelection) batchSelection - file.id else batchSelection + file.id
+                                                } else {
+                                                    viewModel.selectMedia(file.id)
+                                                }
+                                            },
+                                            onLongClick = {
+                                                batchMode = true
+                                                batchSelection = batchSelection + file.id
+                                            },
+                                            onPlay = { viewModel.openMediaPreview(file.id, file.local) },
                                             modifier = Modifier.weight(1f)
                                         )
                                     }
@@ -223,6 +299,28 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+    pendingBatchDelete.takeIf { it.isNotEmpty() }?.let { ids ->
+        AlertDialog(
+            onDismissRequest = { pendingBatchDelete = emptySet() },
+            title = { Text("批量删除") },
+            text = { Text("确认删除已选 ${ids.size} 个媒体文件？正在传输的文件会自动跳过。") },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.deleteMediaBatch(ids, uiState.selectedMediaLocal)
+                    batchSelection = emptySet()
+                    batchMode = false
+                    pendingBatchDelete = emptySet()
+                }) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBatchDelete = emptySet() }) {
                     Text("取消")
                 }
             }
@@ -343,7 +441,72 @@ private fun FilterChip(text: String, selected: Boolean, onClick: () -> Unit, mod
 }
 
 @Composable
-private fun MediaEmptyState(filter: MediaFilter, phoneSelected: Boolean) {
+private fun MediaTimeFilterRow(selected: MediaTimeFilter, onSelected: (MediaTimeFilter) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MediaTimeFilter.entries.forEach { filter ->
+            FilterChip(filter.label, selected == filter, { onSelected(filter) }, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun MediaBatchToolbar(
+    batchMode: Boolean,
+    selectedCount: Int,
+    totalCount: Int,
+    onToggleBatch: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.border.copy(alpha = 0.72f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            if (batchMode) "已选 $selectedCount / $totalCount" else "批量操作",
+            color = colors.text,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Black,
+            modifier = Modifier.weight(1f)
+        )
+        ToolbarCommand(
+            text = if (batchMode) "退出" else "批量选择",
+            icon = if (batchMode) Icons.Filled.Close else Icons.Filled.CheckCircle,
+            tint = if (batchMode) colors.textMuted else TechBlue,
+            onClick = onToggleBatch
+        )
+        ToolbarCommand("全选", Icons.Filled.SelectAll, TechBlue, onSelectAll)
+        ToolbarCommand("删除", Icons.Filled.DeleteSweep, Color(0xFFFF4F73), onDelete)
+    }
+}
+
+@Composable
+private fun ToolbarCommand(text: String, icon: ImageVector, tint: Color, onClick: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.control.copy(alpha = 0.72f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        Text(text, color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1)
+    }
+}
+
+@Composable
+private fun MediaEmptyState(filter: MediaFilter, timeFilter: MediaTimeFilter, phoneSelected: Boolean) {
     val colors = PatrolDisplay.colors
     Column(
         Modifier
@@ -360,7 +523,7 @@ private fun MediaEmptyState(filter: MediaFilter, phoneSelected: Boolean) {
             Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(30.dp))
         }
         Spacer(Modifier.height(14.dp))
-        Text("暂无${filter.label}文件", color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
+        Text("暂无${timeFilter.emptyPrefix}${filter.label}文件", color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(6.dp))
         Text(
             if (phoneSelected) "可从设备端上传到手机，或等待现场采集生成。" else "设备端当前没有匹配类型的媒体。",
@@ -372,12 +535,22 @@ private fun MediaEmptyState(filter: MediaFilter, phoneSelected: Boolean) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
+private fun MediaGridCard(
+    file: MediaFile,
+    selected: Boolean,
+    checked: Boolean,
+    batchMode: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onPlay: () -> Unit,
+    modifier: Modifier
+) {
     val colors = PatrolDisplay.colors
     Column(
         modifier
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         Box(
             Modifier
@@ -389,6 +562,18 @@ private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Uni
             MediaArtwork(file = file, modifier = Modifier.fillMaxSize())
             MediaKindBadge(file)
             MediaSyncBadge(file = file, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp))
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.46f))
+                    .border(1.dp, Color.White.copy(alpha = 0.62f), CircleShape)
+                    .clickable(onClick = onPlay),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(34.dp))
+            }
             Text(
                 file.size,
                 color = Color.White,
@@ -398,16 +583,30 @@ private fun MediaGridCard(file: MediaFile, selected: Boolean, onClick: () -> Uni
                     .align(Alignment.BottomStart)
                     .padding(8.dp)
             )
-            if (selected) {
+            if (batchMode) {
                 Box(
                     Modifier
-                        .align(Alignment.Center)
-                        .size(42.dp)
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(if (checked) TechBlue else Color.Black.copy(alpha = 0.50f))
+                        .border(1.dp, Color.White.copy(alpha = 0.72f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (checked) Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+            } else if (selected) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
                         .background(TechBlue),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
+                    Icon(Icons.Filled.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             }
             if (file.transferStatus.inProgress) {
@@ -485,6 +684,11 @@ private fun BoxScope.MediaKindBadge(file: MediaFile) {
 
 @Composable
 private fun MediaArtwork(file: MediaFile, modifier: Modifier) {
+    val context = LocalContext.current
+    var thumbnail by remember(file.contentUri, file.kind) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(file.contentUri, file.kind) {
+        thumbnail = withContext(Dispatchers.IO) { loadMediaThumbnail(context, file) }
+    }
     val brush = when (file.kind) {
         MediaKind.Video -> Brush.linearGradient(listOf(Color(0xFF17365D), Color(0xFF0C8DBC), Color(0xFF101827)))
         MediaKind.Photo -> Brush.linearGradient(listOf(Color(0xFF4FA7DF), Color(0xFF20314A), Color(0xFF07111F)))
@@ -496,14 +700,23 @@ private fun MediaArtwork(file: MediaFile, modifier: Modifier) {
         MediaKind.Audio -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
     Box(modifier.background(brush), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .size(76.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color.White.copy(alpha = 0.18f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(icon, contentDescription = null, tint = Color.White.copy(alpha = 0.86f), modifier = Modifier.size(42.dp))
+        if (thumbnail != null && file.kind != MediaKind.Audio) {
+            Image(
+                bitmap = thumbnail!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                Modifier
+                    .size(76.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.White.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = null, tint = Color.White.copy(alpha = 0.86f), modifier = Modifier.size(42.dp))
+            }
         }
         Box(
             Modifier
@@ -604,7 +817,6 @@ private fun ActionBarItem(text: String, icon: ImageVector, iconColor: Color, tex
 @Composable
 private fun MediaPreviewDialog(file: MediaFile, onDismiss: () -> Unit) {
     val colors = PatrolDisplay.colors
-    val context = LocalContext.current
     var fullScreen by remember(file.id) { mutableStateOf(false) }
     val canFullscreen = file.kind == MediaKind.Video || file.kind == MediaKind.Photo
     Dialog(
@@ -632,9 +844,7 @@ private fun MediaPreviewDialog(file: MediaFile, onDismiss: () -> Unit) {
                 Spacer(Modifier.width(12.dp))
                 if (canFullscreen) {
                     IconButton(
-                        onClick = {
-                            if (!openSystemMediaViewer(context, file)) fullScreen = true
-                        },
+                        onClick = { fullScreen = true },
                         modifier = Modifier.size(44.dp)
                     ) {
                         Icon(
@@ -655,17 +865,7 @@ private fun MediaPreviewDialog(file: MediaFile, onDismiss: () -> Unit) {
                     .aspectRatio(16f / 9f)
                     .clip(RoundedCornerShape(18.dp))
             ) {
-                MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
-                Icon(
-                    imageVector = when (file.kind) {
-                        MediaKind.Photo -> Icons.Filled.Image
-                        MediaKind.Audio -> Icons.AutoMirrored.Filled.VolumeUp
-                        MediaKind.Video -> Icons.Filled.PlayArrow
-                    },
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.align(Alignment.Center).size(72.dp)
-                )
+                EmbeddedMediaPreview(file = file, modifier = Modifier.fillMaxSize())
             }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("时间：${file.time}", color = colors.textMuted, fontSize = 15.sp, fontWeight = FontWeight.Bold)
@@ -777,26 +977,79 @@ private fun IntegrityFeatureRow(icon: ImageVector, title: String, body: String, 
     }
 }
 
-private fun openSystemMediaViewer(context: Context, file: MediaFile): Boolean {
-    val uri = file.contentUri?.let(Uri::parse) ?: return false
-    val mimeType = when (file.kind) {
-        MediaKind.Video -> "video/*"
-        MediaKind.Photo -> "image/*"
-        MediaKind.Audio -> "audio/*"
+@Composable
+private fun EmbeddedMediaPreview(file: MediaFile, modifier: Modifier = Modifier) {
+    when (file.kind) {
+        MediaKind.Photo -> PhotoPreview(file = file, modifier = modifier)
+        MediaKind.Video, MediaKind.Audio -> PlayableMediaPreview(file = file, modifier = modifier)
     }
-    val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, mimeType)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+}
+
+@Composable
+private fun PhotoPreview(file: MediaFile, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var image by remember(file.contentUri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(file.contentUri) {
+        image = withContext(Dispatchers.IO) { loadImageBitmap(context, file.contentUri) }
     }
-    return try {
-        context.startActivity(intent)
-        true
-    } catch (_: ActivityNotFoundException) {
-        false
-    } catch (_: SecurityException) {
-        false
-    } catch (_: RuntimeException) {
-        false
+    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+        if (image != null) {
+            Image(
+                bitmap = image!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
+            Icon(Icons.Filled.Image, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
+        }
+    }
+}
+
+@Composable
+private fun PlayableMediaPreview(file: MediaFile, modifier: Modifier = Modifier) {
+    val uri = remember(file.contentUri) { file.contentUri?.let(Uri::parse) }
+    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+        if (uri == null) {
+            MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
+            Icon(
+                if (file.kind == MediaKind.Audio) Icons.AutoMirrored.Filled.VolumeUp else Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(72.dp)
+            )
+        } else {
+            AndroidView(
+                factory = { viewContext ->
+                    VideoView(viewContext).apply {
+                        setMediaController(MediaController(viewContext).also { it.setAnchorView(this) })
+                        setOnPreparedListener { player ->
+                            player.isLooping = false
+                            start()
+                        }
+                    }
+                },
+                update = { player ->
+                    if (player.tag != uri) {
+                        player.tag = uri
+                        player.setVideoURI(uri)
+                        player.requestFocus()
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            if (file.kind == MediaKind.Audio) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.52f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, tint = Color.White, modifier = Modifier.size(76.dp))
+                }
+            }
+        }
     }
 }
 
@@ -807,17 +1060,7 @@ private fun FullscreenMediaPlayer(file: MediaFile, onExitFullscreen: () -> Unit,
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
-        Icon(
-            imageVector = when (file.kind) {
-                MediaKind.Photo -> Icons.Filled.Image
-                MediaKind.Audio -> Icons.AutoMirrored.Filled.VolumeUp
-                MediaKind.Video -> Icons.Filled.PlayArrow
-            },
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.align(Alignment.Center).size(88.dp)
-        )
+        EmbeddedMediaPreview(file = file, modifier = Modifier.fillMaxSize())
         Row(
             Modifier
                 .fillMaxWidth()
@@ -907,4 +1150,107 @@ private enum class MediaFilter(val label: String) {
         Photo -> kind == MediaKind.Photo
         Audio -> kind == MediaKind.Audio
     }
+}
+
+private enum class MediaTimeFilter(val label: String, val emptyPrefix: String) {
+    All("全部时间", ""),
+    Today("今天", "今天的"),
+    SevenDays("近7天", "近7天的"),
+    ThirtyDays("近30天", "近30天的");
+
+    fun matches(time: String): Boolean {
+        if (this == All) return true
+        val date = parseMediaDate(time) ?: return true
+        val today = LocalDate.now()
+        return when (this) {
+            All -> true
+            Today -> date == today
+            SevenDays -> !date.isBefore(today.minusDays(6))
+            ThirtyDays -> !date.isBefore(today.minusDays(29))
+        }
+    }
+}
+
+private fun parseMediaDate(value: String): LocalDate? {
+    val raw = value.trim()
+    if (raw.isBlank()) return null
+    raw.toLongOrNull()?.let { epoch ->
+        val millis = if (epoch < 10_000_000_000L) epoch * 1000 else epoch
+        return Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate()
+    }
+    val formatters = listOf(
+        DateTimeFormatter.ISO_OFFSET_DATE_TIME,
+        DateTimeFormatter.ISO_LOCAL_DATE_TIME,
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"),
+        DateTimeFormatter.ISO_LOCAL_DATE
+    )
+    formatters.forEach { formatter ->
+        runCatching {
+            if (formatter == DateTimeFormatter.ISO_OFFSET_DATE_TIME) {
+                return Instant.from(formatter.parse(raw)).atZone(ZoneId.systemDefault()).toLocalDate()
+            }
+            return LocalDate.from(formatter.parse(raw))
+        }.getOrNull()
+    }
+    return try {
+        DateTimeFormatter.ofPattern("HH:mm:ss").parse(raw)
+        LocalDate.now()
+    } catch (_: DateTimeParseException) {
+        null
+    }
+}
+
+private fun loadMediaThumbnail(context: Context, file: MediaFile): Bitmap? =
+    when (file.kind) {
+        MediaKind.Photo -> loadImageBitmap(context, file.contentUri)
+        MediaKind.Video -> loadVideoFrame(context, file.contentUri)
+        MediaKind.Audio -> null
+    }
+
+private fun loadImageBitmap(context: Context, value: String?): Bitmap? {
+    val uri = value?.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: return null
+    return runCatching {
+        when {
+            uri.scheme == "content" || uri.scheme == "file" -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri))
+                } else {
+                    context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+                }
+            }
+            value.startsWith("http://") || value.startsWith("https://") -> {
+                val connection = (URL(value).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 4_000
+                    readTimeout = 6_000
+                }
+                try {
+                    connection.inputStream.use(BitmapFactory::decodeStream)
+                } finally {
+                    connection.disconnect()
+                }
+            }
+            value.startsWith("/") -> BitmapFactory.decodeFile(value)
+            else -> null
+        }
+    }.getOrNull()
+}
+
+private fun loadVideoFrame(context: Context, value: String?): Bitmap? {
+    val raw = value?.takeIf { it.isNotBlank() } ?: return null
+    return runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            val uri = Uri.parse(raw)
+            when {
+                raw.startsWith("http://") || raw.startsWith("https://") -> retriever.setDataSource(raw, emptyMap())
+                uri.scheme == "content" || uri.scheme == "file" -> retriever.setDataSource(context, uri)
+                raw.startsWith("/") -> retriever.setDataSource(raw)
+                else -> return@runCatching null
+            }
+            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } finally {
+            retriever.release()
+        }
+    }.getOrNull()
 }

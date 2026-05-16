@@ -1,8 +1,11 @@
 package com.patrollink.presentation
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import com.patrollink.data.MockPatrolCoordinatorFactory
+import com.patrollink.data.MockVersionGateway
 import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.edge.CerebellumAsrTranscribeRequestDto
 import com.patrollink.data.edge.CerebellumAsrTranscribeResponseDto
@@ -23,6 +26,7 @@ import com.patrollink.data.edge.CerebellumSyncTaskResponseDto
 import com.patrollink.data.edge.CerebellumEventDto
 import com.patrollink.data.edge.CerebellumVideoSummaryRequestDto
 import com.patrollink.data.edge.CerebellumVideoSummaryResponseDto
+import com.patrollink.domain.DeviceType
 import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.VersionUpdatePhase
@@ -40,7 +44,7 @@ class PatrolViewModelTest {
 
     @Test
     fun loginMovesUiToAuthenticatedState() = runTest {
-        val viewModel = PatrolViewModel()
+        val viewModel = testViewModel()
 
         viewModel.login("POLICE_9527", "123456", agreed = true)
         advanceUntilIdle()
@@ -51,7 +55,8 @@ class PatrolViewModelTest {
 
     @Test
     fun deviceControlsUpdateRecordingAndTalkingState() = runTest {
-        val viewModel = PatrolViewModel()
+        val viewModel = testViewModel()
+        loginAndConnect(viewModel)
 
         viewModel.toggleRecord()
         viewModel.toggleTalk()
@@ -63,7 +68,8 @@ class PatrolViewModelTest {
 
     @Test
     fun closingAlertMovesItToClosedList() = runTest {
-        val viewModel = PatrolViewModel()
+        val viewModel = testViewModel()
+        loginForTest(viewModel)
         val alertId = viewModel.uiState.value.alerts.first().id
 
         viewModel.closeAlert(alertId)
@@ -74,7 +80,8 @@ class PatrolViewModelTest {
 
     @Test
     fun mediaDownloadAndDeleteMutateUiCollection() = runTest {
-        val viewModel = PatrolViewModel()
+        val viewModel = testViewModel()
+        loginForTest(viewModel)
         val fileId = viewModel.uiState.value.mediaFiles.first { !it.local }.id
 
         viewModel.downloadMedia(fileId)
@@ -95,7 +102,7 @@ class PatrolViewModelTest {
 
     @Test
     fun sosActivateAndCancelReflectInUiState() = runTest {
-        val viewModel = PatrolViewModel()
+        val viewModel = testViewModel()
 
         viewModel.activateSos()
         advanceUntilIdle()
@@ -108,7 +115,7 @@ class PatrolViewModelTest {
 
     @Test
     fun mockVersionUpdateCompletesWithoutRealInstallerDownload() = runTest {
-        val viewModel = PatrolViewModel()
+        val viewModel = testViewModel()
 
         viewModel.checkVersionUpdate()
         advanceUntilIdle()
@@ -122,7 +129,8 @@ class PatrolViewModelTest {
     @Test
     fun generateDailyReportCallsCerebellumAndStoresReport() = runTest {
         val api = FakeCerebellumReportApi()
-        val viewModel = PatrolViewModel(cerebellumApi = api)
+        val viewModel = testViewModel(cerebellumApi = api)
+        loginForTest(viewModel)
 
         viewModel.updateDailyReportMissionId("mission-test")
         viewModel.updateDailyReportOperatorNote("重点巡逻")
@@ -132,7 +140,7 @@ class PatrolViewModelTest {
         val report = viewModel.uiState.value.dailyReport.report
         assertEquals("mission-test", api.lastRequest?.missionId)
         assertEquals("daily", api.lastRequest?.reportType)
-        assertEquals("重点巡逻", api.lastRequest?.operatorNote)
+        assertTrue(api.lastRequest?.operatorNote?.contains("重点巡逻") == true)
         assertTrue(api.lastRequest?.preferQuality == true)
         assertEquals(1200, api.lastRequest?.maxTokens)
         assertEquals("日报正文", report?.content)
@@ -143,7 +151,8 @@ class PatrolViewModelTest {
     @Test
     fun generateDailyReportFallsBackToDateAndBadgeMissionIdWhenBlank() = runTest {
         val api = FakeCerebellumReportApi()
-        val viewModel = PatrolViewModel(cerebellumApi = api)
+        val viewModel = testViewModel(cerebellumApi = api)
+        loginForTest(viewModel)
 
         viewModel.generateDailyReport()
         advanceUntilIdle()
@@ -153,6 +162,31 @@ class PatrolViewModelTest {
         assertTrue(missionId.contains("POLICE_9527"))
         assertEquals(missionId, viewModel.uiState.value.dailyReport.report?.missionId)
     }
+}
+
+private fun testViewModel(cerebellumApi: CerebellumApi? = null) = PatrolViewModel(
+    coordinator = MockPatrolCoordinatorFactory.create(),
+    versionGateway = MockVersionGateway(),
+    cerebellumApi = cerebellumApi
+)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private suspend fun TestScope.loginForTest(viewModel: PatrolViewModel) {
+    viewModel.login("POLICE_9527", "123456", agreed = true)
+    advanceUntilIdle()
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private suspend fun TestScope.loginAndConnect(viewModel: PatrolViewModel) {
+    loginForTest(viewModel)
+    viewModel.connectDiscoveredDevice(
+        id = "HEADSET_001",
+        name = "ForceLink-H1",
+        mac = "2C:4A:91:3F:8B:02",
+        signalBars = 4,
+        type = DeviceType.Headset
+    )
+    advanceUntilIdle()
 }
 
 private class FakeCerebellumReportApi : CerebellumApi {

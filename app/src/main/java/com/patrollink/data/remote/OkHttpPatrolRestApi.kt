@@ -223,6 +223,15 @@ class OkHttpPatrolRestApi(
     override suspend fun checkVersion(currentVersionCode: Int): ApiEnvelope<VersionCheckResultDto> =
         get("api/v1/version/check?currentVersionCode=$currentVersionCode")
 
+    override suspend fun checkFirmware(deviceId: String, request: FirmwareCheckRequestDto): ApiEnvelope<FirmwareCheckResultDto> =
+        post("api/v1/devices/${deviceId.pathId()}/firmware/check", request)
+
+    override suspend fun createFirmwareUpgradeTask(deviceId: String, request: FirmwareUpgradeTaskCreateDto): ApiEnvelope<FirmwareUpgradeTaskDto> =
+        post("api/v1/devices/${deviceId.pathId()}/firmware/upgrade-tasks", request)
+
+    override suspend fun updateFirmwareUpgradeTask(taskId: String, request: FirmwareUpgradeTaskUpdateDto): ApiEnvelope<FirmwareUpgradeTaskDto> =
+        post("api/v1/firmware/upgrade-tasks/${taskId.pathId()}", request)
+
     private suspend inline fun <reified T> get(path: String): T = execute("GET", path, null)
 
     private suspend inline fun <reified T> post(path: String, body: Any): T =

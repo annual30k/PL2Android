@@ -86,6 +86,13 @@ PATROL_CEREBELLUM_API_KEY=change-this-key \
 ./gradlew assembleDebug
 ```
 
+The mobile runtime config is also packaged as JSON so normal builds do not depend on remembering environment variables:
+
+- Development: `app/src/debug/assets/patrol-runtime.json`
+- Production: `app/src/release/assets/patrol-runtime.json`
+
+Config precedence is: settings saved on the device > the build-type `patrol-runtime.json` > Gradle `BuildConfig` / environment variable fallback. The debug package defaults to `http://10.0.2.2:8080` for the host backend from the Android emulator.
+
 Use `http://10.0.2.2:8088` from the Android emulator to reach a Docker service on the host. For field devices, use the hotspot or Wi-Fi Direct `192.168.x.x` address; cross-network access should go through HTTPS/mTLS.
 
 Remaining production work requires real backend URLs/contracts beyond the current DTOs, headset GATT UUIDs, command acknowledgement protocol, Wi-Fi hotspot file API details, cerebellum discovery/pairing, and streaming SDK endpoints.

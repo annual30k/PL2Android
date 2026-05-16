@@ -70,6 +70,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+data class MediaContentRequest(
+    val value: String,
+    val authorization: String? = null
+)
+
 class PatrolViewModel(
     private val appContext: Context? = null,
     private val coordinator: PatrolCoordinator = ServiceFactory.createCoordinator(),
@@ -118,6 +123,7 @@ class PatrolViewModel(
         }
 
         onSessionChanged(session)
+        runCatching { coordinator.connectRealtime(session.accessToken) }
         runCatching { coordinator.currentUser() }
             .onSuccess { user ->
                 _uiState.update { state ->
@@ -1133,6 +1139,27 @@ class PatrolViewModel(
 
     fun closeMediaPreview() = _uiState.update { it.copy(previewMediaFile = null) }
 
+    suspend fun mediaContentRequest(file: MediaFile): MediaContentRequest? = withContext(Dispatchers.IO) {
+        val value = file.contentUri?.takeIf { it.isNotBlank() } ?: return@withContext null
+        val uri = runCatching { Uri.parse(value) }.getOrNull()
+        val localFileExists = when {
+            uri?.scheme == "file" -> uri.path?.let(::File)?.exists() == true
+            uri?.scheme == null && value.startsWith("/") -> File(value).exists()
+            else -> false
+        }
+        val resolved = when {
+            value.startsWith("http://") || value.startsWith("https://") -> value
+            value.startsWith("/") && backendBaseUrl.isNotBlank() && !localFileExists -> backendBaseUrl.trimEnd('/') + value
+            else -> value
+        }
+        val authorization = if (resolved.startsWith("http://") || resolved.startsWith("https://")) {
+            secureStore?.readSession()?.accessToken?.takeIf { it.isNotBlank() }?.let { "Bearer $it" }
+        } else {
+            null
+        }
+        MediaContentRequest(resolved, authorization)
+    }
+
     fun clearMessage() = _uiState.update { it.copy(operationMessage = null) }
 
     fun showOperationMessage(message: String, type: OperationMessageType) = _uiState.update {
@@ -1306,15 +1333,35 @@ class PatrolViewModel(
     private fun operationMessage(text: String, type: OperationMessageType) = OperationMessage(text, type)
 
     private suspend fun materializeMediaForPreview(file: MediaFile): MediaFile? {
-        val existing = file.withShareableLocalUri(appContext)
+        val existing = file.withShareableLocalUri(appContext, allowRemote = false)
         if (existing != null) return existing
+        localFileForCerebellumUpload(file, appContext, backendBaseUrl, secureStore)?.let { cached ->
+            return rememberPreviewCache(file, cached)
+        }
         showOperationMessage("正在下载 ${file.name} 到手机沙盒后播放", OperationMessageType.Info)
         val downloaded = ensureMediaFileForCerebellum(file) ?: return null
-        downloaded.withShareableLocalUri(appContext)?.let { return it }
+        downloaded.withShareableLocalUri(appContext, allowRemote = false)?.let { return rememberPreviewCache(it, it.localContentFile() ?: return it) }
         val cached = localFileForCerebellumUpload(downloaded, appContext, backendBaseUrl, secureStore)
             ?: localFileForCerebellumUpload(file, appContext, backendBaseUrl, secureStore)
             ?: return null
-        return downloaded.copy(local = true, contentUri = Uri.fromFile(cached).toString()).withShareableLocalUri(appContext)
+        return rememberPreviewCache(downloaded, cached)
+    }
+
+    private fun rememberPreviewCache(file: MediaFile, cached: File): MediaFile? {
+        val cachedFile = cached.takeIf { it.exists() && it.isFile && it.length() > 0 } ?: return null
+        val existing = _uiState.value.mediaFiles.firstOrNull { it.id == file.id && it.local }
+        val cachedMedia = file.copy(
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            verified = true,
+            contentUri = Uri.fromFile(cachedFile).toString(),
+            lastTransferTarget = null
+        ).inheritCompletedCloudState(existing ?: file)
+        _uiState.update { state ->
+            state.copy(mediaFiles = state.mediaFiles.upsertMedia(cachedMedia))
+        }
+        return cachedMedia.withShareableLocalUri(appContext, allowRemote = false)
     }
 }
 
@@ -1350,7 +1397,7 @@ private fun List<MediaFile>.preferPhoneCopies(): List<MediaFile> =
 
 private fun String?.hasUsableValue(): Boolean = !isNullOrBlank()
 
-private fun MediaFile.withShareableLocalUri(context: Context?): MediaFile? {
+private fun MediaFile.withShareableLocalUri(context: Context?, allowRemote: Boolean = true): MediaFile? {
     val value = contentUri?.takeIf { it.isNotBlank() } ?: return null
     val uri = runCatching { Uri.parse(value) }.getOrNull()
     val localFile = when {
@@ -1358,10 +1405,24 @@ private fun MediaFile.withShareableLocalUri(context: Context?): MediaFile? {
         uri?.scheme == null && value.startsWith("/") -> File(value)
         else -> null
     }?.takeIf { it.exists() && it.isFile && it.length() > 0 }
-    if (localFile == null) return this.takeIf { uri?.scheme == "content" || value.startsWith("http://") || value.startsWith("https://") }
+    if (localFile == null) {
+        return this.takeIf {
+            uri?.scheme == "content" || (allowRemote && (value.startsWith("http://") || value.startsWith("https://")))
+        }
+    }
     if (context == null) return copy(contentUri = Uri.fromFile(localFile).toString())
     val shareUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", localFile)
     return copy(local = true, contentUri = shareUri.toString())
+}
+
+private fun MediaFile.localContentFile(): File? {
+    val value = contentUri?.takeIf { it.isNotBlank() } ?: return null
+    val uri = runCatching { Uri.parse(value) }.getOrNull()
+    return when {
+        uri?.scheme == "file" -> uri.path?.let(::File)
+        uri?.scheme == null && value.startsWith("/") -> File(value)
+        else -> null
+    }?.takeIf { it.exists() && it.isFile && it.length() > 0 }
 }
 
 private fun com.patrollink.domain.DeviceStatus.canReceiveDeviceCommand(): Boolean =
@@ -1402,10 +1463,11 @@ private suspend fun localFileForCerebellumUpload(
         val path = uri.path ?: return@withContext null
         return@withContext File(path).takeIf { it.exists() && it.isFile }
     }
-    val targetDir = context?.cacheDir?.let { File(it, "cerebellum_uploads").also { dir -> dir.mkdirs() } }
+    val targetDir = context?.cacheDir?.let { File(it, "media_preview_cache").also { dir -> dir.mkdirs() } }
         ?: return@withContext null
     val safeName = file.name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "${file.id}.bin" }
     val target = File(targetDir, "${file.id}-$safeName")
+    if (target.exists() && target.isFile && target.length() > 0) return@withContext target
     if (uri?.scheme == "content") {
         context.contentResolver.openInputStream(uri)?.use { input ->
             target.outputStream().use { output -> input.copyTo(output) }

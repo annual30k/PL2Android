@@ -1,0 +1,12 @@
+{
+  "restBaseUrl": "https://api.patrollink.example.com",
+  "webSocketUrl": "wss://api.patrollink.example.com/resource/websocket",
+  "wifiFileBaseUrl": "",
+  "cerebellumBaseUrl": "",
+  "cerebellumApiKey": "",
+  "bleServiceUuid": "",
+  "bleCommandUuid": "",
+  "bleStatusUuid": "",
+  "streamRelayUrl": "",
+  "useRealBle": true
+}

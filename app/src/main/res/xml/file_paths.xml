@@ -9,6 +9,9 @@
     <cache-path
         name="cerebellum_uploads"
         path="cerebellum_uploads/" />
+    <cache-path
+        name="media_preview_cache"
+        path="media_preview_cache/" />
     <files-path
         name="patrol_media"
         path="patrol_media/" />

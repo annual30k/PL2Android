@@ -1,6 +1,7 @@
 package com.patrollink.data.realtime
 
 import com.google.gson.Gson
+import com.patrollink.data.remote.OkHttpPatrolRestApi
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.HeartbeatAck
 import com.patrollink.domain.RealtimeConnection
@@ -15,6 +16,7 @@ import okhttp3.WebSocketListener
 
 class OkHttpWebSocketRealtimeGateway(
     private val url: String,
+    private val clientId: String = OkHttpPatrolRestApi.DEFAULT_CLIENT_ID,
     private val client: OkHttpClient = OkHttpClient(),
     private val gson: Gson = Gson()
 ) : RealtimeGateway {
@@ -28,6 +30,7 @@ class OkHttpWebSocketRealtimeGateway(
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $token")
+            .header("clientid", clientId)
             .build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {

@@ -1,0 +1,12 @@
+{
+  "restBaseUrl": "http://10.0.2.2:8080",
+  "webSocketUrl": "ws://10.0.2.2:8080/resource/websocket",
+  "wifiFileBaseUrl": "",
+  "cerebellumBaseUrl": "http://10.0.2.2:8088",
+  "cerebellumApiKey": "dev-cerebellum-key",
+  "bleServiceUuid": "",
+  "bleCommandUuid": "",
+  "bleStatusUuid": "",
+  "streamRelayUrl": "",
+  "useRealBle": false
+}

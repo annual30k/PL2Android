@@ -86,6 +86,13 @@ PATROL_CEREBELLUM_API_KEY=change-this-key \
 ./gradlew assembleDebug
 ```
 
+移动端运行时配置优先读取打包内置 JSON，避免每次打包忘记传环境变量：
+
+- 开发环境：`app/src/debug/assets/patrol-runtime.json`
+- 生产环境：`app/src/release/assets/patrol-runtime.json`
+
+配置优先级为：App 本机已保存设置 > 对应构建类型的 `patrol-runtime.json` > Gradle `BuildConfig` / 环境变量兜底。开发包默认使用 `http://10.0.2.2:8080` 访问宿主机后端，模拟器无需再额外传 `PATROL_REST_BASE_URL`。
+
 Android 模拟器访问宿主机 Docker 时可用 `http://10.0.2.2:8088`。局域网直连工程样机时可用设备热点或 Wi-Fi Direct 分配的 `192.168.x.x` 地址；公网或跨网段访问必须改为 HTTPS/mTLS 网关。
 
 安装后也可以在 App 内配置：进入 **我的 → 小脑连接**，填写小脑服务地址和 API Key 后保存。运行时配置会写入本机 `patrol_runtime_config`，保存后立即用于日报生成，不需要重新打包。不同民警或不同小脑设备可分别填写自己的热点/局域网地址，例如 `http://192.168.4.1:8088`。

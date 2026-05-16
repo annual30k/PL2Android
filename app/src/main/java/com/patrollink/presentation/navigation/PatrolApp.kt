@@ -56,6 +56,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -118,7 +120,12 @@ fun PatrolApp(
                 return@PermissionGate
             }
             if (!uiState.isLoggedIn) {
-                LoginScreen(uiState, onLogin = viewModel::login)
+                Box(Modifier.fillMaxSize()) {
+                    LoginScreen(uiState, onLogin = viewModel::login)
+                    uiState.operationMessage?.let { message ->
+                        AppMessage(message = message, onShown = viewModel::clearMessage)
+                    }
+                }
                 return@PermissionGate
             }
 
@@ -343,51 +350,59 @@ private fun AppMessage(message: OperationMessage, onShown: () -> Unit) {
         delay(style.durationMillis)
         onShown()
     }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 32.dp),
-        contentAlignment = Alignment.TopCenter
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 210.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(style.container)
-                .border(1.dp, style.border, RoundedCornerShape(18.dp))
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
-                Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(style.accent.copy(alpha = if (displayColors.dark) 0.22f else 0.13f)),
-                contentAlignment = Alignment.Center
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(style.container)
+                    .border(1.dp, style.border, RoundedCornerShape(18.dp))
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(style.icon, contentDescription = null, tint = style.accent, modifier = Modifier.size(21.dp))
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = style.title,
-                    color = style.accent,
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp,
-                    fontWeight = FontWeight.Black,
-                    maxLines = 1,
-                    letterSpacing = 0.sp
-                )
-                Text(
-                    text = message.text,
-                    color = style.text,
-                    fontSize = 15.sp,
-                    lineHeight = 20.sp,
-                    fontWeight = FontWeight.Black,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(style.accent.copy(alpha = if (displayColors.dark) 0.22f else 0.13f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(style.icon, contentDescription = null, tint = style.accent, modifier = Modifier.size(21.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = style.title,
+                        color = style.accent,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        letterSpacing = 0.sp
+                    )
+                    Text(
+                        text = message.text,
+                        color = style.text,
+                        fontSize = 15.sp,
+                        lineHeight = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }

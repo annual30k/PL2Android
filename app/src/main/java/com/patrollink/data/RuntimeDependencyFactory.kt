@@ -51,6 +51,7 @@ object RuntimeDependencyFactory {
             config = config,
             tokenProvider = tokenStore::token,
             operatorIdProvider = { emptyState.user.badgeNo },
+            pairingAccountIdProvider = tokenStore::pairingAccountId,
             fallbackState = emptyState,
             sharedUteBridge = uteBridge
         )
@@ -71,7 +72,7 @@ object RuntimeDependencyFactory {
             emergencyContactGateway = ServiceFactory.createEmergencyContactGateway(),
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
             versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
-            firmwareGateway = ServiceFactory.createFirmwareGateway(config, tokenStore::token),
+            firmwareGateway = ServiceFactory.createFirmwareGateway(appContext, config, uteBridge, tokenStore::token) { emptyState.user.badgeNo },
             versionInstaller = ServiceFactory.createVersionInstaller(appContext),
             cerebellumApi = ServiceFactory.createCerebellumApi(config),
             patrolRestApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let { OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenStore::token) },

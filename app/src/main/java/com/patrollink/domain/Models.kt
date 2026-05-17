@@ -53,7 +53,9 @@ data class DeviceStatus(
     val isRecording: Boolean,
     val isTalking: Boolean,
     val cloudConnected: Boolean,
-    val type: DeviceType = DeviceType.Headset
+    val type: DeviceType = DeviceType.Headset,
+    val batteryKnown: Boolean = false,
+    val storageKnown: Boolean = false
 )
 
 data class AlertItem(
@@ -106,7 +108,7 @@ data class VersionUpdateUiState(
     val message: String? = null
 )
 
-enum class FirmwareUpdatePhase { Idle, Checking, Available, UpToDate, Failed }
+enum class FirmwareUpdatePhase { Idle, Checking, Available, Downloading, Upgrading, Succeeded, UpToDate, Failed }
 
 data class FirmwareUpdateUiState(
     val phase: FirmwareUpdatePhase = FirmwareUpdatePhase.Idle,
@@ -116,7 +118,11 @@ data class FirmwareUpdateUiState(
     val downloadUrl: String? = null,
     val firmwareId: String? = null,
     val packageFormat: String = "",
+    val upgradeMode: String = "",
+    val sha256: String? = null,
+    val fileSizeBytes: Long = 0L,
     val forceUpdate: Boolean = false,
+    val progress: Float = 0f,
     val message: String? = null
 )
 

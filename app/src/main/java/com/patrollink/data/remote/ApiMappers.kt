@@ -46,7 +46,9 @@ fun DeviceStatusDto.toDomain() = DeviceStatus(
     isRecording = recordingStatus == "RECORDING",
     isTalking = talking,
     cloudConnected = cloudConnected,
-    type = DeviceType.Headset
+    type = DeviceType.Headset,
+    batteryKnown = true,
+    storageKnown = storageTotalGb > 0f
 )
 
 fun ScannedDeviceDto.toDomain() = ScannedDevice(

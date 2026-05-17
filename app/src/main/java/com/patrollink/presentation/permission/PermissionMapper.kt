@@ -9,6 +9,7 @@ fun AppPermission.toAndroidPermission(): String? = when (this) {
     AppPermission.NetworkState,
     AppPermission.ForegroundService -> null
     AppPermission.FineLocation -> Manifest.permission.ACCESS_FINE_LOCATION
+    AppPermission.NearbyWifiDevices -> if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else null
     AppPermission.BluetoothScan -> if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_SCAN else null
     AppPermission.BluetoothConnect -> if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_CONNECT else null
     AppPermission.BluetoothAdvertise -> if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_ADVERTISE else null

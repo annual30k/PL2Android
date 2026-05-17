@@ -8,7 +8,7 @@ enum class StreamMode { LowLatency, Balanced, EvidenceQuality }
 enum class StreamRelayState { Idle, Connecting, Relaying, Failed }
 enum class IntercomState { Idle, WaitingApp, Signaling, Active, Closed, Failed }
 enum class SosPhase { Idle, Activating, Active, Cancelled }
-enum class AppPermission { Internet, NetworkState, FineLocation, BluetoothScan, BluetoothConnect, BluetoothAdvertise, Camera, RecordAudio, PostNotifications, ForegroundService }
+enum class AppPermission { Internet, NetworkState, FineLocation, NearbyWifiDevices, BluetoothScan, BluetoothConnect, BluetoothAdvertise, Camera, RecordAudio, PostNotifications, ForegroundService }
 enum class BackgroundTaskType { Heartbeat, UploadEvidence, SyncAlertDisposition, VersionCheck }
 enum class DeviceEventLevel { Info, Warning, Error }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.gson.Gson
 import com.patrollink.BuildConfig
 import com.patrollink.domain.AuthSession
+import java.security.MessageDigest
 
 data class RuntimeConfig(
     val restBaseUrl: String,
@@ -135,10 +136,25 @@ class RuntimeConfigStore(context: Context) {
 class RuntimeTokenStore {
     @Volatile
     private var accessToken: String? = null
+    @Volatile
+    private var pairingAccountId: String = DefaultPairingAccountId
 
     fun token(): String? = accessToken
 
+    fun pairingAccountId(): String = pairingAccountId
+
     fun update(session: AuthSession?) {
         accessToken = session?.accessToken
+        pairingAccountId = session?.let { createPairingAccountId(it) } ?: DefaultPairingAccountId
+    }
+
+    private fun createPairingAccountId(session: AuthSession): String {
+        val source = session.refreshToken.ifBlank { session.accessToken }.ifBlank { DefaultPairingAccountId }
+        val digest = MessageDigest.getInstance("SHA-256").digest(source.toByteArray())
+        return digest.joinToString(separator = "") { "%02x".format(it) }.take(32)
+    }
+
+    private companion object {
+        const val DefaultPairingAccountId = "patrollink-local-operator"
     }
 }

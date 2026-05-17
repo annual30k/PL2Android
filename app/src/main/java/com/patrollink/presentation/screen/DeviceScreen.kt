@@ -56,9 +56,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
+import com.patrollink.domain.DeviceCapabilities
+import com.patrollink.domain.DeviceEvent
+import com.patrollink.domain.DeviceEventLevel
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
-import com.patrollink.domain.FirmwareUpdatePhase
 import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.presentation.PatrolViewModel
@@ -108,17 +110,16 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                         item {
                             MetricTile(
                                 "存储空间",
-                                "${device.storageUsedGb}GB / ${device.storageTotalGb.toInt()}GB",
+                                device.storageText(),
                                 Warning,
-                                device.storageUsedGb / device.storageTotalGb
+                                device.storageProgress()
                             )
                         }
                     }
                     DeviceType.Headset -> {
                         item { RecorderLiveFeed(uiState, viewModel, device) }
-                        item { HeadsetCapabilityCard(device) }
-                        item { HeadsetActions(device, viewModel) }
-                        item { FirmwareUpdateCard(uiState, device, viewModel) }
+                        item { HeadsetCapabilityCard(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing) }
+                        item { HeadsetActions(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing, viewModel) }
                     }
                     DeviceType.Sensor -> {
                         item { SensorCapabilityCard(device) }
@@ -129,10 +130,12 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                         item { RecorderLiveFeed(uiState, viewModel, device) }
                         item { GlassesCapabilityCard(device) }
                         item { GlassesActions(device, viewModel) }
-                        item { FirmwareUpdateCard(uiState, device, viewModel) }
                         item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
-                        item { MetricTile("眼镜电量", "${device.battery}%", Success, device.battery / 100f) }
+                        item { MetricTile("眼镜电量", device.batteryText(), Success, device.batteryProgress()) }
                     }
+                }
+                if (uiState.deviceEvents.isNotEmpty()) {
+                    item { DeviceEventsPanel(uiState.deviceEvents) }
                 }
             }
         }
@@ -304,46 +307,58 @@ private fun RecorderActions(device: DeviceStatus, viewModel: PatrolViewModel) {
                 onClick = viewModel::toggleRecord
             )
         }
-        Box(Modifier.weight(1f)) { CapabilityTile("云端同步", "已启用", TechBlue) }
+        Box(Modifier.weight(1f)) { ActionTile("设备自检", "info", enabled = enabled, onClick = viewModel::runDeviceSelfCheck) }
     }
 }
 
 @Composable
-private fun HeadsetCapabilityCard(device: DeviceStatus) {
+private fun HeadsetCapabilityCard(device: DeviceStatus, capabilities: DeviceCapabilities, recording: Boolean) {
     CapabilitySummaryCard(
         title = device.name,
         type = device.type,
         rows = listOf(
-            "摄像头" to if (device.isRecording) "录像中" else "待机",
-            "语音对讲" to if (device.isTalking) "通道占用中" else "待机",
+            "摄像头" to when {
+                !capabilities.supportsPhoto && !capabilities.supportsVideo -> "等待控制通道"
+                device.isRecording -> "录像中"
+                else -> "待机"
+            },
+            "耳机录音" to when {
+                !capabilities.supportsAudioRecord -> "当前设备不支持"
+                recording || device.isTalking -> "录制中"
+                else -> "待机"
+            },
             "在线时长" to device.onlineDuration,
-            "电量" to "${device.battery}%",
-            "本机存储" to "${device.storageUsedGb}GB / ${device.storageTotalGb.toInt()}GB"
+            "电量" to device.batteryText(),
+            "本机存储" to device.storageText()
         )
     )
 }
 
 @Composable
-private fun HeadsetActions(device: DeviceStatus, viewModel: PatrolViewModel) {
-    val enabled = device.isControllableDevice()
+private fun HeadsetActions(device: DeviceStatus, capabilities: DeviceCapabilities, recording: Boolean, viewModel: PatrolViewModel) {
+    val enabled = device.canUseSdkControls()
+    val recordEnabled = enabled && capabilities.supportsAudioRecord
+    val photoEnabled = enabled && capabilities.supportsPhoto
+    val videoEnabled = enabled && capabilities.supportsVideo
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.weight(1f)) {
             ActionTile(
-                if (device.isTalking) "对讲中" else "语音对讲",
-                "talk",
-                active = device.isTalking,
-                enabled = enabled,
+                if (recording || device.isTalking) "停止录音" else "耳机录音",
+                if (recording || device.isTalking) "stop" else "talk",
+                active = recording || device.isTalking,
+                danger = recording || device.isTalking,
+                enabled = recordEnabled,
                 onClick = viewModel::toggleTalk
             )
         }
-        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", enabled = enabled, onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", enabled = photoEnabled, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isRecording) "停止录像" else "执法录像",
                 if (device.isRecording) "stop" else "video",
                 active = device.isRecording,
                 danger = device.isRecording,
-                enabled = enabled,
+                enabled = videoEnabled,
                 onClick = viewModel::toggleRecord
             )
         }
@@ -355,7 +370,7 @@ private fun SensorCapabilityCard(device: DeviceStatus) {
     CapabilitySummaryCard(
         title = device.name,
         type = device.type,
-        rows = listOf("环境状态" to "正常", "姿态监测" to "稳定", "电量" to "${device.battery}%")
+        rows = listOf("环境状态" to "正常", "姿态监测" to "稳定", "电量" to device.batteryText())
     )
 }
 
@@ -364,13 +379,13 @@ private fun GlassesCapabilityCard(device: DeviceStatus) {
     CapabilitySummaryCard(
         title = device.name,
         type = device.type,
-        rows = listOf("第一视角" to "低延迟预览", "AR 提示" to "待命", "电量" to "${device.battery}%")
+        rows = listOf("第一视角" to "低延迟预览", "AR 提示" to "待命", "电量" to device.batteryText())
     )
 }
 
 @Composable
 private fun GlassesActions(device: DeviceStatus, viewModel: PatrolViewModel) {
-    val enabled = device.isControllableDevice()
+    val enabled = device.canUseSdkControls()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.weight(1f)) { ActionTile("抓拍", "camera", enabled = enabled, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
@@ -383,53 +398,32 @@ private fun GlassesActions(device: DeviceStatus, viewModel: PatrolViewModel) {
                 onClick = viewModel::toggleRecord
             )
         }
-        Box(Modifier.weight(1f)) { CapabilityTile("AR 取证", "已就绪", device.type.accent()) }
+        Box(Modifier.weight(1f)) { ActionTile("设备自检", "info", enabled = enabled, onClick = viewModel::runDeviceSelfCheck) }
     }
 }
 
 @Composable
-private fun FirmwareUpdateCard(uiState: AppUiState, device: DeviceStatus, viewModel: PatrolViewModel) {
+private fun DeviceEventsPanel(events: List<DeviceEvent>) {
     val colors = PatrolDisplay.colors
-    val firmware = uiState.firmwareUpdate
-    val statusText = when (firmware.phase) {
-        FirmwareUpdatePhase.Checking -> "检查中"
-        FirmwareUpdatePhase.Available -> firmware.latestVersionName?.let { "可升级到 $it" } ?: "发现新固件"
-        FirmwareUpdatePhase.UpToDate -> "已是最新"
-        FirmwareUpdatePhase.Failed -> "检查失败"
-        FirmwareUpdatePhase.Idle -> "待检查"
-    }
-    val accent = when (firmware.phase) {
-        FirmwareUpdatePhase.Available -> Warning
-        FirmwareUpdatePhase.Failed -> Danger
-        FirmwareUpdatePhase.UpToDate -> Success
-        else -> device.type.accent()
-    }
-    PatrolCard(radius = 16, padding = PaddingValues(14.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(Modifier.weight(1f)) {
-                    Text("固件升级", color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 16.sp, lineHeight = 21.sp))
-                    Text("当前版本 ${device.firmware.ifBlank { "未知" }}", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 1)
+    PatrolCard(radius = 16, padding = PaddingValues(horizontal = 14.dp, vertical = 14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text("设备事件", color = colors.text, style = PatrolTextStyle.CardTitle.copy(fontSize = 16.sp, lineHeight = 21.sp))
+            events.take(5).forEach { event ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    Box(
+                        Modifier.size(8.dp).clip(RoundedCornerShape(99.dp)).background(event.level.accent()),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(event.title, color = colors.text, style = PatrolTextStyle.BodyStrong.copy(fontSize = 13.sp, lineHeight = 17.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (event.detail.isNotBlank()) {
+                            Text(event.detail, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                 }
-                StatusTag(statusText, accent, filled = firmware.phase == FirmwareUpdatePhase.Available)
-            }
-            firmware.message?.takeIf { it.isNotBlank() }?.let {
-                Text(it, color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold), maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-            if (firmware.phase == FirmwareUpdatePhase.Available && firmware.changelog.isNotEmpty()) {
-                Text(firmware.changelog.take(2).joinToString(" / "), color = colors.text, style = PatrolTextStyle.BodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(accent.copy(alpha = 0.12f))
-                    .clickable(enabled = firmware.phase != FirmwareUpdatePhase.Checking, onClick = viewModel::checkFirmwareUpdate),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Text(if (firmware.phase == FirmwareUpdatePhase.Checking) "检查中" else "检查固件", color = accent, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Black), maxLines = 1)
             }
         }
     }
@@ -556,7 +550,7 @@ fun AddDeviceScreen(
     val devices = remember(uiState.scannedDevices) { uiState.scannedDevices.distinctByDeviceIdentity() }
     val connectedKeys = (uiState.connectedDevices + uiState.device)
         .filter { it.isControllableDevice() }
-        .flatMap { listOf(it.id, it.name) }
+        .map { it.id }
         .toSet()
     LaunchedEffect(Unit) {
         viewModel.refreshScannedDevices(showFailureMessage = true)
@@ -785,12 +779,24 @@ private fun radarChipPlacements(devices: List<ScannedDevice>): Map<String, Radar
 }
 
 private fun List<ScannedDevice>.distinctByDeviceIdentity(): List<ScannedDevice> =
-    distinctBy { device ->
-        when {
-            device.macAddress.isNotBlank() -> device.macAddress.uppercase()
-            device.id.isNotBlank() -> device.id
-            else -> device.name
+    groupBy { device -> device.identityKey() }
+        .values
+        .map { group ->
+            group.sortedWith(
+                compareByDescending<ScannedDevice> { it.type == DeviceType.Headset }
+                    .thenByDescending { it.serviceUuid == "system-bluetooth-audio-control-connected" }
+                    .thenByDescending { it.serviceUuid == "ute-ble-control-scanned" }
+                    .thenByDescending { it.serviceUuid.startsWith("system-bluetooth-audio") }
+                    .thenByDescending { it.signalBars }
+            ).first()
         }
+
+private fun ScannedDevice.identityKey(): String =
+    when {
+        isKnownDualModeAudioDevice() -> "patrol-dual-mode-audio"
+        macAddress.isNotBlank() -> macAddress.uppercase()
+        id.isNotBlank() -> id
+        else -> name
     }
 
 @Composable
@@ -916,10 +922,47 @@ private fun ScanTipsCard(palette: AddDevicePalette) {
 }
 
 private fun ScannedDevice.isConnected(connectedKeys: Set<String>) =
-    id in connectedKeys || macAddress in connectedKeys || name in connectedKeys
+    id in connectedKeys || macAddress in connectedKeys
+
+private fun ScannedDevice.isKnownDualModeAudioDevice(): Boolean {
+    val normalized = name.uppercase()
+    return serviceUuid.startsWith("system-bluetooth-audio") ||
+        "E1-PRO" in normalized ||
+        normalized.startsWith("SMI-")
+}
 
 private fun DeviceStatus.isControllableDevice(): Boolean =
     id.isNotBlank() && online
+
+private fun DeviceStatus.canUseSdkControls(): Boolean =
+    isControllableDevice() && !onlineDuration.startsWith("系统蓝牙")
+
+private fun DeviceStatus.batteryText(): String =
+    if (batteryKnown) "${battery.coerceIn(0, 100)}%" else "读取失败"
+
+private fun DeviceStatus.batteryProgress(): Float =
+    if (batteryKnown) battery.coerceIn(0, 100) / 100f else 0f
+
+private fun DeviceStatus.storageText(): String =
+    if (storageKnown) {
+        "${storageUsedGb.formatGb()}GB / ${storageTotalGb.formatGb()}GB"
+    } else {
+        "读取失败"
+    }
+
+private fun DeviceStatus.storageProgress(): Float =
+    if (storageKnown && storageTotalGb > 0f) {
+        (storageUsedGb / storageTotalGb).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+private fun Float.formatGb(): String =
+    if (this >= 10f || this % 1f == 0f) {
+        toInt().toString()
+    } else {
+        String.format(java.util.Locale.US, "%.1f", this)
+    }
 
 @Composable
 private fun DeviceTypeIcon(
@@ -969,6 +1012,12 @@ private fun DeviceType.accent() = when (this) {
     DeviceType.Recorder -> Color(0xFF8B5CF6)
     DeviceType.Sensor -> Success
     DeviceType.Glasses -> Color(0xFF14B8A6)
+}
+
+private fun DeviceEventLevel.accent() = when (this) {
+    DeviceEventLevel.Info -> TechBlue
+    DeviceEventLevel.Warning -> Warning
+    DeviceEventLevel.Error -> Danger
 }
 
 private data class AddDevicePalette(

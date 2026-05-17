@@ -40,6 +40,9 @@ class AndroidPermissionPlanner : PermissionGateway {
             base += AppPermission.BluetoothAdvertise
         }
         if (androidApi >= 33) {
+            base += AppPermission.NearbyWifiDevices
+        }
+        if (androidApi >= 33) {
             base += AppPermission.PostNotifications
         }
         return base

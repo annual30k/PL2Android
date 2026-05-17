@@ -1,5 +1,6 @@
 package com.patrollink.presentation.screen
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,7 +10,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,105 +48,64 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
+import com.patrollink.domain.FirmwareUpdatePhase
+import com.patrollink.domain.FirmwareUpdateUiState
 import com.patrollink.domain.VersionUpdatePhase
 import com.patrollink.domain.VersionUpdateUiState
 import com.patrollink.presentation.PatrolViewModel
-import com.patrollink.presentation.component.PrimaryAction
+import com.patrollink.presentation.component.StatusTag
 import com.patrollink.presentation.component.SystemBars
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.PatrolTextSize
 import com.patrollink.presentation.theme.TechBlue
+import com.patrollink.presentation.theme.Warning
 
 @Composable
 fun VersionInfoScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: () -> Unit) {
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     var contentDialog by remember { mutableStateOf<VersionContent?>(null) }
+    var activePage by remember { mutableStateOf<VersionInfoPage?>(null) }
+    val page = activePage
     val updateState = uiState.versionUpdate
 
+    BackHandler(enabled = page != null) {
+        activePage = null
+    }
     Box(Modifier.fillMaxSize().background(colors.page)) {
         Column(Modifier.fillMaxSize()) {
-            VersionTopBar(onBack = onBack)
+            VersionTopBar(
+                title = page?.title ?: "版本信息",
+                onBack = {
+                    if (page == null) onBack() else activePage = null
+                }
+            )
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                item {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            Modifier
-                                .size(96.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(colors.surfaceHigh),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            VersionIcon("shield", TechBlue, Modifier.size(48.dp))
-                        }
-                        Spacer(Modifier.height(28.dp))
-                        Text("执法链路", color = colors.text, fontSize = 34.sp, fontWeight = FontWeight.Black)
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "版本 v${updateState.currentVersionName}",
-                            color = colors.text,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 2.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(99.dp))
-                                .background(colors.control)
-                                .padding(horizontal = 20.dp, vertical = 7.dp)
-                        )
-                    }
-                }
-
-                item {
-                    PrimaryAction(
-                        text = if (updateState.phase == VersionUpdatePhase.Checking) "检查中" else "检查更新",
-                        onClick = { viewModel.checkVersionUpdate() },
-                        modifier = Modifier.fillMaxWidth().height(56.dp)
+                when (page) {
+                    null -> versionMenuContent(
+                        uiState = uiState,
+                        onOpenAppUpgrade = { activePage = VersionInfoPage.AppUpgrade },
+                        onOpenFirmwareUpgrade = { activePage = VersionInfoPage.FirmwareUpgrade }
                     )
-                }
-
-                item {
-                    VersionRowCard(
-                        icon = "logs",
-                        title = "版本日志",
-                        subtitle = "查看历史更新记录",
-                        onClick = { contentDialog = VersionContent.Logs }
+                    VersionInfoPage.AppUpgrade -> appUpgradeContent(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        onOpenContent = { contentDialog = it }
                     )
-                }
-
-                item {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        VersionTile("privacy", "隐私政策", Modifier.weight(1f), onClick = { contentDialog = VersionContent.Privacy })
-                        VersionTile("agreement", "用户协议", Modifier.weight(1f), onClick = { contentDialog = VersionContent.Agreement })
-                    }
-                }
-
-                item {
-                    Column(
-                        Modifier.padding(top = 16.dp, bottom = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text("战术系统节点：${uiState.user.systemNode}", color = colors.textSubtle, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
-                        Text("© 2024 哨兵核心系统", color = colors.textMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                            MiniSeal("认证")
-                            MiniSeal("安全")
-                        }
-                    }
+                    VersionInfoPage.FirmwareUpgrade -> firmwareUpgradeContent(uiState = uiState, viewModel = viewModel)
                 }
             }
         }
 
-        if (updateState.phase in setOf(VersionUpdatePhase.Available, VersionUpdatePhase.Downloading, VersionUpdatePhase.Ready, VersionUpdatePhase.UpToDate, VersionUpdatePhase.Failed)) {
+        if (page == VersionInfoPage.AppUpgrade && updateState.phase in setOf(VersionUpdatePhase.Available, VersionUpdatePhase.Downloading, VersionUpdatePhase.Ready, VersionUpdatePhase.UpToDate, VersionUpdatePhase.Failed)) {
             NewVersionDialog(
                 uiState = uiState,
                 onUpdate = viewModel::installVersionUpdate,
@@ -159,8 +118,275 @@ fun VersionInfoScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: (
     }
 }
 
+private enum class VersionInfoPage(val title: String) {
+    AppUpgrade("App版本升级"),
+    FirmwareUpgrade("耳机固件升级")
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.versionMenuContent(
+    uiState: AppUiState,
+    onOpenAppUpgrade: () -> Unit,
+    onOpenFirmwareUpgrade: () -> Unit
+) {
+    item {
+        VersionRowCard(
+            icon = "appUpgrade",
+            title = "App版本升级",
+            subtitle = "当前版本 v${uiState.versionUpdate.currentVersionName}",
+            onClick = onOpenAppUpgrade
+        )
+    }
+    item {
+        VersionRowCard(
+            icon = "firmwareUpgrade",
+            title = "耳机固件升级",
+            subtitle = headsetFirmwareSubtitle(uiState),
+            onClick = onOpenFirmwareUpgrade
+        )
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.appUpgradeContent(
+    uiState: AppUiState,
+    viewModel: PatrolViewModel,
+    onOpenContent: (VersionContent) -> Unit
+) {
+    item {
+        VersionProductHeader(uiState = uiState)
+    }
+    item {
+        AppUpgradeCard(updateState = uiState.versionUpdate, viewModel = viewModel)
+    }
+    item {
+        VersionRowCard(
+            icon = "logs",
+            title = "版本日志",
+            subtitle = "查看历史更新记录",
+            onClick = { onOpenContent(VersionContent.Logs) }
+        )
+    }
+    item {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            VersionTile("privacy", "隐私政策", Modifier.weight(1f), onClick = { onOpenContent(VersionContent.Privacy) })
+            VersionTile("agreement", "用户协议", Modifier.weight(1f), onClick = { onOpenContent(VersionContent.Agreement) })
+        }
+    }
+    item {
+        VersionFooter(uiState = uiState)
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.firmwareUpgradeContent(uiState: AppUiState, viewModel: PatrolViewModel) {
+    item {
+        FirmwareUpgradeCard(uiState = uiState, viewModel = viewModel)
+    }
+}
+
 @Composable
-private fun VersionTopBar(onBack: () -> Unit) {
+private fun VersionProductHeader(uiState: AppUiState) {
+    val colors = PatrolDisplay.colors
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(96.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(colors.surfaceHigh),
+            contentAlignment = Alignment.Center
+        ) {
+            VersionIcon("shield", TechBlue, Modifier.size(48.dp))
+        }
+        Spacer(Modifier.height(28.dp))
+        Text("执法链路", color = colors.text, fontSize = 34.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "版本 v${uiState.versionUpdate.currentVersionName}",
+            color = colors.text,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 2.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(99.dp))
+                .background(colors.control)
+                .padding(horizontal = 20.dp, vertical = 7.dp)
+        )
+    }
+}
+
+@Composable
+private fun VersionFooter(uiState: AppUiState) {
+    val colors = PatrolDisplay.colors
+    Column(
+        Modifier.padding(top = 16.dp, bottom = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("战术系统节点：${uiState.user.systemNode}", color = colors.textSubtle, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
+        Text("© 2024 哨兵核心系统", color = colors.textMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            MiniSeal("认证")
+            MiniSeal("安全")
+        }
+    }
+}
+
+@Composable
+private fun AppUpgradeCard(updateState: VersionUpdateUiState, viewModel: PatrolViewModel) {
+    val colors = PatrolDisplay.colors
+    val accent = if (updateState.phase == VersionUpdatePhase.Available) Warning else TechBlue
+    VersionUpgradeCard(
+        icon = "appUpgrade",
+        title = "App升级",
+        subtitle = "当前版本 v${updateState.currentVersionName}",
+        status = appUpgradeStatus(updateState),
+        accent = accent,
+        message = updateState.message ?: "检查执法链路 App 是否有新版本。",
+        buttonText = if (updateState.phase == VersionUpdatePhase.Checking) "检查中" else "检查App更新",
+        buttonEnabled = updateState.phase != VersionUpdatePhase.Checking,
+        onClick = viewModel::checkVersionUpdate
+    ) {
+        if (updateState.phase == VersionUpdatePhase.Available && updateState.changelog.isNotEmpty()) {
+            Text(updateState.changelog.take(2).joinToString(" / "), color = colors.text, fontSize = 13.sp, lineHeight = 19.sp)
+        }
+    }
+}
+
+@Composable
+private fun FirmwareUpgradeCard(uiState: AppUiState, viewModel: PatrolViewModel) {
+    val colors = PatrolDisplay.colors
+    val firmware = uiState.firmwareUpdate
+    val device = uiState.device
+    val hasDevice = device.online && device.id.isNotBlank()
+    val accent = when (firmware.phase) {
+        FirmwareUpdatePhase.Available -> Warning
+        FirmwareUpdatePhase.Succeeded,
+        FirmwareUpdatePhase.UpToDate -> Color(0xFF16A34A)
+        FirmwareUpdatePhase.Failed -> Color(0xFFEF4444)
+        else -> TechBlue
+    }
+    val busy = firmware.phase == FirmwareUpdatePhase.Checking ||
+        firmware.phase == FirmwareUpdatePhase.Downloading ||
+        firmware.phase == FirmwareUpdatePhase.Upgrading
+    val currentFirmware = firmware.currentVersionName.ifBlank { device.firmware }.ifBlank { "未知" }
+    VersionUpgradeCard(
+        icon = "firmwareUpgrade",
+        title = "耳机固件升级",
+        subtitle = if (hasDevice) "${device.name} · 当前固件 $currentFirmware" else "未连接耳机",
+        status = firmwareUpgradeStatus(firmware, hasDevice),
+        accent = accent,
+        message = firmware.message ?: if (hasDevice) "检查当前耳机是否有可用固件。" else "请先连接耳机后再检查固件。",
+        buttonText = when (firmware.phase) {
+            FirmwareUpdatePhase.Checking -> "检查中"
+            FirmwareUpdatePhase.Downloading -> "下载中"
+            FirmwareUpdatePhase.Upgrading -> "升级中"
+            FirmwareUpdatePhase.Available -> "开始升级"
+            else -> "检查固件更新"
+        },
+        buttonEnabled = !busy,
+        onClick = {
+            if (firmware.phase == FirmwareUpdatePhase.Available) {
+                viewModel.startFirmwareUpgrade()
+            } else {
+                viewModel.checkFirmwareUpdate()
+            }
+        }
+    ) {
+        if (firmware.phase == FirmwareUpdatePhase.Downloading || firmware.phase == FirmwareUpdatePhase.Upgrading) {
+            LinearProgressIndicator(
+                progress = { firmware.progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(6.dp),
+                color = accent,
+                trackColor = colors.border
+            )
+        }
+        if (firmware.phase == FirmwareUpdatePhase.Available && firmware.changelog.isNotEmpty()) {
+            Text(firmware.changelog.take(2).joinToString(" / "), color = colors.text, fontSize = 13.sp, lineHeight = 19.sp)
+        }
+    }
+}
+
+@Composable
+private fun VersionUpgradeCard(
+    icon: String,
+    title: String,
+    subtitle: String,
+    status: String,
+    accent: Color,
+    message: String,
+    buttonText: String,
+    buttonEnabled: Boolean,
+    onClick: () -> Unit,
+    extraContent: @Composable () -> Unit = {}
+) {
+    val colors = PatrolDisplay.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.surfaceHigh)
+            .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(accent.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                VersionIcon(icon, accent, Modifier.size(28.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, color = colors.text, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                Text(subtitle, color = colors.textMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            }
+            StatusTag(status, accent, filled = status.contains("发现") || status.contains("可升级"))
+        }
+        Text(message, color = colors.textMuted, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium)
+        extraContent()
+        Button(
+            onClick = onClick,
+            enabled = buttonEnabled,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = accent)
+        ) {
+            Text(buttonText, fontSize = 15.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        }
+    }
+}
+
+private fun appUpgradeStatus(update: VersionUpdateUiState): String = when (update.phase) {
+    VersionUpdatePhase.Checking -> "检查中"
+    VersionUpdatePhase.Available -> "发现新版本"
+    VersionUpdatePhase.Downloading -> "下载中"
+    VersionUpdatePhase.Ready -> "待安装"
+    VersionUpdatePhase.UpToDate -> "已是最新"
+    VersionUpdatePhase.Failed -> "检查失败"
+    VersionUpdatePhase.Idle -> "待检查"
+}
+
+private fun firmwareUpgradeStatus(firmware: FirmwareUpdateUiState, hasDevice: Boolean): String = when {
+    !hasDevice -> "未连接"
+    firmware.phase == FirmwareUpdatePhase.Checking -> "检查中"
+    firmware.phase == FirmwareUpdatePhase.Available -> "可升级"
+    firmware.phase == FirmwareUpdatePhase.Downloading -> "下载中"
+    firmware.phase == FirmwareUpdatePhase.Upgrading -> "升级中"
+    firmware.phase == FirmwareUpdatePhase.Succeeded -> "已启动"
+    firmware.phase == FirmwareUpdatePhase.UpToDate -> "已是最新"
+    firmware.phase == FirmwareUpdatePhase.Failed -> "检查失败"
+    else -> "待检查"
+}
+
+private fun headsetFirmwareSubtitle(uiState: AppUiState): String {
+    val device = uiState.device
+    if (!device.online || device.id.isBlank()) return "未连接耳机"
+    return "${device.name} · 固件 ${device.firmware.ifBlank { "未知" }}"
+}
+
+@Composable
+private fun VersionTopBar(title: String, onBack: () -> Unit) {
     val colors = PatrolDisplay.colors
     Row(
         Modifier
@@ -183,7 +409,7 @@ private fun VersionTopBar(onBack: () -> Unit) {
             VersionIcon("back", TechBlue, Modifier.size(28.dp))
         }
         Spacer(Modifier.width(12.dp))
-        Text("版本信息", color = TechBlue, fontSize = 22.sp, fontWeight = FontWeight.Black)
+        Text(title, color = TechBlue, fontSize = 22.sp, fontWeight = FontWeight.Black)
     }
 }
 
@@ -449,6 +675,8 @@ private fun VersionIcon(name: String, color: Color, modifier: Modifier = Modifie
         "logs" -> Icons.AutoMirrored.Filled.ReceiptLong
         "privacy" -> Icons.Filled.Policy
         "agreement" -> Icons.Filled.Gavel
+        "appUpgrade" -> Icons.Filled.SystemUpdateAlt
+        "firmwareUpgrade" -> Icons.Filled.Upload
         "upload" -> Icons.Filled.Upload
         "smallShield" -> Icons.Filled.VerifiedUser
         "shield" -> Icons.Filled.Security

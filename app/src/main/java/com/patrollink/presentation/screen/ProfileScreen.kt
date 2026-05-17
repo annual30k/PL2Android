@@ -211,8 +211,8 @@ fun ProfileScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         SectionHeading("版本信息", Icons.Filled.Info, Warning)
                         Column(Modifier.padding(start = ProfileTextStartPadding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("执法链路 v${uiState.versionUpdate.currentVersionName} · 加密通道已启用 · 核心服务已同步", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
-                            StatusTag(uiState.versionUpdate.latestVersionName?.let { "发现新版本 v$it" } ?: "点击检查更新", Warning)
+                            Text("App v${uiState.versionUpdate.currentVersionName} · 耳机固件 ${uiState.device.firmware.ifBlank { "未连接设备" }}", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
+                            StatusTag("App版本 / 耳机固件", Warning)
                         }
                     }
                 }

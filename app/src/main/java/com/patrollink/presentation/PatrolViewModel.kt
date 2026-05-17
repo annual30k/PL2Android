@@ -26,11 +26,13 @@ import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceControlGateway
+import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
 import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.EmptyAppState
 import com.patrollink.domain.FontSizeMode
+import com.patrollink.domain.FirmwareCheckResult
 import com.patrollink.domain.FirmwareDeviceMetadata
 import com.patrollink.domain.FirmwareGateway
 import com.patrollink.domain.FirmwareUpdatePhase
@@ -44,6 +46,7 @@ import com.patrollink.domain.OperationMessageType
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SecureStore
+import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.SosEvidenceRecorder
 import com.patrollink.domain.StreamMode
 import com.patrollink.domain.StreamRelayState
@@ -102,6 +105,7 @@ class PatrolViewModel(
     )
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
     private var scannedDevicesJob: Job? = null
+    private val autoBindingDeviceIds = mutableSetOf<String>()
 
     init {
         refreshEmergencyContacts()
@@ -237,7 +241,13 @@ class PatrolViewModel(
             showOperationMessage("请先连接设备", OperationMessageType.Warning)
             return@launch
         }
-        runCatching { coordinator.setTalk(device, !device.isTalking) }
+        runCatching {
+            if (device.type == DeviceType.Headset) {
+                coordinator.setDeviceTalk(device, !device.isTalking)
+            } else {
+                coordinator.setTalk(device, !device.isTalking)
+            }
+        }
             .onSuccess { next -> updateCurrentDevice(next) }
             .onFailure {
                 _uiState.update { state ->
@@ -300,6 +310,37 @@ class PatrolViewModel(
         }
     }
 
+    fun runDeviceSelfCheck() = viewModelScope.launch {
+        val device = _uiState.value.device
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备后再执行自检", OperationMessageType.Warning)
+            return@launch
+        }
+        _uiState.update { it.copy(operationMessage = operationMessage("正在执行设备自检", OperationMessageType.Info)) }
+        val refreshedDevice = runCatching { coordinator.bindDevice(device.id) }.getOrNull()
+        if (refreshedDevice != null) updateCurrentDevice(refreshedDevice)
+        val checkedDevice = refreshedDevice ?: _uiState.value.device
+        val capabilities = deviceControlGateway?.let { gateway ->
+            runCatching { gateway.capabilities(checkedDevice) }.getOrNull()
+        } ?: _uiState.value.deviceCapabilities
+        val wifi = deviceControlGateway?.let { gateway ->
+            if (capabilities.supportsWifi) runCatching { gateway.readWifi() }.getOrNull() else DeviceWifiState()
+        } ?: _uiState.value.deviceWifiState
+        val localCount = runCatching { coordinator.mediaFiles(local = true).size }.getOrDefault(0)
+        val deviceCount = runCatching { coordinator.mediaFiles(local = false).size }.getOrDefault(0)
+        refreshMediaFiles()
+        _uiState.update { state ->
+            state.copy(
+                deviceCapabilities = capabilities,
+                deviceWifiState = wifi,
+                operationMessage = operationMessage(
+                    "自检完成：电量 ${state.device.batteryTextForMessage()}，存储 ${state.device.storageTextForMessage()}，本地媒体 $localCount，设备媒体 $deviceCount",
+                    OperationMessageType.Success
+                )
+            )
+        }
+    }
+
     fun configureDeviceWifi(enabled: Boolean, ssid: String, password: String) = viewModelScope.launch {
         val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备 Wi-Fi 通道未启用", OperationMessageType.Warning)
         runCatching { gateway.configureWifi(enabled, ssid, password) }
@@ -322,8 +363,13 @@ class PatrolViewModel(
             if (active) gateway.stopRealtimeAudioSync() else gateway.startRealtimeAudioSync("session-${System.currentTimeMillis()}")
         }.getOrDefault(false)
         _uiState.update {
+            val nextActive = if (ok) !active else active
             it.copy(
-                realtimeAudioSyncing = if (ok) !active else active,
+                device = it.device.copy(isTalking = nextActive),
+                connectedDevices = it.connectedDevices.map { connected ->
+                    if (connected.id == it.device.id) connected.copy(isTalking = nextActive) else connected
+                },
+                realtimeAudioSyncing = nextActive,
                 operationMessage = when {
                     ok && active -> operationMessage("实时音频同传已停止，后续走离线续传", OperationMessageType.Info)
                     ok -> operationMessage("实时音频同传已启动", OperationMessageType.Success)
@@ -764,28 +810,34 @@ class PatrolViewModel(
             showOperationMessage("请先连接设备", OperationMessageType.Warning)
             return@launch
         }
-        val next = coordinator.takePhoto(device)
-        val now = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
-        val photo = MediaFile(
-            id = "photo-${System.currentTimeMillis()}",
-            name = "现场照片_${now.replace(":", "")}",
-            kind = MediaKind.Photo,
-            time = now,
-            size = "2.8 MB",
-            duration = null,
-            verified = true,
-            local = false,
-            transferStatus = TransferStatus.Idle,
-            progress = 0f
-        )
+        val next = runCatching { coordinator.takePhoto(device) }
+            .getOrElse {
+                showOperationMessage("拍照失败，请确认设备控制通道已连接", OperationMessageType.Error)
+                return@launch
+            }
+        val captured = runCatching {
+            coordinator.mediaFiles(local = true)
+                .filter { it.kind == MediaKind.Photo && it.contentUri.hasUsableValue() }
+                .maxByOrNull { it.lastModifiedFromContentUri() }
+        }.getOrNull()
+        if (captured != null) {
+            _uiState.update { state ->
+                state.copy(
+                    device = next,
+                    connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
+                    mediaFiles = state.mediaFiles.upsertMedia(captured),
+                    selectedMediaFileId = captured.id,
+                    selectedMediaLocal = true,
+                    operationMessage = operationMessage("现场照片已保存到手机沙盒", OperationMessageType.Success)
+                )
+            }
+            return@launch
+        }
         _uiState.update { state ->
             state.copy(
                 device = next,
                 connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
-                mediaFiles = listOf(photo) + state.mediaFiles,
-                selectedMediaFileId = photo.id,
-                selectedMediaLocal = false,
-                operationMessage = operationMessage("现场照片已保存到设备端", OperationMessageType.Success)
+                operationMessage = operationMessage("拍照命令已下发，等待设备回传文件", OperationMessageType.Info)
             )
         }
     }
@@ -822,11 +874,12 @@ class PatrolViewModel(
             val bound = runCatching { coordinator.bindDevice(id) }.getOrElse {
                 _uiState.value.device.copy(id = id, name = name, online = false, signalBars = signalBars.coerceIn(1, 5), type = type)
             }
+            val resolvedType = resolveConnectedDeviceType(bound, scannedName = name, scannedType = type)
             val next = bound.copy(
                 name = name,
                 signalBars = bound.signalBars.coerceIn(1, 5),
                 onlineDuration = if (bound.online) "刚刚连接" else "连接失败",
-                type = type
+                type = resolvedType
             )
             _uiState.update { state ->
                 val connected = if (next.online) {
@@ -842,9 +895,9 @@ class PatrolViewModel(
                     deviceWifiState = DeviceWifiState(),
                     realtimeAudioSyncing = false,
                     operationMessage = if (next.online) {
-                        operationMessage("$name 已连接", OperationMessageType.Success)
+                        operationMessage("$name 已配对并连接", OperationMessageType.Success)
                     } else {
-                        operationMessage("$name 连接失败，请检查蓝牙和距离", OperationMessageType.Error)
+                        operationMessage("$name 配对失败，请检查蓝牙、距离和设备确认状态", OperationMessageType.Error)
                     }
                 )
             }
@@ -887,7 +940,66 @@ class PatrolViewModel(
         scannedDevicesJob = viewModelScope.launch {
             runCatching {
                 coordinator.scanDevices().collect { devices ->
-                    _uiState.update { it.copy(scannedDevices = devices) }
+                    _uiState.update { state ->
+                        val systemConnected = devices
+                            .filter { it.isSystemBluetoothAudioConnected() }
+                            .map { it.toConnectedAudioStatus(state.device) }
+                        val sdkConnected = state.connectedDevices.filter { it.hasSdkControlChannel() }
+                        val systemPlaceholders = systemConnected.filterNot { system ->
+                            sdkConnected.any { it.representsSameAudioDevice(system) }
+                        }
+                        val mergedConnected = (state.connectedDevices.filterNot { existing ->
+                            systemPlaceholders.any { it.id == existing.id || (!existing.hasSdkControlChannel() && it.type == existing.type) }
+                        } + systemPlaceholders).distinctBy { it.id }
+                        val selectedDevice = when {
+                            state.device.isControllableDevice() -> state.device
+                            systemConnected.isNotEmpty() -> systemConnected.first()
+                            else -> state.device
+                        }
+                        state.copy(
+                            scannedDevices = devices,
+                            connectedDevices = mergedConnected,
+                            device = selectedDevice,
+                            selectedDeviceId = selectedDevice.id.takeIf { it.isNotBlank() }
+                        )
+                    }
+                    val autoControlDevice = devices.firstOrNull { it.isNativeUteHeadsetControl() }
+                        ?: devices.firstOrNull { it.isSystemBluetoothAudioControlConnected() }
+                        ?: devices.firstOrNull { it.isSystemBluetoothAudioConnected() }
+                    if (autoControlDevice != null &&
+                        _uiState.value.connectedDevices.none {
+                            it.hasSdkControlChannel() && it.representsSameAudioDevice(autoControlDevice)
+                        } &&
+                        autoBindingDeviceIds.add(autoControlDevice.id)
+                    ) {
+                        viewModelScope.launch {
+                            runCatching { coordinator.bindDevice(autoControlDevice.id) }
+                                .onSuccess { bound ->
+                                    val resolvedType = resolveConnectedDeviceType(
+                                        bound = bound,
+                                        scannedName = autoControlDevice.name,
+                                        scannedType = autoControlDevice.type
+                                    )
+                                    val next = bound.copy(
+                                        name = autoControlDevice.name,
+                                        signalBars = maxOf(bound.signalBars, autoControlDevice.signalBars).coerceIn(1, 5),
+                                        type = resolvedType
+                                    )
+                                    _uiState.update { state ->
+                                        if (!next.hasSdkControlChannel()) return@update state
+                                        val connected = state.connectedDevices.filterNot {
+                                            it.id == next.id || (!it.hasSdkControlChannel() && it.type == next.type)
+                                        } + next
+                                        state.copy(
+                                            device = next,
+                                            connectedDevices = connected,
+                                            selectedDeviceId = next.id
+                                        )
+                                    }
+                                }
+                            autoBindingDeviceIds.remove(autoControlDevice.id)
+                        }
+                    }
                 }
             }.onFailure {
                 _uiState.update { state ->
@@ -1173,6 +1285,8 @@ class PatrolViewModel(
 
     private fun observeDeviceEvents() = viewModelScope.launch {
         deviceControlGateway?.events()?.collect { event ->
+            if (event.shouldRefreshMedia()) refreshMediaFiles()
+            if (event.shouldRefreshDeviceCapabilities()) refreshDeviceCapabilities()
             _uiState.update { state ->
                 state.copy(
                     deviceEvents = (listOf(event) + state.deviceEvents).take(5),
@@ -1212,7 +1326,7 @@ class PatrolViewModel(
         val device = _uiState.value.device
         if (!device.online || device.id.isBlank()) {
             _uiState.update { state ->
-                state.copy(operationMessage = operationMessage("请先连接耳机或眼镜后再检查固件", OperationMessageType.Warning))
+                state.copy(operationMessage = operationMessage("请先连接耳机后再检查固件", OperationMessageType.Warning))
             }
             return@launch
         }
@@ -1238,7 +1352,11 @@ class PatrolViewModel(
                         downloadUrl = result.downloadUrl,
                         firmwareId = result.firmwareId,
                         packageFormat = result.packageFormat,
+                        upgradeMode = result.upgradeMode,
+                        sha256 = result.sha256,
+                        fileSizeBytes = result.fileSizeBytes,
                         forceUpdate = result.forceUpdate,
+                        progress = 0f,
                         message = "发现设备固件 ${result.versionName}"
                     )
                 } else {
@@ -1250,7 +1368,11 @@ class PatrolViewModel(
                         downloadUrl = null,
                         firmwareId = null,
                         packageFormat = "",
+                        upgradeMode = "",
+                        sha256 = null,
+                        fileSizeBytes = 0L,
                         forceUpdate = false,
+                        progress = 0f,
                         message = result.message.ifBlank { "当前已是最新固件" }
                     )
                 }
@@ -1267,6 +1389,63 @@ class PatrolViewModel(
                 state.copy(
                     firmwareUpdate = state.firmwareUpdate.copy(phase = FirmwareUpdatePhase.Failed, message = "设备固件检查失败"),
                     operationMessage = operationMessage("设备固件检查失败", OperationMessageType.Error)
+                )
+            }
+        }
+    }
+
+    fun startFirmwareUpgrade() = viewModelScope.launch {
+        val device = _uiState.value.device
+        val update = _uiState.value.firmwareUpdate
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备后再升级固件", OperationMessageType.Warning)
+            return@launch
+        }
+        if (update.phase != FirmwareUpdatePhase.Available) {
+            showOperationMessage("请先检查并选择可用固件", OperationMessageType.Warning)
+            return@launch
+        }
+        val firmware = update.toFirmwareCheckResult(device)
+        _uiState.update {
+            it.copy(
+                firmwareUpdate = update.copy(
+                    phase = FirmwareUpdatePhase.Downloading,
+                    progress = 0.05f,
+                    message = "正在准备固件包"
+                )
+            )
+        }
+        runCatching {
+            firmwareGateway.install(device, firmware).collect { progress ->
+                _uiState.update { state ->
+                    state.copy(
+                        firmwareUpdate = state.firmwareUpdate.copy(
+                            phase = progress.status.toFirmwarePhase(),
+                            progress = progress.progress.coerceIn(0f, 1f),
+                            message = progress.status.toFirmwareMessage(progress.errorMessage)
+                        )
+                    )
+                }
+            }
+        }.onSuccess {
+            _uiState.update { state ->
+                state.copy(
+                    firmwareUpdate = state.firmwareUpdate.copy(
+                        phase = FirmwareUpdatePhase.Succeeded,
+                        progress = 1f,
+                        message = "固件升级已启动，请保持设备连接并等待设备完成重启"
+                    ),
+                    operationMessage = operationMessage("固件升级已启动", OperationMessageType.Success)
+                )
+            }
+        }.onFailure {
+            _uiState.update { state ->
+                state.copy(
+                    firmwareUpdate = state.firmwareUpdate.copy(
+                        phase = FirmwareUpdatePhase.Failed,
+                        message = "固件升级启动失败"
+                    ),
+                    operationMessage = operationMessage("固件升级启动失败", OperationMessageType.Error)
                 )
             }
         }
@@ -1425,8 +1604,17 @@ private fun MediaFile.localContentFile(): File? {
     }?.takeIf { it.exists() && it.isFile && it.length() > 0 }
 }
 
+private fun MediaFile.lastModifiedFromContentUri(): Long =
+    localContentFile()?.lastModified() ?: time.toLongOrNull() ?: 0L
+
 private fun com.patrollink.domain.DeviceStatus.canReceiveDeviceCommand(): Boolean =
     id.isNotBlank() && online
+
+private fun com.patrollink.domain.DeviceStatus.batteryTextForMessage(): String =
+    if (batteryKnown) "${battery.coerceIn(0, 100)}%" else "读取失败"
+
+private fun com.patrollink.domain.DeviceStatus.storageTextForMessage(): String =
+    if (!storageKnown || storageTotalGb <= 0f) "读取失败" else "%.1f/%.1fGB".format(storageUsedGb, storageTotalGb)
 
 private fun Long.toUptimeLabel(): String {
     val days = this / 86_400
@@ -1499,14 +1687,128 @@ private suspend fun localFileForCerebellumUpload(
     }
 }
 
+private fun com.patrollink.domain.DeviceEvent.shouldRefreshMedia(): Boolean =
+    id.startsWith("image-") ||
+        id.startsWith("audio-") ||
+        id.startsWith("store-")
+
+private fun com.patrollink.domain.DeviceEvent.shouldRefreshDeviceCapabilities(): Boolean =
+    id.startsWith("wifi-") ||
+        id.startsWith("store-") ||
+        id.startsWith("ota-")
+
 private fun MediaKind.toCerebellumEvidenceType(): String = when (this) {
     MediaKind.Video -> "video"
     MediaKind.Photo -> "image"
     MediaKind.Audio -> "audio"
 }
 
+private fun FirmwareUpdateUiState.toFirmwareCheckResult(device: DeviceStatus): FirmwareCheckResult =
+    FirmwareCheckResult(
+        hasUpdate = true,
+        firmwareId = firmwareId,
+        deviceType = device.type.name.uppercase(),
+        vendor = "UTE",
+        chipset = "",
+        deviceModel = device.name,
+        hardwareVersion = "",
+        firmwareType = packageFormat,
+        versionCode = null,
+        versionName = latestVersionName.orEmpty(),
+        forceUpdate = forceUpdate,
+        changelog = changelog,
+        downloadUrl = downloadUrl,
+        sha256 = sha256,
+        fileId = firmwareId,
+        fileSizeBytes = fileSizeBytes,
+        packageFormat = packageFormat,
+        upgradeMode = upgradeMode.ifBlank { "APP_CONTROLLED" },
+        currentFirmwareVersion = currentVersionName.ifBlank { device.firmware },
+        message = message.orEmpty()
+    )
+
+private fun String.toFirmwarePhase(): FirmwareUpdatePhase = when {
+    contains("DOWNLOADING", ignoreCase = true) -> FirmwareUpdatePhase.Downloading
+    contains("PREPARING", ignoreCase = true) ||
+        contains("STARTED", ignoreCase = true) ||
+        contains("HANDOFF", ignoreCase = true) ||
+        contains("PENDING", ignoreCase = true) -> FirmwareUpdatePhase.Upgrading
+    contains("FAILED", ignoreCase = true) ||
+        contains("ERROR", ignoreCase = true) ||
+        contains("UNAVAILABLE", ignoreCase = true) -> FirmwareUpdatePhase.Failed
+    else -> FirmwareUpdatePhase.Upgrading
+}
+
+private fun String.toFirmwareMessage(errorMessage: String): String = when {
+    errorMessage.isNotBlank() -> errorMessage
+    contains("DOWNLOADING", ignoreCase = true) -> "正在下载固件包"
+    contains("PREPARING", ignoreCase = true) -> "正在让设备进入升级准备状态"
+    contains("STARTED", ignoreCase = true) -> "设备固件升级已开始"
+    contains("HANDOFF", ignoreCase = true) -> "升级流程已交给设备，请等待设备重启完成"
+    contains("PENDING", ignoreCase = true) -> "固件升级任务已提交"
+    else -> "正在升级固件"
+}
+
 private fun AuthSession.hasUsableTokens(): Boolean =
     accessToken.isNotBlank() && refreshToken.isNotBlank()
+
+private fun DeviceStatus.isControllableDevice(): Boolean =
+    id.isNotBlank() && online
+
+private fun DeviceStatus.hasSdkControlChannel(): Boolean =
+    isControllableDevice() && !onlineDuration.startsWith("系统蓝牙")
+
+private fun ScannedDevice.isSystemBluetoothAudioConnected(): Boolean =
+    serviceUuid == "system-bluetooth-audio-connected" ||
+        serviceUuid == "system-bluetooth-audio-control-connected"
+
+private fun ScannedDevice.isSystemBluetoothAudioControlConnected(): Boolean =
+    serviceUuid == "system-bluetooth-audio-control-connected"
+
+private fun ScannedDevice.isNativeUteHeadsetControl(): Boolean =
+    serviceUuid == "ute-ble-control-scanned" && type == DeviceType.Headset
+
+private fun ScannedDevice.toConnectedAudioStatus(fallback: DeviceStatus): DeviceStatus =
+    fallback.copy(
+        id = id,
+        name = name,
+        online = true,
+        signalBars = signalBars.coerceIn(1, 5),
+        onlineDuration = "系统蓝牙已连接",
+        type = DeviceType.Headset
+    )
+
+private fun DeviceStatus.representsSameAudioDevice(device: ScannedDevice): Boolean =
+    id == device.id || (type == DeviceType.Headset && device.type == DeviceType.Headset && hasSimilarAudioName(name, device.name))
+
+private fun DeviceStatus.representsSameAudioDevice(device: DeviceStatus): Boolean =
+    id == device.id || (type == DeviceType.Headset && device.type == DeviceType.Headset && hasSimilarAudioName(name, device.name))
+
+private fun resolveConnectedDeviceType(bound: DeviceStatus, scannedName: String, scannedType: DeviceType): DeviceType =
+    when {
+        isKnownAudioName(scannedName) || isKnownAudioName(bound.name) -> DeviceType.Headset
+        bound.online && bound.type == DeviceType.Headset -> DeviceType.Headset
+        bound.online && bound.type != scannedType -> bound.type
+        else -> scannedType
+    }
+
+private fun hasSimilarAudioName(left: String, right: String): Boolean {
+    val leftNormalized = left.uppercase()
+    val rightNormalized = right.uppercase()
+    return listOf("E1-PRO", "SMI-", "FORCELINK", "HEADSET", "耳机").any { marker ->
+        marker in leftNormalized && marker in rightNormalized
+    }
+}
+
+private fun isKnownAudioName(name: String): Boolean {
+    val normalized = name.uppercase()
+    return "E1-PRO" in normalized ||
+        "SMI-" in normalized ||
+        "FORCELINK" in normalized ||
+        "HEADSET" in normalized ||
+        "耳机" in name
+}
+
 
 private val TransferStatus.inProgress: Boolean
     get() = this == TransferStatus.Hashing || this == TransferStatus.Uploading || this == TransferStatus.Verifying

@@ -18,6 +18,7 @@ object BleStatusParser {
         return current.copy(
             online = true,
             battery = battery,
+            batteryKnown = true,
             signalBars = signalBars,
             firmware = firmware,
             isRecording = flags and 0x01 != 0,

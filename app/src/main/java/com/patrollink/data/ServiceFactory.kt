@@ -18,6 +18,7 @@ import com.patrollink.data.sos.AndroidSosEvidenceRecorder
 import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.data.ute.UteSdkDeviceControlGateway
 import com.patrollink.data.ute.UteSdkDeviceGateway
+import com.patrollink.data.ute.UteSdkFirmwareGateway
 import com.patrollink.data.ute.UteSdkMediaGateway
 import com.patrollink.data.ute.UteSdkStreamRelayGateway
 import com.patrollink.data.update.AndroidVersionInstaller
@@ -78,6 +79,7 @@ object ServiceFactory {
         config: RuntimeConfig,
         tokenProvider: () -> String?,
         operatorIdProvider: () -> String = { "UNKNOWN_OPERATOR" },
+        pairingAccountIdProvider: () -> String = operatorIdProvider,
         fallbackState: AppUiState,
         sharedUteBridge: UteSdkBridge? = null
     ): PatrolCoordinator {
@@ -88,6 +90,7 @@ object ServiceFactory {
         val restMediaGateway = restApi?.let(::RestMediaGateway)
         val emptyMediaGateway = EmptyMediaGateway()
         val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
+        val uteMediaDirectory = File(context.filesDir, "patrol_media/ute")
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
             WifiBackedMediaGateway(
                 wifiClient = WifiFileServiceClient(baseUrl, tokenProvider = tokenProvider),
@@ -101,16 +104,27 @@ object ServiceFactory {
         return PatrolCoordinator(
             authGateway = restApi?.let(::RestAuthGateway) ?: EmptyAuthGateway(),
             deviceGateway = when {
-                config.useRealBle -> AndroidBleDeviceGateway(
-                    context = context,
-                    fallbackStatus = fallbackState.device,
-                    profile = BleGattProfile.fromStrings(
+                config.useRealBle -> {
+                    val gattProfile = BleGattProfile.fromStrings(
                         service = config.bleServiceUuid,
                         command = config.bleCommandUuid,
                         status = config.bleStatusUuid
                     )
-                ).takeIf { config.bleServiceUuid.isNotBlank() }
-                    ?: UteSdkDeviceGateway(uteBridge ?: UteSdkBridge(context), fallbackState.device)
+                    if (gattProfile.readyForGatt) {
+                        AndroidBleDeviceGateway(
+                            context = context,
+                            fallbackStatus = fallbackState.device,
+                            profile = gattProfile
+                        )
+                    } else {
+                        UteSdkDeviceGateway(
+                            bridge = uteBridge ?: UteSdkBridge(context),
+                            fallbackStatus = fallbackState.device,
+                            mediaDirectory = uteMediaDirectory,
+                            pairingAccountIdProvider = pairingAccountIdProvider
+                        )
+                    }
+                }
                 restApi != null -> RestDeviceGateway(restApi, operatorIdProvider)
                 else -> EmptyDeviceGateway()
             },
@@ -120,7 +134,7 @@ object ServiceFactory {
                 uteBridge != null -> UteSdkMediaGateway(
                     bridge = uteBridge,
                     fallbackGateway = restMediaGateway ?: emptyMediaGateway,
-                    mediaDirectory = File(context.filesDir, "patrol_media/ute"),
+                    mediaDirectory = uteMediaDirectory,
                     officerBadgeNo = fallbackState.user.badgeNo,
                     mediaIndex = mediaIndex
                 )
@@ -159,7 +173,10 @@ object ServiceFactory {
         deviceIdProvider: () -> String = { "" }
     ): DeviceControlGateway =
         when {
-            config.useRealBle -> UteSdkDeviceControlGateway(sharedUteBridge ?: UteSdkBridge(context))
+            config.useRealBle -> UteSdkDeviceControlGateway(
+                bridge = sharedUteBridge ?: UteSdkBridge(context),
+                mediaDirectory = File(context.filesDir, "patrol_media/ute")
+            )
             config.restBaseUrl.isNotBlank() -> RestDeviceControlGateway(
                 OkHttpPatrolRestApi(baseUrl = config.restBaseUrl, tokenProvider = tokenProvider),
                 deviceIdProvider
@@ -183,10 +200,32 @@ object ServiceFactory {
             ?.let { RestVersionGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
             ?: EmptyVersionGateway()
 
-    fun createFirmwareGateway(config: RuntimeConfig, tokenProvider: () -> String? = { null }): FirmwareGateway =
-        config.restBaseUrl.takeIf { it.isNotBlank() }
+    fun createFirmwareGateway(
+        context: Context? = null,
+        config: RuntimeConfig,
+        sharedUteBridge: UteSdkBridge? = null,
+        tokenProvider: () -> String? = { null },
+        operatorIdProvider: () -> String = { "" }
+    ): FirmwareGateway {
+        val restGateway = config.restBaseUrl.takeIf { it.isNotBlank() }
             ?.let { RestFirmwareGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
-            ?: EmptyFirmwareGateway()
+        val uteBridge = when {
+            !config.useRealBle -> null
+            sharedUteBridge != null -> sharedUteBridge
+            context != null -> UteSdkBridge(context)
+            else -> null
+        }
+        return if (uteBridge != null && context != null) {
+            UteSdkFirmwareGateway(
+                bridge = uteBridge,
+                firmwareDirectory = File(context.filesDir, "patrol_firmware/ute"),
+                delegate = restGateway ?: EmptyFirmwareGateway(),
+                operatorIdProvider = operatorIdProvider
+            )
+        } else {
+            restGateway ?: EmptyFirmwareGateway()
+        }
+    }
 
     fun createCerebellumApi(config: RuntimeConfig): CerebellumApi? =
         config.cerebellumBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->

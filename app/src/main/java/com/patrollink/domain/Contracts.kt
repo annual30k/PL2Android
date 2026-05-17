@@ -98,6 +98,7 @@ interface VersionGateway {
 
 interface FirmwareGateway {
     suspend fun check(device: DeviceStatus, metadata: FirmwareDeviceMetadata = FirmwareDeviceMetadata()): FirmwareCheckResult
+    fun install(device: DeviceStatus, firmware: FirmwareCheckResult): Flow<FirmwareUpgradeState>
     suspend fun createUpgradeTask(device: DeviceStatus, firmware: FirmwareCheckResult, operatorId: String = ""): FirmwareUpgradeTask
     suspend fun updateUpgradeTask(taskId: String, state: FirmwareUpgradeState): FirmwareUpgradeTask
 }

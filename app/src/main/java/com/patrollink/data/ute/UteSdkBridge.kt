@@ -11,6 +11,7 @@ import com.yc.nadalsdk.ble.open.UteBleClient
 import com.yc.nadalsdk.ble.open.UteBleConnection
 import com.yc.nadalsdk.ble.open.UteBleDevice
 import com.yc.nadalsdk.listener.DeviceNotifyListener
+import com.yc.nadalsdk.utils.open.SPUtil
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 
@@ -27,6 +28,7 @@ class UteSdkBridge(context: Context) {
     val notifies: SharedFlow<Notify> = _notifies
 
     init {
+        SPUtil.initialize(appContext)
         connection.setDeviceNotifyListener(object : DeviceNotifyListener {
             override fun onNotify(device: UteBleDevice, notify: Notify) {
                 _notifies.tryEmit(notify)

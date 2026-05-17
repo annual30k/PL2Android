@@ -51,6 +51,9 @@ class PatrolCoordinator(
         return deviceGateway.sendCommand(device.id, if (enabled) DeviceCommand.StartTalk else DeviceCommand.StopTalk)
     }
 
+    suspend fun setDeviceTalk(device: DeviceStatus, enabled: Boolean): DeviceStatus =
+        deviceGateway.sendCommand(device.id, if (enabled) DeviceCommand.StartTalk else DeviceCommand.StopTalk)
+
     fun observeAlerts(): Flow<List<AlertItem>> = alertGateway.observeAlerts()
 
     suspend fun handleAlert(alertId: String, result: AlertResult, note: String = ""): AlertItem {

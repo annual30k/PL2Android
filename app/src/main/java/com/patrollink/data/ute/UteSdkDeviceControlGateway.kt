@@ -8,28 +8,38 @@ import com.patrollink.domain.DeviceEventLevel
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
+import com.yc.nadalsdk.bean.Response
+import com.yc.nadalsdk.bean.recorder.AudioRecordInfo
+import com.yc.nadalsdk.bean.recorder.AudioRecordStopInfo
 import com.yc.nadalsdk.bean.smart.SmartAudioDataInfo
+import com.yc.nadalsdk.bean.smart.GlassesStoreInfo
 import com.yc.nadalsdk.bean.smart.SmartImageDataInfo
 import com.yc.nadalsdk.bean.smart.SmartRealAudioDataInfo
 import com.yc.nadalsdk.bean.smart.VideoParametersInfo
-import com.yc.nadalsdk.constants.smart.GlassesHeadsetRecordingState
+import com.yc.nadalsdk.ble.open.DeviceModeJX
 import com.yc.nadalsdk.constants.NotifyType
+import com.yc.nadalsdk.constants.recorder.AudioRecordResult
+import com.yc.nadalsdk.constants.smart.GlassesHeadsetRecordingState
 import com.yc.nadalsdk.constants.smart.GlassesRecordDirection
 import com.yc.nadalsdk.constants.smart.HeadsetBrightnessLevel
 import com.yc.nadalsdk.constants.smart.HeadsetSoundMode
+import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withContext
 
 class UteSdkDeviceControlGateway(
-    private val bridge: UteSdkBridge
+    private val bridge: UteSdkBridge,
+    private val mediaDirectory: File? = null
 ) : DeviceControlGateway {
     override fun events(): Flow<DeviceEvent> =
         bridge.notifies.mapNotNull { notify ->
             when (notify.type) {
                 NotifyType.SMART_GLASSES_IMAGE_DATA_NOTIFY -> {
                     val data = notify.data as? SmartImageDataInfo
+                    data?.persistSmartFile("glasses-photo", data.imaType.orEmpty(), "jpg")
                     DeviceEvent(
                         id = "image-${System.currentTimeMillis()}",
                         title = if (data?.crcSuccess == true) "图片上传完成" else "图片上传异常",
@@ -40,6 +50,7 @@ class UteSdkDeviceControlGateway(
                 }
                 NotifyType.SMART_GLASSES_AUDIO_DATA_NOTIFY -> {
                     val data = notify.data as? SmartAudioDataInfo
+                    data?.persistSmartFile("glasses-audio", data.audioType.orEmpty(), "opus")
                     DeviceEvent(
                         id = "audio-${System.currentTimeMillis()}",
                         title = if (data?.crcSuccess == true) "音频上传完成" else "音频上传异常",
@@ -68,8 +79,36 @@ class UteSdkDeviceControlGateway(
                 NotifyType.SMART_GLASSES_STORE_INFO_NOTIFY -> DeviceEvent(
                     id = "store-${System.currentTimeMillis()}",
                     title = "设备存储状态更新",
+                    detail = (notify.data as? GlassesStoreInfo)?.toSummary().orEmpty().ifBlank { notify.data?.toString().orEmpty() },
+                    level = DeviceEventLevel.Info,
+                    timestamp = System.currentTimeMillis()
+                )
+                NotifyType.SMART_ISP_OTA_STATE_NOTIFY -> DeviceEvent(
+                    id = "ota-isp-${System.currentTimeMillis()}",
+                    title = "眼镜 ISP 固件升级状态更新",
                     detail = notify.data?.toString().orEmpty(),
                     level = DeviceEventLevel.Info,
+                    timestamp = System.currentTimeMillis()
+                )
+                NotifyType.JL_OTA_SECOND_MODE -> DeviceEvent(
+                    id = "ota-jl-second-${System.currentTimeMillis()}",
+                    title = "杰理 OTA 第二阶段状态更新",
+                    detail = notify.data?.toString().orEmpty(),
+                    level = DeviceEventLevel.Warning,
+                    timestamp = System.currentTimeMillis()
+                )
+                NotifyType.DEVICE_CHECK_UPGRADE_REQUEST -> DeviceEvent(
+                    id = "ota-check-${System.currentTimeMillis()}",
+                    title = "设备请求检查固件升级",
+                    detail = notify.data?.toString().orEmpty(),
+                    level = DeviceEventLevel.Warning,
+                    timestamp = System.currentTimeMillis()
+                )
+                NotifyType.OTA_CONFIRM_DOWNLOAD -> DeviceEvent(
+                    id = "ota-confirm-${System.currentTimeMillis()}",
+                    title = "设备请求确认固件下载",
+                    detail = notify.data?.toString().orEmpty(),
+                    level = DeviceEventLevel.Warning,
                     timestamp = System.currentTimeMillis()
                 )
                 else -> null
@@ -77,20 +116,33 @@ class UteSdkDeviceControlGateway(
         }
 
     override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities = withContext(Dispatchers.IO) {
-        val hasGlassesInfo = runCatching { bridge.connection.getGlassesInfo().isSuccess }.getOrDefault(false)
-        val hasHeadsetInfo = runCatching { bridge.connection.getHeadsetInfo().isSuccess }.getOrDefault(false)
         val selectedGlasses = device.type == DeviceType.Glasses
         val selectedHeadset = device.type == DeviceType.Headset
-        val selectedSdkDevice = selectedGlasses || selectedHeadset
+        val glassesInfo = if (selectedGlasses) {
+            runCatching { bridge.connection.getGlassesInfo().data }.getOrNull()
+        } else {
+            null
+        }
+        val headsetInfo = runCatching { bridge.connection.getHeadsetInfo().data }.getOrNull()
+        val hasGlassesInfo = glassesInfo != null
+        val hasHeadsetInfo = headsetInfo != null
+        val sdkControlConnected = runCatching { bridge.client.isConnected(device.id) }.getOrDefault(false) ||
+            (bridge.client.isConnected && bridge.client.deviceAddress.equals(device.id, ignoreCase = true))
+        val hasSmartStore = glassesInfo?.glassesStoreInfo != null
+        val supportsAiRecorder = DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
+        val supportsFileSpp = DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_FILE_TRANSFER_SPP)
+        val smartCameraControl = sdkControlConnected && hasGlassesInfo
+        val headsetCameraControl = selectedHeadset && sdkControlConnected
+        val cameraControl = (selectedGlasses && smartCameraControl) || headsetCameraControl
         DeviceCapabilities(
-            supportsGlasses = selectedGlasses && (hasGlassesInfo || selectedGlasses),
-            supportsEarphone = selectedHeadset && (hasHeadsetInfo || selectedHeadset),
-            supportsWifi = selectedGlasses && (hasGlassesInfo || selectedGlasses),
-            supportsFileTransfer = selectedSdkDevice,
-            supportsPhoto = selectedSdkDevice,
-            supportsVideo = selectedSdkDevice,
-            supportsAudioRecord = selectedHeadset && (hasHeadsetInfo || selectedHeadset),
-            supportsRealtimeAudio = selectedHeadset && (hasHeadsetInfo || selectedHeadset)
+            supportsGlasses = selectedGlasses && hasGlassesInfo,
+            supportsEarphone = selectedHeadset && (sdkControlConnected || hasHeadsetInfo),
+            supportsWifi = selectedGlasses && hasGlassesInfo,
+            supportsFileTransfer = sdkControlConnected && (hasSmartStore || supportsFileSpp),
+            supportsPhoto = cameraControl,
+            supportsVideo = cameraControl,
+            supportsAudioRecord = selectedHeadset && (supportsAiRecorder || cameraControl),
+            supportsRealtimeAudio = selectedHeadset && cameraControl
         )
     }
 
@@ -106,10 +158,20 @@ class UteSdkDeviceControlGateway(
     }
 
     override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState = withContext(Dispatchers.IO) {
-        bridge.connection.smartSetDeviceWiFiSwitch(enabled)
-        if (ssid.isNotBlank()) bridge.connection.smartSetDeviceWiFiSSID(ssid)
-        if (password.isNotBlank()) bridge.connection.smartSetDeviceWiFiPassword(password)
-        readWifi()
+        if (ssid.isNotBlank()) {
+            val ssidResponse = bridge.connection.smartSetDeviceWiFiSSID(ssid)
+            check(ssidResponse.isSuccess) { "device wifi ssid failed: ${ssidResponse.errorCode}" }
+        }
+        if (password.isNotBlank()) {
+            val passwordResponse = bridge.connection.smartSetDeviceWiFiPassword(password)
+            check(passwordResponse.isSuccess) { "device wifi password failed: ${passwordResponse.errorCode}" }
+        }
+        val switchResponse = bridge.connection.smartSetDeviceWiFiSwitch(enabled)
+        check(switchResponse.isSuccess) { "device wifi switch failed: ${switchResponse.errorCode}" }
+        delay(WifiStateSettleMillis)
+        val next = readWifi()
+        check(!enabled || next.enabled) { "device wifi switch accepted but stayed disabled: ${next.ssid}" }
+        next
     }
 
     override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = withContext(Dispatchers.IO) {
@@ -135,7 +197,10 @@ class UteSdkDeviceControlGateway(
     }
 
     override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = withContext(Dispatchers.IO) {
-        runCatching { bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START).isSuccess }.getOrDefault(false)
+        runCatching {
+            bridge.client.openOrCloseNotify(true)
+            bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START).isSuccess
+        }.getOrDefault(false)
     }
 
     override suspend fun stopRealtimeAudioSync(): Boolean = withContext(Dispatchers.IO) {
@@ -152,4 +217,42 @@ class UteSdkDeviceControlGateway(
             3 -> HeadsetBrightnessLevel.BRIGHTNESS_LEVEL_3
             else -> HeadsetBrightnessLevel.BRIGHTNESS_LEVEL_2
         }
+
+    private suspend fun SmartImageDataInfo.persistSmartFile(prefix: String, type: String, fallbackExtension: String) {
+        file?.persistSmartFile(prefix, type, fallbackExtension)
+    }
+
+    private suspend fun SmartAudioDataInfo.persistSmartFile(prefix: String, type: String, fallbackExtension: String) {
+        file?.persistSmartFile(prefix, type, fallbackExtension)
+    }
+
+    private suspend fun File.persistSmartFile(prefix: String, type: String, fallbackExtension: String) = withContext(Dispatchers.IO) {
+        val source = this@persistSmartFile
+        if (!source.exists() || !source.isFile || source.length() <= 0L) return@withContext
+        val directory = mediaDirectory ?: return@withContext
+        directory.mkdirs()
+        val extension = source.name.substringAfterLast('.', "").ifBlank {
+            type.substringAfterLast('/', fallbackExtension).substringAfterLast('.', fallbackExtension).ifBlank { fallbackExtension }
+        }.lowercase()
+        val target = File(directory, "$prefix-${System.currentTimeMillis()}.$extension")
+        runCatching { source.copyTo(target, overwrite = true) }
+    }
+
+    private fun GlassesStoreInfo.toSummary(): String =
+        "照片 $newTakenPictures/$totalPictures，音频 $newRecordAudio/$totalRecordAudio，视频 $newRecordVideo/$totalRecordVideo，剩余 ${freeSpace.toReadableGb()}/${maxSpace.toReadableGb()}"
+
+    private fun Long.toReadableGb(): String =
+        if (this <= 0L) "未知" else "%.1fGB".format(this / 1024f / 1024f / 1024f)
+
+    private fun Response<AudioRecordInfo>.isAudioStartAccepted(): Boolean {
+        val result = data?.result ?: return false
+        return result == AudioRecordResult.RECORD_START_SUCCESS || result == AudioRecordResult.RECORD_ALREADY_IN_PROGRESS
+    }
+
+    private fun Response<AudioRecordStopInfo>.isAudioStopAccepted(): Boolean =
+        data != null || isSuccess
+
+    private companion object {
+        const val WifiStateSettleMillis = 1_500L
+    }
 }

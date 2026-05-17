@@ -191,6 +191,13 @@ class RestFirmwareGateway(private val api: PatrolRestApi) : FirmwareGateway {
             )
         ).data.toDomain()
 
+    override fun install(device: DeviceStatus, firmware: FirmwareCheckResult): Flow<FirmwareUpgradeState> = flow {
+        val task = createUpgradeTask(device, firmware)
+        emit(FirmwareUpgradeState("TASK_CREATED", 0.1f))
+        updateUpgradeTask(task.taskId, FirmwareUpgradeState("PENDING_DEVICE_UPGRADE", 0.2f))
+        emit(FirmwareUpgradeState("PENDING_DEVICE_UPGRADE", 0.2f))
+    }
+
     override suspend fun createUpgradeTask(device: DeviceStatus, firmware: FirmwareCheckResult, operatorId: String): FirmwareUpgradeTask {
         val firmwareId = requireNotNull(firmware.firmwareId) { "firmwareId required" }
         return api.createFirmwareUpgradeTask(

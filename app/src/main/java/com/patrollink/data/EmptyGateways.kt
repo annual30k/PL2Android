@@ -170,6 +170,9 @@ class EmptyFirmwareGateway : FirmwareGateway {
             message = "当前已是最新固件"
         )
 
+    override fun install(device: DeviceStatus, firmware: FirmwareCheckResult): Flow<FirmwareUpgradeState> =
+        flowOf(FirmwareUpgradeState("UNAVAILABLE", 0f, "FIRMWARE_GATEWAY_EMPTY", "固件升级通道未配置"))
+
     override suspend fun createUpgradeTask(device: DeviceStatus, firmware: FirmwareCheckResult, operatorId: String): FirmwareUpgradeTask =
         FirmwareUpgradeTask("", device.id, firmware.firmwareId.orEmpty(), operatorId, device.firmware, firmware.versionName, "PENDING", 0f, "", "", "", "")
 

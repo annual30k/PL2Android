@@ -38,6 +38,7 @@ class PlatformGatewayTest {
         assertTrue(AppPermission.BluetoothAdvertise in api31)
         assertTrue(AppPermission.FineLocation in api31)
         assertFalse(AppPermission.PostNotifications in api31)
+        assertTrue(AppPermission.NearbyWifiDevices in api33)
         assertTrue(AppPermission.PostNotifications in api33)
     }
 
@@ -53,7 +54,8 @@ class PlatformGatewayTest {
             AppPermission.ForegroundService,
             AppPermission.BluetoothScan,
             AppPermission.BluetoothConnect,
-            AppPermission.BluetoothAdvertise
+            AppPermission.BluetoothAdvertise,
+            AppPermission.NearbyWifiDevices
         )
 
         val missing = planner.missingPermissions(androidApi = 33, granted = granted)

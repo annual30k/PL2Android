@@ -8,14 +8,20 @@ import com.patrollink.domain.MediaGateway
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
+import com.yc.nadalsdk.bean.Notify
 import com.yc.nadalsdk.bean.recorder.AudioRecordFile
 import com.yc.nadalsdk.bean.recorder.RequestAudioRecordFileInfo
 import com.yc.nadalsdk.bean.recorder.RequestDeleteAudioRecordFileInfo
 import com.yc.nadalsdk.bean.recorder.RequestSyncAudioRecordFileInfo
 import com.yc.nadalsdk.bean.recorder.SyncAudioDataInfo
+import com.yc.nadalsdk.bean.smart.SmartAudioDataInfo
+import com.yc.nadalsdk.bean.smart.SmartImageDataInfo
 import com.yc.nadalsdk.constants.NotifyType
 import java.io.File
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -35,11 +41,42 @@ class UteSdkMediaGateway(
         if (local) return (mediaIndex?.files(local = true).orEmpty() + localFiles())
             .distinctBy { it.id to it.local }
             .ifEmpty { fallbackGateway.listFiles(local = true) }
-        val audioFiles = queryAudioRecordFiles()
-        return audioFiles.ifEmpty { fallbackGateway.listFiles(local = false) }
+        val pushedFiles = requestPendingSmartMediaUpload()
+        val audioFiles = withTimeoutOrNull(RemoteListTimeoutMillis) { queryAudioRecordFiles() }.orEmpty()
+        val sdkFiles = (pushedFiles + audioFiles).distinctBy { it.id to it.local }
+        if (sdkFiles.isEmpty() && bridge.client.isConnected) return emptyList()
+        return sdkFiles.ifEmpty {
+            withTimeoutOrNull(FallbackListTimeoutMillis) { fallbackGateway.listFiles(local = false) }.orEmpty()
+        }
     }
 
     override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> {
+        if ((fileId.startsWith(PhotoPrefix) || fileId.startsWith(VideoPrefix)) && target == TransferTarget.Cloud) {
+            return flow {
+                val local = localFiles().firstOrNull { it.id == fileId } ?: error("media file not found: $fileId")
+                val localFile = local.contentUri?.let { Uri.parse(it).path }?.let(::File)
+                    ?.takeIf { it.exists() && it.isFile } ?: error("local media file missing: $fileId")
+                emit(local.copy(transferStatus = TransferStatus.Hashing, progress = 0.12f, lastTransferTarget = TransferTarget.Cloud))
+                val uploaded = fallbackGateway.uploadLocalFile(localFile, storageSide = "PHONE", bizType = "MEDIA", bizId = fileId)
+                emit(
+                    (uploaded ?: local).copy(
+                        id = fileId,
+                        local = true,
+                        verified = true,
+                        transferStatus = TransferStatus.Done,
+                        progress = 1f,
+                        contentUri = Uri.fromFile(localFile).toString(),
+                        lastTransferTarget = TransferTarget.Cloud
+                    )
+                )
+            }
+        }
+        if ((fileId.startsWith(PhotoPrefix) || fileId.startsWith(VideoPrefix)) && target == TransferTarget.PhoneSandbox) {
+            return flow {
+                val local = localFiles().firstOrNull { it.id == fileId } ?: error("media file not found: $fileId")
+                emit(local.copy(transferStatus = TransferStatus.Done, progress = 1f, lastTransferTarget = TransferTarget.PhoneSandbox))
+            }
+        }
         if (fileId.startsWith(AudioPrefix) && target == TransferTarget.Cloud) {
             return flow {
                 val sessionId = fileId.removePrefix(AudioPrefix)
@@ -129,6 +166,13 @@ class UteSdkMediaGateway(
     }
 
     override suspend fun delete(fileId: String, local: Boolean): Boolean {
+        if (local && (fileId.startsWith(PhotoPrefix) || fileId.startsWith(VideoPrefix))) {
+            val file = localFiles().firstOrNull { it.id == fileId }
+                ?.contentUri
+                ?.let { Uri.parse(it).path }
+                ?.let(::File)
+            return file?.delete() ?: false
+        }
         if (!fileId.startsWith(AudioPrefix)) return fallbackGateway.delete(fileId, local)
         if (local) {
             val sessionId = fileId.removePrefix(AudioPrefix)
@@ -146,6 +190,16 @@ class UteSdkMediaGateway(
     }
 
     override suspend fun verifySha256(fileId: String): Boolean {
+        if (fileId.startsWith(PhotoPrefix) || fileId.startsWith(VideoPrefix)) {
+            val localFile = localFiles().firstOrNull { it.id == fileId }
+                ?.contentUri
+                ?.let { Uri.parse(it).path }
+                ?.let(::File)
+                ?.takeIf { it.exists() } ?: return false
+            val hash = integrityGateway.sha256(localFile.readBytes())
+            File(mediaDirectory, "${localFile.nameWithoutExtension}.integrity").writeText("sha256=$hash\n")
+            return true
+        }
         if (!fileId.startsWith(AudioPrefix)) return fallbackGateway.verifySha256(fileId)
         val localFile = File(mediaDirectory, "${fileId.removePrefix(AudioPrefix)}.opus")
         if (!localFile.exists()) return false
@@ -163,25 +217,106 @@ class UteSdkMediaGateway(
         }.getOrDefault(emptyList())
     }
 
-    private fun localFiles(): List<MediaFile> =
-        mediaDirectory.listFiles { file -> file.extension.equals("opus", ignoreCase = true) }
-            .orEmpty()
-            .map { file ->
-                val sessionId = file.nameWithoutExtension
-                MediaFile(
-                    id = "$AudioPrefix$sessionId",
-                    name = "设备录音_$sessionId.opus",
-                    kind = MediaKind.Audio,
-                    time = file.lastModified().toString(),
-                    size = file.length().toReadableSize(),
-                    duration = null,
-                    verified = File(mediaDirectory, "$sessionId.integrity").exists(),
-                    local = true,
-                    transferStatus = TransferStatus.Idle,
-                    progress = 0f,
-                    contentUri = Uri.fromFile(file).toString()
-                )
+    private suspend fun requestPendingSmartMediaUpload(): List<MediaFile> = coroutineScope {
+        val beforeIds = withContext(Dispatchers.IO) { localFiles().map { it.id }.toSet() }
+        val receiveOne = async(start = CoroutineStart.UNDISPATCHED) {
+            withTimeoutOrNull(SmartMediaRetryTimeoutMillis) {
+                bridge.notifies.mapNotNull { notify -> persistSmartMediaNotify(notify) }.first()
             }
+        }
+        withContext(Dispatchers.IO) {
+            runCatching { bridge.client.openOrCloseNotify(true) }
+            runCatching { bridge.connection.retryImageUpload() }
+        }
+        val received = receiveOne.await()
+        if (received != null) {
+            withContext(Dispatchers.IO) {
+                runCatching { bridge.connection.notifyMediaSyncCompleted() }
+            }
+        }
+        val after = withContext(Dispatchers.IO) { localFiles() }
+        when {
+            received != null -> listOf(received)
+            else -> after.filter { it.id !in beforeIds }
+        }
+    }
+
+    private suspend fun persistSmartMediaNotify(notify: Notify): MediaFile? {
+        return when (notify.type) {
+            NotifyType.SMART_GLASSES_IMAGE_DATA_NOTIFY -> {
+                val data = notify.data as? SmartImageDataInfo ?: return null
+                if (data.crcSuccess != true) return null
+                data.file?.persistSmartFile("glasses-photo", data.imaType.orEmpty(), "jpg")
+            }
+            NotifyType.SMART_GLASSES_AUDIO_DATA_NOTIFY -> {
+                val data = notify.data as? SmartAudioDataInfo ?: return null
+                if (data.crcSuccess != true) return null
+                data.file?.persistSmartFile("glasses-audio", data.audioType.orEmpty(), "opus")
+            }
+            else -> null
+        }
+    }
+
+    private suspend fun File.persistSmartFile(prefix: String, type: String, fallbackExtension: String): MediaFile? = withContext(Dispatchers.IO) {
+        val source = this@persistSmartFile
+        if (!source.exists() || !source.isFile || source.length() <= 0L) return@withContext null
+        mediaDirectory.mkdirs()
+        val extension = source.extension.ifBlank {
+            type.substringAfterLast('/', fallbackExtension).substringAfterLast('.', fallbackExtension).ifBlank { fallbackExtension }
+        }.lowercase()
+        val target = File(mediaDirectory, "$prefix-${System.currentTimeMillis()}.$extension")
+        runCatching { source.copyTo(target, overwrite = true) }.getOrNull()?.toLocalMediaFile()
+    }
+
+    private fun localFiles(): List<MediaFile> =
+        mediaDirectory.listFiles { file -> file.isSupportedLocalMedia() }
+            .orEmpty()
+            .map { file -> file.toLocalMediaFile() }
+            .sortedByDescending { it.time.toLongOrNull() ?: 0L }
+
+    private fun File.toLocalMediaFile(): MediaFile {
+        val sessionId = nameWithoutExtension
+        val kind = toMediaKind()
+        return MediaFile(
+            id = toMediaId(),
+            name = toMediaName(),
+            kind = kind,
+            time = lastModified().toString(),
+            size = length().toReadableSize(),
+            duration = null,
+            verified = kind != MediaKind.Audio || File(mediaDirectory, "$sessionId.integrity").exists(),
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = Uri.fromFile(this).toString()
+        )
+    }
+
+    private fun File.isSupportedLocalMedia(): Boolean =
+        extension.equals("opus", ignoreCase = true) ||
+            extension.equals("jpg", ignoreCase = true) ||
+            extension.equals("jpeg", ignoreCase = true) ||
+            extension.equals("png", ignoreCase = true) ||
+            extension.equals("mp4", ignoreCase = true) ||
+            extension.equals("mov", ignoreCase = true)
+
+    private fun File.toMediaKind(): MediaKind = when (extension.lowercase()) {
+        "jpg", "jpeg", "png" -> MediaKind.Photo
+        "mp4", "mov" -> MediaKind.Video
+        else -> MediaKind.Audio
+    }
+
+    private fun File.toMediaId(): String = when (toMediaKind()) {
+        MediaKind.Audio -> "$AudioPrefix$nameWithoutExtension"
+        MediaKind.Photo -> "$PhotoPrefix$nameWithoutExtension"
+        MediaKind.Video -> "$VideoPrefix$nameWithoutExtension"
+    }
+
+    private fun File.toMediaName(): String = when (toMediaKind()) {
+        MediaKind.Audio -> "设备录音_$name"
+        MediaKind.Photo -> "眼镜照片_$name"
+        MediaKind.Video -> "眼镜视频_$name"
+    }
 
     private suspend fun syncAudio(
         sessionId: String,
@@ -245,9 +380,14 @@ class UteSdkMediaGateway(
 
     private companion object {
         const val AudioPrefix = "ute-audio-"
+        const val PhotoPrefix = "ute-photo-"
+        const val VideoPrefix = "ute-video-"
         const val AudioFileType = 1
         const val ChunkSize = 1600L
         const val MaxChunks = 4096
         const val NotifyTimeoutMillis = 8_000L
+        const val RemoteListTimeoutMillis = 8_000L
+        const val FallbackListTimeoutMillis = 5_000L
+        const val SmartMediaRetryTimeoutMillis = 8_000L
     }
 }

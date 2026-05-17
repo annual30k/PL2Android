@@ -138,7 +138,7 @@ fun PatrolApp(
                 Route.VersionInfo.path
             ) && !currentRoute.startsWith("alertDetail")
             val showTopBar = showBottomBar
-            val lowBattery = uiState.device.id.isNotBlank() && uiState.device.online && uiState.device.battery < 15
+            val lowBattery = uiState.device.id.isNotBlank() && uiState.device.online && uiState.device.batteryKnown && uiState.device.battery < 15
             var dismissedLowBatteryReminder by rememberSaveable(uiState.device.id, lowBattery) { mutableStateOf(false) }
 
             Scaffold(

@@ -24,11 +24,15 @@ import com.yc.nadalsdk.bean.Notify
 import com.yc.nadalsdk.bean.Response
 import com.yc.nadalsdk.bean.recorder.AudioRecordStopInfo
 import com.yc.nadalsdk.bean.recorder.RequestAudioRecordFileInfo
+import com.yc.nadalsdk.bean.smart.GlassesStateInfo
 import com.yc.nadalsdk.bean.smart.HeadsetAccountConfig
+import com.yc.nadalsdk.bean.smart.SmartAudioDataInfo
 import com.yc.nadalsdk.bean.smart.SmartAuthorizationCode
+import com.yc.nadalsdk.bean.smart.SmartImageDataInfo
 import com.yc.nadalsdk.ble.open.DeviceModeJX
 import com.yc.nadalsdk.constants.NotifyType
 import com.yc.nadalsdk.constants.recorder.AudioRecordResult
+import com.yc.nadalsdk.constants.smart.GlassesState
 import java.io.File
 import java.lang.reflect.Modifier
 import java.text.SimpleDateFormat
@@ -115,7 +119,7 @@ private object SmokeTestRunner {
         val authCode = intent.getStringExtra("authCode").orEmpty()
         val config = RuntimeConfigStore(context).read()
         val bridge = UteSdkBridge(context)
-        val tokenStore = RuntimeTokenStore()
+        val tokenStore = RuntimeTokenStore(context.applicationContext)
         val emptyState = EmptyAppState.create()
         val coordinator = ServiceFactory.createRuntimeCoordinator(
             context = context,
@@ -139,7 +143,9 @@ private object SmokeTestRunner {
             coordinator.loginAndStartSession(account, password)
         } ?: return
         tokenStore.update(session)
-        runStep(report, "CURRENT_USER") { coordinator.currentUser() }
+        tokenStore.updatePairingUsername(account)
+        val currentUser = runStep(report, "CURRENT_USER") { coordinator.currentUser() }
+        tokenStore.updatePairingUsername(currentUser?.badgeNo ?: account)
         val devices = scanDevices(report, coordinator)
         val selected = devices.preferredControlDevice()
         if (selected == null) {
@@ -466,10 +472,26 @@ private object SmokeTestRunner {
         "name=$deviceNameBt3,address=$deviceAddressBt3,switch=$deviceBtSwitch,paired=$deviceBtPairedState,connect=$deviceBtConnectState"
 
     private fun Notify.toSmokeSummary(): String =
-        "${type.toNotifyName()}(type=$type,error=$errorCode,data=${data?.javaClass?.simpleName}:${data})"
+        "${type.toNotifyName()}(type=$type,error=$errorCode,data=${data.toSmokeDataSummary()})"
 
     private fun Response<*>.toSmokeSummary(): String =
-        "success=$isSuccess,error=$errorCode,data=${data?.javaClass?.simpleName}:${data}"
+        "success=$isSuccess,error=$errorCode,data=${data.toSmokeDataSummary()}"
+
+    private fun Any?.toSmokeDataSummary(): String = when (this) {
+        null -> "null:null"
+        is GlassesStateInfo -> "GlassesStateInfo:${toStateSummary()}"
+        is SmartImageDataInfo -> "SmartImageDataInfo:crc=$crcSuccess,type=$imaType,size=$imaSize,file=${file?.absolutePath}"
+        is SmartAudioDataInfo -> "SmartAudioDataInfo:crc=$crcSuccess,type=$audioType,size=$audioSize,file=${file?.absolutePath},bytes=${data?.size ?: 0}"
+        else -> "${javaClass.simpleName}:$this"
+    }
+
+    private fun GlassesStateInfo.toStateSummary(): String {
+        val flags = GlassesStateFlags
+            .filter { (_, value) -> getStateInfo(value.toLong()) }
+            .joinToString(separator = "|") { it.first }
+            .ifBlank { "none" }
+        return "state=$state,flags=$flags"
+    }
 
     private fun Int.toNotifyName(): String = when (this) {
         NotifyType.DEVICE_PAIRED_STATE_NOTIFY -> "DEVICE_PAIRED_STATE_NOTIFY"
@@ -537,6 +559,34 @@ private object SmokeTestRunner {
         NotifyType.AI_RECORDER_SYNC_ALL_DATA_NOTIFY,
         NotifyType.AI_RECORDER_ABORT_SYNC_DATA_NOTIFY,
         NotifyType.AI_RECORDER_SYNCING_ALL_DATA_NOTIFY
+    )
+    private val GlassesStateFlags = listOf(
+        "FOLDED" to GlassesState.GLASSES_FRAME_FOLDED,
+        "UNFOLDED" to GlassesState.GLASSES_FRAME_UNFOLDED,
+        "VIDEO_MODE" to GlassesState.VIDEO_RECORDING_MODE,
+        "PHOTO_MODE" to GlassesState.PHOTO_CAPTURE_MODE,
+        "AUDIO_MODE" to GlassesState.AUDIO_RECORDING_MODE,
+        "STANDBY" to GlassesState.STANDBY_MODE,
+        "ON_HEAD" to GlassesState.ON_HEAD_STATUS,
+        "OFF_HEAD" to GlassesState.OFF_HEAD_STATUS,
+        "FIRMWARE_UPDATING" to GlassesState.FIRMWARE_UPDATING,
+        "MEDIA_COUNT_FAILED" to GlassesState.UPDATE_MEDIA_COUNT_FAILED,
+        "MEDIA_COUNT_SUCCESS" to GlassesState.UPDATE_MEDIA_COUNT_SUCCESS,
+        "STORAGE_FULL" to GlassesState.STORAGE_SPACE_FULL,
+        "OPERATION_FAILED" to GlassesState.GLASSES_OPERATION_FAILED,
+        "START_AUDIO_OK" to GlassesState.START_RECORD_AUDIO_SUCCESS,
+        "START_AUDIO_FAILED" to GlassesState.START_RECORD_AUDIO_FAILED,
+        "STOP_AUDIO_OK" to GlassesState.STOP_RECORD_AUDIO_SUCCESS,
+        "STOP_AUDIO_FAILED" to GlassesState.STOP_RECORD_AUDIO_FAILED,
+        "PHOTO_OK" to GlassesState.PHOTO_CAPTURED_SUCCESS,
+        "PHOTO_FAILED" to GlassesState.PHOTO_CAPTURED_FAILED,
+        "VIDEO_START_OK" to GlassesState.VIDEO_RECORDING_STARTED_SUCCESS,
+        "VIDEO_START_FAILED" to GlassesState.VIDEO_RECORDING_STARTED_FAILED,
+        "VIDEO_STOP_OK" to GlassesState.VIDEO_RECORDING_STOP_SUCCESS,
+        "VIDEO_STOP_FAILED" to GlassesState.VIDEO_RECORDING_STOP_FAILED,
+        "ISP_SD_FAILED" to GlassesState.ISP_SD_FAILED_LOAD,
+        "ISP_CAMERA_ABNORMAL" to GlassesState.ISP_CAMERA_ABNORMALITY,
+        "ISP_CAMERA_OFF" to GlassesState.ISP_CAMERA_NOT_TURNED_ON
     )
     private val Timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
 }

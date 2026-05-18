@@ -78,6 +78,10 @@ data class MediaContentRequest(
     val authorization: String? = null
 )
 
+private const val ControlReadyPollAttempts = 8
+private const val ControlReadyPollMillis = 750L
+private const val PhotoCaptureTapDebounceMillis = 1_500L
+
 class PatrolViewModel(
     private val appContext: Context? = null,
     private val coordinator: PatrolCoordinator = ServiceFactory.createCoordinator(),
@@ -95,7 +99,8 @@ class PatrolViewModel(
     private val patrolRestApi: PatrolRestApi? = null,
     private val runtimeConfigStore: RuntimeConfigStore? = null,
     private val backendBaseUrl: String = "",
-    private val onSessionChanged: (AuthSession?) -> Unit = {}
+    private val onSessionChanged: (AuthSession?) -> Unit = {},
+    private val onPairingUsernameChanged: (String?) -> Unit = {}
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
         EmptyAppState.create().copy(
@@ -105,6 +110,8 @@ class PatrolViewModel(
     )
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
     private var scannedDevicesJob: Job? = null
+    private var photoCaptureJob: Job? = null
+    private var lastPhotoCaptureRequestAt: Long = 0L
     private val autoBindingDeviceIds = mutableSetOf<String>()
 
     init {
@@ -130,6 +137,7 @@ class PatrolViewModel(
         runCatching { coordinator.connectRealtime(session.accessToken) }
         runCatching { coordinator.currentUser() }
             .onSuccess { user ->
+                onPairingUsernameChanged(user.badgeNo)
                 _uiState.update { state ->
                     state.copy(
                         isLoggedIn = true,
@@ -175,6 +183,7 @@ class PatrolViewModel(
             runCatching { coordinator.loginAndStartSession(account, password) }
                 .onSuccess { session ->
                     onSessionChanged(session)
+                    onPairingUsernameChanged(account)
                     secureStore?.let { store -> withContext(Dispatchers.IO) { store.saveSession(session) } }
                     _uiState.update { it.copy(isLoggedIn = true, sessionRestoring = false, loginLoading = false, networkOnline = true, operationMessage = operationMessage("登录成功", OperationMessageType.Success)) }
                     startAuthenticatedRefreshes()
@@ -226,34 +235,77 @@ class PatrolViewModel(
     }
 
     fun toggleRecord() = viewModelScope.launch {
-        val device = _uiState.value.device
-        if (!device.canReceiveDeviceCommand()) {
-            showOperationMessage("请先连接设备", OperationMessageType.Warning)
-            return@launch
+        val device = prepareDeviceForCommand(
+            capabilityReady = { it.supportsVideo },
+            unavailableMessage = "录像失败，耳机控制通道未就绪"
+        ) ?: return@launch
+        val enabled = !device.isRecording
+        _uiState.update {
+            it.copy(operationMessage = operationMessage(if (enabled) "正在下发开始录像命令" else "正在下发停止录像命令", OperationMessageType.Info))
         }
-        val next = coordinator.setRecording(device, !device.isRecording)
-        updateCurrentDevice(next)
+        runCatching { coordinator.setRecording(device, enabled) }
+            .onSuccess { next ->
+                val message = when {
+                    enabled -> "录像已开始"
+                    device.type == DeviceType.Headset || device.type == DeviceType.Glasses ->
+                        "录像已停止，当前 SDK 不支持 BLE 上传视频文件"
+                    else -> "录像已停止"
+                }
+                updateCurrentDeviceWithMessage(
+                    next.copy(isRecording = enabled),
+                    message
+                )
+            }
+            .onFailure { throwable ->
+                val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+                _uiState.update { state ->
+                    state.copy(operationMessage = operationMessage("录像控制失败，请确认耳机已配对并连接控制通道$detail", OperationMessageType.Error))
+                }
+            }
     }
 
     fun toggleTalk() = viewModelScope.launch {
-        val device = _uiState.value.device
+        val initialDevice = currentCommandDevice()
+        val device = if (initialDevice.type == DeviceType.Headset) {
+            prepareDeviceForCommand(
+                capabilityReady = { it.supportsAudioRecord },
+                unavailableMessage = "录音失败，耳机控制通道未就绪"
+            ) ?: return@launch
+        } else {
+            initialDevice
+        }
         if (!device.canReceiveDeviceCommand()) {
             showOperationMessage("请先连接设备", OperationMessageType.Warning)
             return@launch
         }
+        val enabled = !device.isTalking
+        _uiState.update {
+            it.copy(operationMessage = operationMessage(if (enabled) "正在下发开始录音命令" else "正在下发停止录音命令", OperationMessageType.Info))
+        }
         runCatching {
             if (device.type == DeviceType.Headset) {
-                coordinator.setDeviceTalk(device, !device.isTalking)
+                coordinator.setDeviceTalk(device, enabled)
             } else {
-                coordinator.setTalk(device, !device.isTalking)
+                coordinator.setTalk(device, enabled)
             }
         }
-            .onSuccess { next -> updateCurrentDevice(next) }
-            .onFailure {
+            .onSuccess { next ->
+                val message = if (enabled) {
+                    "录音已开始"
+                } else {
+                    "录音已停止，正在刷新媒体列表"
+                }
+                updateCurrentDeviceWithMessage(
+                    next.copy(isTalking = enabled),
+                    message
+                )
+                if (!enabled) refreshMediaFiles()
+            }
+            .onFailure { throwable ->
+                val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
                 _uiState.update { state ->
                     state.copy(
-                        device = state.device.copy(isTalking = false),
-                        operationMessage = operationMessage("语音对讲启动失败，请重新登录或检查后台连接", OperationMessageType.Error)
+                        operationMessage = operationMessage("录音控制失败，请确认耳机已配对并连接控制通道$detail", OperationMessageType.Error)
                     )
                 }
             }
@@ -295,9 +347,15 @@ class PatrolViewModel(
         }
         deviceControlGateway?.let { gateway ->
             runCatching {
-                val capabilities = gateway.capabilities(device)
+                val (checkedDevice, capabilities) = ensureDeviceControlCapabilities(device, gateway, showMessage = true)
                 val wifi = if (capabilities.supportsWifi) gateway.readWifi() else DeviceWifiState()
-                _uiState.update { it.copy(deviceCapabilities = capabilities, deviceWifiState = wifi) }
+                _uiState.update {
+                    it.copy(
+                        device = checkedDevice,
+                        deviceCapabilities = capabilities,
+                        deviceWifiState = wifi
+                    )
+                }
             }.onFailure {
                 _uiState.update { state ->
                     state.copy(
@@ -804,41 +862,62 @@ class PatrolViewModel(
         _uiState.update { it.copy(sosActive = false) }
     }
 
-    fun takePhoto() = viewModelScope.launch {
-        val device = _uiState.value.device
-        if (!device.canReceiveDeviceCommand()) {
-            showOperationMessage("请先连接设备", OperationMessageType.Warning)
-            return@launch
+    fun takePhoto() {
+        val now = System.currentTimeMillis()
+        if (photoCaptureJob?.isActive == true) {
+            showOperationMessage("正在处理上一张照片，请等待回传完成", OperationMessageType.Warning)
+            return
         }
-        val next = runCatching { coordinator.takePhoto(device) }
-            .getOrElse {
-                showOperationMessage("拍照失败，请确认设备控制通道已连接", OperationMessageType.Error)
-                return@launch
-            }
-        val captured = runCatching {
-            coordinator.mediaFiles(local = true)
-                .filter { it.kind == MediaKind.Photo && it.contentUri.hasUsableValue() }
-                .maxByOrNull { it.lastModifiedFromContentUri() }
-        }.getOrNull()
-        if (captured != null) {
+        if (now - lastPhotoCaptureRequestAt < PhotoCaptureTapDebounceMillis) return
+        lastPhotoCaptureRequestAt = now
+        photoCaptureJob = viewModelScope.launch {
             _uiState.update { state ->
                 state.copy(
-                    device = next,
-                    connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
-                    mediaFiles = state.mediaFiles.upsertMedia(captured),
-                    selectedMediaFileId = captured.id,
-                    selectedMediaLocal = true,
-                    operationMessage = operationMessage("现场照片已保存到手机沙盒", OperationMessageType.Success)
+                    photoCaptureInProgress = true,
+                    operationMessage = operationMessage("正在下发拍照命令", OperationMessageType.Info)
                 )
             }
-            return@launch
-        }
-        _uiState.update { state ->
-            state.copy(
-                device = next,
-                connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
-                operationMessage = operationMessage("拍照命令已下发，等待设备回传文件", OperationMessageType.Info)
-            )
+            try {
+                val device = prepareDeviceForCommand(
+                    capabilityReady = { it.supportsPhoto },
+                    unavailableMessage = "拍照失败，耳机控制通道未就绪"
+                ) ?: return@launch
+                val commandStartedAt = System.currentTimeMillis()
+                val next = runCatching { coordinator.takePhoto(device) }
+                    .getOrElse { throwable ->
+                        val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+                        showOperationMessage("拍照失败，未取得摄录耳机控制权$detail", OperationMessageType.Error)
+                        return@launch
+                    }
+                val captured = runCatching {
+                    coordinator.mediaFiles(local = true)
+                        .filter { it.kind == MediaKind.Photo && it.contentUri.hasUsableValue() }
+                        .filter { it.lastModifiedFromContentUri() >= commandStartedAt }
+                        .maxByOrNull { it.lastModifiedFromContentUri() }
+                }.getOrNull()
+                if (captured != null) {
+                    _uiState.update { state ->
+                        state.copy(
+                            device = next,
+                            connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
+                            mediaFiles = state.mediaFiles.upsertMedia(captured),
+                            selectedMediaFileId = captured.id,
+                            selectedMediaLocal = true,
+                            operationMessage = operationMessage("现场照片已保存到手机沙盒", OperationMessageType.Success)
+                        )
+                    }
+                    return@launch
+                }
+                _uiState.update { state ->
+                    state.copy(
+                        device = next,
+                        connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
+                        operationMessage = operationMessage("拍照命令已下发，等待摄录耳机回传文件", OperationMessageType.Info)
+                    )
+                }
+            } finally {
+                _uiState.update { state -> state.copy(photoCaptureInProgress = false) }
+            }
         }
     }
 
@@ -1045,15 +1124,136 @@ class PatrolViewModel(
         }
     }
 
+    private fun updateCurrentDeviceWithMessage(next: DeviceStatus, message: String) {
+        _uiState.update { state ->
+            state.copy(
+                device = next,
+                connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
+                operationMessage = operationMessage(message, OperationMessageType.Success)
+            )
+        }
+    }
+
+    private suspend fun prepareDeviceForCommand(
+        capabilityReady: (DeviceCapabilities) -> Boolean,
+        unavailableMessage: String
+    ): DeviceStatus? {
+        var device = currentCommandDevice()
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备", OperationMessageType.Warning)
+            return null
+        }
+        if (device.id != _uiState.value.device.id || !_uiState.value.device.canReceiveDeviceCommand()) {
+            updateControlDevice(device)
+        }
+        val gateway = deviceControlGateway
+        if (gateway != null && device.requiresSdkControlReadiness()) {
+            val ready = runCatching { ensureDeviceControlCapabilities(device, gateway, showMessage = true) }
+                .getOrElse { throwable ->
+                    val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+                    showOperationMessage("控制通道连接失败$detail", OperationMessageType.Error)
+                    return null
+                }
+            device = ready.first
+            if (!capabilityReady(ready.second)) {
+                showOperationMessage(unavailableMessage, OperationMessageType.Error)
+                return null
+            }
+        }
+        return device
+    }
+
+    private fun currentCommandDevice(): DeviceStatus {
+        val state = _uiState.value
+        val selected = state.selectedDeviceId?.let { selectedId ->
+            state.connectedDevices.firstOrNull { it.id == selectedId && it.canReceiveDeviceCommand() }
+        }
+        val sdkConnected = state.connectedDevices.firstOrNull { it.hasSdkControlChannel() }
+        val connectedHeadset = state.connectedDevices.firstOrNull {
+            it.canReceiveDeviceCommand() && it.type in setOf(DeviceType.Headset, DeviceType.Glasses)
+        }
+        val scannedControlHeadset = state.scannedDevices
+            .firstOrNull {
+                it.isNativeUteHeadsetControl() ||
+                    it.isSystemBluetoothAudioControlConnected()
+            }
+            ?.toConnectedAudioStatus(state.device)
+        val scannedSystemHeadset = state.scannedDevices
+            .firstOrNull {
+                it.isSystemBluetoothAudioConnected()
+            }
+            ?.toConnectedAudioStatus(state.device)
+        val stateDevice = state.device.takeIf { it.canReceiveDeviceCommand() }
+        return listOf(
+            stateDevice?.takeIf { it.hasSdkControlChannel() },
+            selected?.takeIf { it.hasSdkControlChannel() },
+            sdkConnected,
+            scannedControlHeadset,
+            stateDevice,
+            selected,
+            connectedHeadset,
+            scannedSystemHeadset
+        ).firstOrNull { it?.canReceiveDeviceCommand() == true } ?: state.device
+    }
+
+    private suspend fun ensureDeviceControlCapabilities(
+        device: DeviceStatus,
+        gateway: DeviceControlGateway,
+        showMessage: Boolean
+    ): Pair<DeviceStatus, DeviceCapabilities> {
+        var checkedDevice = device
+        var capabilities = gateway.capabilities(checkedDevice)
+        if (!checkedDevice.shouldReconnectControlChannel(capabilities)) return checkedDevice to capabilities
+        if (showMessage) {
+            _uiState.update { state ->
+                state.copy(operationMessage = operationMessage("正在连接耳机控制通道", OperationMessageType.Info))
+            }
+        }
+        val rebound = coordinator.bindDevice(checkedDevice.id)
+        checkedDevice = rebound.copy(
+            name = checkedDevice.name.ifBlank { rebound.name },
+            type = resolveConnectedDeviceType(rebound, scannedName = checkedDevice.name, scannedType = checkedDevice.type)
+        )
+        updateControlDevice(checkedDevice)
+        capabilities = waitForControlCapabilities(checkedDevice, gateway)
+        return checkedDevice to capabilities
+    }
+
+    private suspend fun waitForControlCapabilities(device: DeviceStatus, gateway: DeviceControlGateway): DeviceCapabilities {
+        var latest = DeviceCapabilities()
+        repeat(ControlReadyPollAttempts) { attempt ->
+            latest = gateway.capabilities(device)
+            if (!device.shouldReconnectControlChannel(latest)) return latest
+            if (attempt < ControlReadyPollAttempts - 1) delay(ControlReadyPollMillis)
+        }
+        return latest
+    }
+
+    private fun updateControlDevice(next: DeviceStatus) {
+        _uiState.update { state ->
+            val connected = state.connectedDevices.filterNot {
+                it.id == next.id || (!it.hasSdkControlChannel() && it.type == next.type)
+            } + next
+            state.copy(
+                device = next,
+                connectedDevices = connected,
+                selectedDeviceId = next.id
+            )
+        }
+    }
+
     fun downloadMedia(fileId: String) = viewModelScope.launch {
         runCatching {
+            var emitted = false
             coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
+                emitted = true
                 updatePhoneTransfer(fileId, updated.markTransferTarget(TransferTarget.PhoneSandbox))
                 if (updated.transferStatus == TransferStatus.Done) runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
+            check(emitted) { "媒体传输通道未返回进度" }
         }.onFailure {
-            simulateMediaTransfer(fileId, TransferTarget.PhoneSandbox)
+            markMediaTransferFailed(fileId, local = false, target = TransferTarget.PhoneSandbox, throwable = it, action = "媒体文件下载失败")
         }
     }
 
@@ -1064,12 +1264,15 @@ class PatrolViewModel(
             return@launch
         }
         runCatching {
+            var emitted = false
             coordinator.transferMedia(fileId, TransferTarget.Cloud).collect { updated ->
+                emitted = true
                 updateTransferredMedia(fileId, local, updated.copy(local = local).markTransferTarget(TransferTarget.Cloud))
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
+            check(emitted) { "媒体传输通道未返回进度" }
         }.onFailure {
-            simulateMediaTransfer(fileId, TransferTarget.Cloud, local)
+            markMediaTransferFailed(fileId, local = local, target = TransferTarget.Cloud, throwable = it, action = "媒体文件上传失败")
         }
     }
 
@@ -1093,26 +1296,34 @@ class PatrolViewModel(
         }.getOrNull()
     }
 
-    private suspend fun simulateMediaTransfer(fileId: String, target: TransferTarget, local: Boolean = target != TransferTarget.PhoneSandbox) {
-        val original = _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local == local } ?: return
-        val steps = listOf(
-            original.copy(transferStatus = TransferStatus.Hashing, progress = 0.1f, lastTransferTarget = target),
-            original.copy(transferStatus = TransferStatus.Uploading, progress = 0.55f, lastTransferTarget = target),
-            original.copy(transferStatus = TransferStatus.Verifying, progress = 0.9f, lastTransferTarget = target),
-            original.copy(transferStatus = TransferStatus.Done, progress = 1f, verified = true, lastTransferTarget = target)
-        )
-        steps.forEach { updated ->
-            if (target == TransferTarget.PhoneSandbox) {
-                updatePhoneTransfer(fileId, updated)
-            } else {
-                updateTransferredMedia(fileId, local, updated)
-            }
-            if (updated.transferStatus != TransferStatus.Done) delay(420)
-        }
-    }
-
     private fun MediaFile.markTransferTarget(target: TransferTarget): MediaFile =
         copy(lastTransferTarget = target)
+
+    private fun markMediaTransferFailed(
+        fileId: String,
+        local: Boolean,
+        target: TransferTarget,
+        throwable: Throwable,
+        action: String
+    ) {
+        val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+        _uiState.update { state ->
+            val current = state.mediaFiles.firstOrNull { it.id == fileId && it.local == local }
+            val nextFiles = current?.let {
+                state.mediaFiles.upsertMedia(
+                    it.copy(
+                        transferStatus = TransferStatus.Failed,
+                        progress = 0f,
+                        lastTransferTarget = target
+                    )
+                )
+            } ?: state.mediaFiles
+            state.copy(
+                mediaFiles = nextFiles,
+                operationMessage = operationMessage("$action$detail", OperationMessageType.Error)
+            )
+        }
+    }
 
     private fun updateTransferredMedia(fileId: String, local: Boolean, updated: MediaFile) {
         _uiState.update { state ->
@@ -1609,6 +1820,24 @@ private fun MediaFile.lastModifiedFromContentUri(): Long =
 
 private fun com.patrollink.domain.DeviceStatus.canReceiveDeviceCommand(): Boolean =
     id.isNotBlank() && online
+
+private fun com.patrollink.domain.DeviceStatus.shouldReconnectControlChannel(capabilities: DeviceCapabilities): Boolean =
+    online &&
+        id.isNotBlank() &&
+        type in setOf(DeviceType.Headset, DeviceType.Glasses) &&
+        (
+            onlineDuration.startsWith("系统蓝牙") ||
+                (
+                    !capabilities.supportsPhoto &&
+                        !capabilities.supportsVideo &&
+                        !capabilities.supportsAudioRecord
+                    )
+            )
+
+private fun com.patrollink.domain.DeviceStatus.requiresSdkControlReadiness(): Boolean =
+    online &&
+        id.isNotBlank() &&
+        type in setOf(DeviceType.Headset, DeviceType.Glasses)
 
 private fun com.patrollink.domain.DeviceStatus.batteryTextForMessage(): String =
     if (batteryKnown) "${battery.coerceIn(0, 100)}%" else "读取失败"

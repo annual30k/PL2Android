@@ -5,3 +5,9 @@ app/build/
 local.properties
 *.iml
 .idea/
+
+# Android package artifacts
+*.apk
+*.apks
+*.aab
+dist/apk/

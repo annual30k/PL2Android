@@ -34,6 +34,8 @@ class UteSdkDeviceControlGateway(
     private val bridge: UteSdkBridge,
     private val mediaDirectory: File? = null
 ) : DeviceControlGateway {
+    private var aiRecorderSessionId: String? = null
+
     override fun events(): Flow<DeviceEvent> =
         bridge.notifies.mapNotNull { notify ->
             when (notify.type) {
@@ -127,12 +129,13 @@ class UteSdkDeviceControlGateway(
         val hasGlassesInfo = glassesInfo != null
         val hasHeadsetInfo = headsetInfo != null
         val sdkControlConnected = runCatching { bridge.client.isConnected(device.id) }.getOrDefault(false) ||
-            (bridge.client.isConnected && bridge.client.deviceAddress.equals(device.id, ignoreCase = true))
+            (bridge.client.isConnected && bridge.client.deviceAddress.equals(device.id, ignoreCase = true)) ||
+            (selectedHeadset && bridge.client.isConnected)
         val hasSmartStore = glassesInfo?.glassesStoreInfo != null
         val supportsAiRecorder = DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
         val supportsFileSpp = DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_FILE_TRANSFER_SPP)
         val smartCameraControl = sdkControlConnected && hasGlassesInfo
-        val headsetCameraControl = selectedHeadset && sdkControlConnected
+        val headsetCameraControl = selectedHeadset && (sdkControlConnected || device.online)
         val cameraControl = (selectedGlasses && smartCameraControl) || headsetCameraControl
         DeviceCapabilities(
             supportsGlasses = selectedGlasses && hasGlassesInfo,
@@ -142,7 +145,7 @@ class UteSdkDeviceControlGateway(
             supportsPhoto = cameraControl,
             supportsVideo = cameraControl,
             supportsAudioRecord = selectedHeadset && (supportsAiRecorder || cameraControl),
-            supportsRealtimeAudio = selectedHeadset && cameraControl
+            supportsRealtimeAudio = selectedHeadset && (supportsAiRecorder || cameraControl)
         )
     }
 
@@ -199,12 +202,38 @@ class UteSdkDeviceControlGateway(
     override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             bridge.client.openOrCloseNotify(true)
-            bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START).isSuccess
+            val aiRecorderStarted = if (supportsAiRecorder()) {
+                val response = bridge.connection.appStartAudioRecord()
+                if (response.isAudioStartAccepted()) {
+                    aiRecorderSessionId = response.data?.sessionId ?: sessionId
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+            aiRecorderStarted ||
+                bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START).isSuccess
         }.getOrDefault(false)
     }
 
     override suspend fun stopRealtimeAudioSync(): Boolean = withContext(Dispatchers.IO) {
-        runCatching { bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_STOP).isSuccess }.getOrDefault(false)
+        runCatching {
+            val aiRecorderStopped = if (aiRecorderSessionId != null || supportsAiRecorder()) {
+                val response = bridge.connection.appStopAudioRecord()
+                if (response.isAudioStopAccepted()) {
+                    aiRecorderSessionId = null
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+            aiRecorderStopped ||
+                bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_STOP).isSuccess
+        }.getOrDefault(false)
     }
 
     override suspend fun notifyMediaSyncCompleted(): Boolean = withContext(Dispatchers.IO) {
@@ -228,14 +257,8 @@ class UteSdkDeviceControlGateway(
 
     private suspend fun File.persistSmartFile(prefix: String, type: String, fallbackExtension: String) = withContext(Dispatchers.IO) {
         val source = this@persistSmartFile
-        if (!source.exists() || !source.isFile || source.length() <= 0L) return@withContext
         val directory = mediaDirectory ?: return@withContext
-        directory.mkdirs()
-        val extension = source.name.substringAfterLast('.', "").ifBlank {
-            type.substringAfterLast('/', fallbackExtension).substringAfterLast('.', fallbackExtension).ifBlank { fallbackExtension }
-        }.lowercase()
-        val target = File(directory, "$prefix-${System.currentTimeMillis()}.$extension")
-        runCatching { source.copyTo(target, overwrite = true) }
+        source.persistUniqueSmartMedia(directory, prefix, type, fallbackExtension)
     }
 
     private fun GlassesStoreInfo.toSummary(): String =
@@ -251,6 +274,9 @@ class UteSdkDeviceControlGateway(
 
     private fun Response<AudioRecordStopInfo>.isAudioStopAccepted(): Boolean =
         data != null || isSuccess
+
+    private fun supportsAiRecorder(): Boolean =
+        DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
 
     private companion object {
         const val WifiStateSettleMillis = 1_500L

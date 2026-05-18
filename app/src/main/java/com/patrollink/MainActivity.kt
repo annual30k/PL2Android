@@ -122,7 +122,8 @@ private class PatrolViewModelFactory(
             patrolRestApi = dependencies.patrolRestApi,
             runtimeConfigStore = dependencies.configStore,
             backendBaseUrl = dependencies.config.restBaseUrl,
-            onSessionChanged = dependencies.tokenStore::update
+            onSessionChanged = dependencies.tokenStore::update,
+            onPairingUsernameChanged = dependencies.tokenStore::updatePairingUsername
         ) as T
     }
 }

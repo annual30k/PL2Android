@@ -71,7 +71,14 @@ class UteSdkMediaGateway(
                 )
             }
         }
-        if ((fileId.startsWith(PhotoPrefix) || fileId.startsWith(VideoPrefix)) && target == TransferTarget.PhoneSandbox) {
+        if (fileId.startsWith(VideoPrefix) && target == TransferTarget.PhoneSandbox) {
+            return flow {
+                val local = localFiles().firstOrNull { it.id == fileId }
+                    ?: error(VideoSyncUnsupportedMessage)
+                emit(local.copy(transferStatus = TransferStatus.Done, progress = 1f, lastTransferTarget = TransferTarget.PhoneSandbox))
+            }
+        }
+        if (fileId.startsWith(PhotoPrefix) && target == TransferTarget.PhoneSandbox) {
             return flow {
                 val local = localFiles().firstOrNull { it.id == fileId } ?: error("media file not found: $fileId")
                 emit(local.copy(transferStatus = TransferStatus.Done, progress = 1f, lastTransferTarget = TransferTarget.PhoneSandbox))
@@ -82,10 +89,12 @@ class UteSdkMediaGateway(
                 val sessionId = fileId.removePrefix(AudioPrefix)
                 val localFile = File(mediaDirectory, "$sessionId.opus")
                 if (!localFile.exists()) {
-                    val remote = listFiles(local = false).firstOrNull { it.id == fileId } ?: error("media file not found: $fileId")
+                    val remote = listFiles(local = false).firstOrNull { it.id == fileId } ?: error(AudioSyncUnavailableMessage)
+                    val expectedSize = findAudioRecordFile(sessionId)?.fileSize?.takeIf { it > 0L }
+                        ?: remote.size.toByteSizeOrNull()
                     emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = 0.05f, lastTransferTarget = TransferTarget.PhoneSandbox))
                     localFile.also { it.parentFile?.mkdirs() }.outputStream().use { output ->
-                        syncAudio(sessionId, output::write) { progress ->
+                        syncAudio(sessionId, expectedSize, output::write) { progress ->
                             emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = (progress * 0.58f).coerceIn(0.08f, 0.58f), lastTransferTarget = TransferTarget.PhoneSandbox))
                         }
                     }
@@ -138,12 +147,14 @@ class UteSdkMediaGateway(
             return fallbackGateway.transfer(fileId, target)
         }
         return flow {
-            val remote = listFiles(local = false).firstOrNull { it.id == fileId } ?: error("media file not found: $fileId")
+            val remote = listFiles(local = false).firstOrNull { it.id == fileId } ?: error(AudioSyncUnavailableMessage)
             emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = 0.05f))
             val sessionId = fileId.removePrefix(AudioPrefix)
+            val expectedSize = findAudioRecordFile(sessionId)?.fileSize?.takeIf { it > 0L }
+                ?: remote.size.toByteSizeOrNull()
             val targetFile = File(mediaDirectory, "$sessionId.opus").also { it.parentFile?.mkdirs() }
             targetFile.outputStream().use { output ->
-                syncAudio(sessionId, output::write) { progress ->
+                syncAudio(sessionId, expectedSize, output::write) { progress ->
                     emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = progress))
                 }
             }
@@ -209,15 +220,29 @@ class UteSdkMediaGateway(
         return true
     }
 
-    private suspend fun queryAudioRecordFiles(): List<MediaFile> = withContext(Dispatchers.IO) {
+    private suspend fun queryAudioRecordFiles(): List<MediaFile> {
+        val records = queryAudioRecordFileBeans(onlyOne = 0)
+            .ifEmpty { queryAudioRecordFileBeans(onlyOne = 1) }
+            .distinctBy { it.sessionId.orEmpty() to it.fileType }
+        return records.map { it.toMediaFile(local = false) }.onEach { mediaIndex?.upsert(it) }
+    }
+
+    private suspend fun findAudioRecordFile(sessionId: String): AudioRecordFile? {
+        if (sessionId.isBlank()) return null
+        return queryAudioRecordFileBeans(onlyOne = 0).firstOrNull { it.sessionId == sessionId }
+            ?: queryAudioRecordFileBeans(onlyOne = 1).firstOrNull { it.sessionId == sessionId }
+    }
+
+    private suspend fun queryAudioRecordFileBeans(onlyOne: Long): List<AudioRecordFile> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = RequestAudioRecordFileInfo(0x01, 0, 1)
+            val request = RequestAudioRecordFileInfo(AudioUserId, 0L, onlyOne)
             val result = bridge.connection.queryAudioRecordFileLists(request).data
-            result?.audioRecordFiles.orEmpty().map { it.toMediaFile(local = false) }
+            result?.audioRecordFiles.orEmpty()
         }.getOrDefault(emptyList())
     }
 
     private suspend fun requestPendingSmartMediaUpload(): List<MediaFile> = coroutineScope {
+        if (!hasPendingSmartMedia()) return@coroutineScope emptyList()
         val beforeIds = withContext(Dispatchers.IO) { localFiles().map { it.id }.toSet() }
         val receiveOne = async(start = CoroutineStart.UNDISPATCHED) {
             withTimeoutOrNull(SmartMediaRetryTimeoutMillis) {
@@ -241,6 +266,13 @@ class UteSdkMediaGateway(
         }
     }
 
+    private suspend fun hasPendingSmartMedia(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val store = bridge.connection.getGlassesInfo().data?.glassesStoreInfo ?: return@runCatching false
+            store.newTakenPictures.isPositiveCount()
+        }.getOrDefault(false)
+    }
+
     private suspend fun persistSmartMediaNotify(notify: Notify): MediaFile? {
         return when (notify.type) {
             NotifyType.SMART_GLASSES_IMAGE_DATA_NOTIFY -> {
@@ -259,13 +291,7 @@ class UteSdkMediaGateway(
 
     private suspend fun File.persistSmartFile(prefix: String, type: String, fallbackExtension: String): MediaFile? = withContext(Dispatchers.IO) {
         val source = this@persistSmartFile
-        if (!source.exists() || !source.isFile || source.length() <= 0L) return@withContext null
-        mediaDirectory.mkdirs()
-        val extension = source.extension.ifBlank {
-            type.substringAfterLast('/', fallbackExtension).substringAfterLast('.', fallbackExtension).ifBlank { fallbackExtension }
-        }.lowercase()
-        val target = File(mediaDirectory, "$prefix-${System.currentTimeMillis()}.$extension")
-        runCatching { source.copyTo(target, overwrite = true) }.getOrNull()?.toLocalMediaFile()
+        source.persistUniqueSmartMedia(mediaDirectory, prefix, type, fallbackExtension)?.toLocalMediaFile()
     }
 
     private fun localFiles(): List<MediaFile> =
@@ -320,42 +346,54 @@ class UteSdkMediaGateway(
 
     private suspend fun syncAudio(
         sessionId: String,
+        expectedSize: Long?,
         writeChunk: (ByteArray) -> Unit,
         onProgress: suspend (Float) -> Unit
     ) {
         var start = 0L
-        var end = ChunkSize
+        val total = expectedSize?.takeIf { it > 0L }
         repeat(MaxChunks) {
             val request = RequestSyncAudioRecordFileInfo().apply {
                 this.sessionId = sessionId
                 this.fileType = AudioFileType
                 this.start = start
-                this.end = end
+                this.end = total ?: (start + ChunkSize)
                 this.realSync = false
             }
-            withContext(Dispatchers.IO) { bridge.connection.syncAudioRecordFile(request) }
-            val data = withTimeoutOrNull(NotifyTimeoutMillis) {
+            val accepted = withContext(Dispatchers.IO) { bridge.connection.syncAudioRecordFile(request) }
+            if (!accepted.isSuccess) error("audio sync request rejected: ${accepted.errorCode}")
+            val chunk = withTimeoutOrNull(NotifyTimeoutMillis) {
                 bridge.notifies.mapNotNull { notify ->
                     when (notify.type) {
                         NotifyType.AI_RECORDER_SYNC_SECTION_DATA_NOTIFY,
                         NotifyType.AI_RECORDER_SYNC_ALL_DATA_NOTIFY,
-                        NotifyType.AI_RECORDER_ABORT_SYNC_DATA_NOTIFY -> notify.data as? SyncAudioDataInfo
+                        NotifyType.AI_RECORDER_ABORT_SYNC_DATA_NOTIFY -> (notify.data as? SyncAudioDataInfo)?.let {
+                            AudioSyncChunk(notify.type, it)
+                        }
                         else -> null
                     }
                 }.first()
-            } ?: return
+            } ?: error("audio sync timed out: $sessionId")
+            if (chunk.type == NotifyType.AI_RECORDER_ABORT_SYNC_DATA_NOTIFY) error("audio sync aborted: $sessionId")
+            val data = chunk.data
             val bytes = data.syncAudioData ?: return
             if (bytes.isEmpty()) return
             writeChunk(bytes)
-            start = data.position
-            end = start + ChunkSize
-            onProgress((start / (start + ChunkSize).toFloat()).coerceIn(0.08f, 0.86f))
-            if (data.position <= 0L || notifyIsFinal(bytes, data.position)) return
+            val nextStart = data.position
+            val written = nextStart.coerceAtLeast(start + bytes.size)
+            val progress = if (total != null) {
+                (written / total.toFloat()).coerceIn(0.08f, 0.86f)
+            } else {
+                (written / (written + ChunkSize).toFloat()).coerceIn(0.08f, 0.86f)
+            }
+            onProgress(progress)
+            if (chunk.type == NotifyType.AI_RECORDER_SYNC_ALL_DATA_NOTIFY) return
+            if (total != null && written >= total) return
+            if (total == null && bytes.size < ChunkSize) return
+            if (nextStart <= start) return
+            start = nextStart
         }
     }
-
-    private fun notifyIsFinal(bytes: ByteArray, position: Long): Boolean =
-        bytes.size < ChunkSize || position < ChunkSize
 
     private fun AudioRecordFile.toMediaFile(local: Boolean): MediaFile {
         val sessionId = sessionId.orEmpty()
@@ -378,10 +416,31 @@ class UteSdkMediaGateway(
         return if (mb >= 1f) "%.1f MB".format(mb) else "${(this / 1024).coerceAtLeast(1)} KB"
     }
 
+    private fun String.toByteSizeOrNull(): Long? {
+        val trimmed = trim()
+        val value = trimmed.substringBefore(' ').toDoubleOrNull() ?: return null
+        return when {
+            trimmed.endsWith("GB", ignoreCase = true) -> (value * 1024 * 1024 * 1024).toLong()
+            trimmed.endsWith("MB", ignoreCase = true) -> (value * 1024 * 1024).toLong()
+            trimmed.endsWith("KB", ignoreCase = true) -> (value * 1024).toLong()
+            trimmed.endsWith("B", ignoreCase = true) -> value.toLong()
+            else -> null
+        }
+    }
+
+    private fun Number?.isPositiveCount(): Boolean =
+        (this?.toLong() ?: 0L) > 0L
+
+    private data class AudioSyncChunk(
+        val type: Int,
+        val data: SyncAudioDataInfo
+    )
+
     private companion object {
         const val AudioPrefix = "ute-audio-"
         const val PhotoPrefix = "ute-photo-"
         const val VideoPrefix = "ute-video-"
+        const val AudioUserId = 0x01L
         const val AudioFileType = 1
         const val ChunkSize = 1600L
         const val MaxChunks = 4096
@@ -389,5 +448,7 @@ class UteSdkMediaGateway(
         const val RemoteListTimeoutMillis = 8_000L
         const val FallbackListTimeoutMillis = 5_000L
         const val SmartMediaRetryTimeoutMillis = 8_000L
+        const val VideoSyncUnsupportedMessage = "当前 UTE SDK 只开放录像控制，没有开放录像文件上传手机接口；需要设备 Wi-Fi 文件服务或厂家视频同步协议"
+        const val AudioSyncUnavailableMessage = "当前没有可同步的录音文件；只有设备主动回传音频或支持 AI Recorder 文件同步时，录音才能上传到手机"
     }
 }

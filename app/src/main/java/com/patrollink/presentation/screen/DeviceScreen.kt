@@ -105,7 +105,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                 when (device.type) {
                     DeviceType.Recorder -> {
                         item { RecorderLiveFeed(uiState, viewModel, device) }
-                        item { RecorderActions(device, viewModel) }
+                        item { RecorderActions(device, uiState.photoCaptureInProgress, viewModel) }
                         item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
                         item {
                             MetricTile(
@@ -119,7 +119,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                     DeviceType.Headset -> {
                         item { RecorderLiveFeed(uiState, viewModel, device) }
                         item { HeadsetCapabilityCard(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing) }
-                        item { HeadsetActions(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing, viewModel) }
+                        item { HeadsetActions(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing, uiState.photoCaptureInProgress, viewModel) }
                     }
                     DeviceType.Sensor -> {
                         item { SensorCapabilityCard(device) }
@@ -129,7 +129,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                     DeviceType.Glasses -> {
                         item { RecorderLiveFeed(uiState, viewModel, device) }
                         item { GlassesCapabilityCard(device) }
-                        item { GlassesActions(device, viewModel) }
+                        item { GlassesActions(device, uiState.photoCaptureInProgress, viewModel) }
                         item { MetricTile("在线时长", device.onlineDuration, TechBlue, 0.65f) }
                         item { MetricTile("眼镜电量", device.batteryText(), Success, device.batteryProgress()) }
                     }
@@ -293,10 +293,10 @@ private fun RecorderLiveFeed(uiState: AppUiState, viewModel: PatrolViewModel, de
 }
 
 @Composable
-private fun RecorderActions(device: DeviceStatus, viewModel: PatrolViewModel) {
+private fun RecorderActions(device: DeviceStatus, photoBusy: Boolean, viewModel: PatrolViewModel) {
     val enabled = device.isControllableDevice()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", enabled = enabled, onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "拍照中" else "拍照", "camera", enabled = enabled && !photoBusy, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isRecording) "停止录像" else "录制视频",
@@ -335,10 +335,10 @@ private fun HeadsetCapabilityCard(device: DeviceStatus, capabilities: DeviceCapa
 }
 
 @Composable
-private fun HeadsetActions(device: DeviceStatus, capabilities: DeviceCapabilities, recording: Boolean, viewModel: PatrolViewModel) {
+private fun HeadsetActions(device: DeviceStatus, capabilities: DeviceCapabilities, recording: Boolean, photoBusy: Boolean, viewModel: PatrolViewModel) {
     val enabled = device.canUseSdkControls()
     val recordEnabled = enabled && capabilities.supportsAudioRecord
-    val photoEnabled = enabled && capabilities.supportsPhoto
+    val photoEnabled = enabled && capabilities.supportsPhoto && !photoBusy
     val videoEnabled = enabled && capabilities.supportsVideo
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.weight(1f)) {
@@ -351,7 +351,7 @@ private fun HeadsetActions(device: DeviceStatus, capabilities: DeviceCapabilitie
                 onClick = viewModel::toggleTalk
             )
         }
-        Box(Modifier.weight(1f)) { ActionTile("拍照", "camera", enabled = photoEnabled, onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "拍照中" else "拍照", "camera", enabled = photoEnabled, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isRecording) "停止录像" else "执法录像",
@@ -384,10 +384,10 @@ private fun GlassesCapabilityCard(device: DeviceStatus) {
 }
 
 @Composable
-private fun GlassesActions(device: DeviceStatus, viewModel: PatrolViewModel) {
+private fun GlassesActions(device: DeviceStatus, photoBusy: Boolean, viewModel: PatrolViewModel) {
     val enabled = device.canUseSdkControls()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) { ActionTile("抓拍", "camera", enabled = enabled, onClick = viewModel::takePhoto) }
+        Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "抓拍中" else "抓拍", "camera", enabled = enabled && !photoBusy, onClick = viewModel::takePhoto) }
         Box(Modifier.weight(1f)) {
             ActionTile(
                 if (device.isRecording) "停止录像" else "执法录像",

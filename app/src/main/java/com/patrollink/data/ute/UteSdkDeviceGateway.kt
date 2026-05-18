@@ -6,13 +6,16 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.content.Context
+import android.util.Log
 import androidx.annotation.RequiresPermission
+import com.yc.nadalsdk.bean.DeviceBt3StateInfo
 import com.patrollink.domain.DeviceCommand
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
+import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.ScannedDevice
-import com.yc.nadalsdk.bean.CameraStatusConfig
 import com.yc.nadalsdk.bean.DeviceInfoRequest
 import com.yc.nadalsdk.bean.DevicePairedState
 import com.yc.nadalsdk.bean.HonorAccountConfig
@@ -22,6 +25,8 @@ import com.yc.nadalsdk.bean.recorder.AudioRecordStopInfo
 import com.yc.nadalsdk.bean.smart.GlassesStateInfo
 import com.yc.nadalsdk.bean.smart.HeadsetAccountConfig
 import com.yc.nadalsdk.bean.smart.SmartImageDataInfo
+import com.yc.nadalsdk.bean.smart.SmartGpsInfo
+import com.yc.nadalsdk.ble.open.DeviceModeJX
 import com.yc.nadalsdk.ble.open.UteBleConnection
 import com.yc.nadalsdk.constants.NotifyType
 import com.yc.nadalsdk.constants.recorder.AudioRecordResult
@@ -31,9 +36,11 @@ import com.yc.nadalsdk.listener.BleConnectStateListener
 import com.yc.nadalsdk.scan.UteScanCallback
 import com.yc.nadalsdk.scan.UteScanDevice
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.awaitClose
@@ -53,13 +60,23 @@ class UteSdkDeviceGateway(
     private val bridge: UteSdkBridge,
     private val fallbackStatus: DeviceStatus,
     private val mediaDirectory: File? = null,
-    private val pairingAccountIdProvider: () -> String = { DefaultPairingAccountId }
+    private val pairingAccountIdProvider: () -> String = { DefaultPairingAccountId },
+    private val photoLocationProvider: suspend () -> GpsLocation? = { null }
 ) : DeviceGateway {
     private val scanned = ConcurrentHashMap<String, ScannedDevice>()
     private val connectedAtByDevice = ConcurrentHashMap<String, Long>()
+    private val lastKnownBatteryByDevice = ConcurrentHashMap<String, Int>()
+    private val lastKnownStorageByDevice = ConcurrentHashMap<String, StorageSnapshot>()
+    private val accountBoundByDevice = ConcurrentHashMap<String, Boolean>()
+    private val photoCommandInFlightByDevice = ConcurrentHashMap<String, Long>()
+    private val lastPhotoCommandFinishedAtByDevice = ConcurrentHashMap<String, Long>()
+    private val statusCache by lazy {
+        bridge.appContext.getSharedPreferences(StatusCacheName, Context.MODE_PRIVATE)
+    }
     private val mutex = Mutex()
     private var activeDevice: DeviceStatus = fallbackStatus
     private var connectResult: CompletableDeferred<Boolean>? = null
+    private var aiRecorderSessionId: String? = null
 
     @SuppressLint("MissingPermission")
     override fun scan(): Flow<List<ScannedDevice>> = callbackFlow {
@@ -109,6 +126,10 @@ class UteSdkDeviceGateway(
             return fallbackStatus.copy(id = deviceId, online = false)
         }
         if (systemDiscovered?.isSystemAudioDevice() == true) {
+            if (!systemDiscovered.isSystemAudioConnected()) {
+                activeDevice = systemAudioStatus(systemDiscovered)
+                return activeDevice
+            }
             val sdkStatus = runCatching {
                 connectAndReadStatus(
                     deviceId = deviceId,
@@ -133,34 +154,64 @@ class UteSdkDeviceGateway(
         withContext(Dispatchers.IO) { runCatching { bridge.disconnect() } }
         connectResult = null
         connectedAtByDevice.remove(deviceId)
+        accountBoundByDevice.remove(deviceId)
+        photoCommandInFlightByDevice.remove(deviceId)
+        lastPhotoCommandFinishedAtByDevice.remove(deviceId)
         activeDevice = fallbackStatus.copy(id = deviceId, online = false, isRecording = false, isTalking = false)
         activeDevice
     }
 
-    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus = mutex.withLock {
-        if (!bridge.hasBluetoothConnectPermission()) {
-            error("bluetooth connect permission missing")
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus {
+        val guardedPhoto = command == DeviceCommand.TakePhoto
+        if (guardedPhoto) {
+            val now = System.currentTimeMillis()
+            val lastFinishedAt = lastPhotoCommandFinishedAtByDevice[deviceId] ?: 0L
+            check(now - lastFinishedAt >= PhotoCommandSettleMillis) { "photo command is still settling" }
+            check(photoCommandInFlightByDevice.putIfAbsent(deviceId, now) == null) { "photo command already in progress" }
         }
-        val discovered = scanned[deviceId]
-        if (!bridge.client.isConnected || activeDevice.id != deviceId || !activeDevice.online) {
-            val connectedStatus = connectAndReadStatus(deviceId, discovered)
-            check(connectedStatus.online) { "device control channel disconnected" }
+        return try {
+            mutex.withLock {
+                if (!bridge.hasBluetoothConnectPermission()) {
+                    error("bluetooth connect permission missing")
+                }
+                val discovered = scanned[deviceId]
+                if (!bridge.client.isConnected || activeDevice.id != deviceId || !activeDevice.online) {
+                    val connectedStatus = connectAndReadStatus(deviceId, discovered)
+                    check(connectedStatus.online) { "device control channel disconnected" }
+                }
+                var connection = bridge.connection
+                prepareCommandControl(connection, deviceId, command)
+                var commandResult = executeClosedCommand(connection, command)
+                val acceptedPhotoWithoutTransfer = command == DeviceCommand.TakePhoto && commandResult.accepted
+                if (!commandResult.success && activeDevice.type == DeviceType.Headset && !acceptedPhotoWithoutTransfer) {
+                    Log.w(SdkCommandLogTag, "command failed after control retry precheck, reconnecting once: ${commandResult.detail}")
+                    withContext(Dispatchers.IO) { runCatching { bridge.disconnect() } }
+                    connectResult = null
+                    connectedAtByDevice.remove(deviceId)
+                    val reconnected = connectAndReadStatus(deviceId, discovered)
+                    check(reconnected.online) { "device control channel disconnected after command retry" }
+                    connection = bridge.connection
+                    prepareCommandControl(connection, deviceId, command)
+                    commandResult = executeClosedCommand(connection, command)
+                }
+                check(commandResult.success || acceptedPhotoWithoutTransfer) { commandResult.detail }
+                val refreshed = readStatus(deviceId, discovered, connected = true)
+                val next = when (command) {
+                    DeviceCommand.StartRecord -> refreshed.copy(isRecording = true)
+                    DeviceCommand.StopRecord -> refreshed.copy(isRecording = false)
+                    DeviceCommand.StartTalk -> refreshed.copy(isTalking = true)
+                    DeviceCommand.StopTalk -> refreshed.copy(isTalking = false)
+                    DeviceCommand.TakePhoto -> refreshed
+                }
+                activeDevice = next
+                next
+            }
+        } finally {
+            if (guardedPhoto) {
+                photoCommandInFlightByDevice.remove(deviceId)
+                lastPhotoCommandFinishedAtByDevice[deviceId] = System.currentTimeMillis()
+            }
         }
-        val connection = bridge.connection
-        enableControlNotifications()
-        awaitHeadsetControlWarmup(deviceId)
-        val commandResult = executeClosedCommand(connection, command)
-        check(commandResult.success) { commandResult.detail }
-        val refreshed = readStatus(deviceId, discovered, connected = true)
-        val next = when (command) {
-            DeviceCommand.StartRecord -> refreshed.copy(isRecording = true)
-            DeviceCommand.StopRecord -> refreshed.copy(isRecording = false)
-            DeviceCommand.StartTalk -> refreshed.copy(isTalking = true)
-            DeviceCommand.StopTalk -> refreshed.copy(isTalking = false)
-            DeviceCommand.TakePhoto -> refreshed
-        }
-        activeDevice = next
-        next
     }
 
     private suspend fun executeClosedCommand(connection: UteBleConnection, command: DeviceCommand): CommandExecutionResult = coroutineScope {
@@ -175,31 +226,19 @@ class UteSdkDeviceGateway(
         }
         val attempts = withContext(Dispatchers.IO) {
             when (command) {
-                DeviceCommand.TakePhoto -> listOf(
-                    runCommandAttempt("sendCameraPermission") { connection.sendCameraPermission(true) },
-                    runCommandAttempt("setCameraStatus") { connection.setCameraStatus(CameraStatusConfig.STATUS_OPEN) },
-                    runCommandAttempt("triggerGlassesPhotoCapture") { connection.triggerGlassesPhotoCapture(null) }
-                )
+                DeviceCommand.TakePhoto -> photoCommandAttempts(connection)
                 DeviceCommand.StartRecord -> listOf(
-                    runCommandAttempt("toggleGlassesVideoRecording(start)") {
+                    runCommandAttempt("toggleGlassesVideoRecording(start)", acceptTimeoutAsSuccess = true) {
                         connection.toggleGlassesVideoRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START)
                     }
                 )
                 DeviceCommand.StopRecord -> listOf(
-                    runCommandAttempt("toggleGlassesVideoRecording(stop)") {
+                    runCommandAttempt("toggleGlassesVideoRecording(stop)", acceptTimeoutAsSuccess = true) {
                         connection.toggleGlassesVideoRecording(GlassesHeadsetRecordingState.RECORDING_STATE_STOP)
                     }
                 )
-                DeviceCommand.StartTalk -> listOf(
-                    runCommandAttempt("toggleHeadsetAudioRecording(start)") {
-                        connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START)
-                    }
-                )
-                DeviceCommand.StopTalk -> listOf(
-                    runCommandAttempt("toggleHeadsetAudioRecording(stop)") {
-                        connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_STOP)
-                    }
-                )
+                DeviceCommand.StartTalk -> audioRecordCommandAttempts(connection, start = true)
+                DeviceCommand.StopTalk -> audioRecordCommandAttempts(connection, start = false)
             }
         }
         val commandAccepted = attempts.lastOrNull()?.success == true
@@ -210,28 +249,63 @@ class UteSdkDeviceGateway(
             return@coroutineScope CommandExecutionResult(false, detail.ifBlank { "device command failed" }, attempts)
         }
         if (command == DeviceCommand.TakePhoto) {
-            stateResult.cancel()
             val uploaded = imageResult?.let {
                 withTimeoutOrNull(PhotoInlineSyncTimeoutMillis) { it.await() }
             } == true
-            if (!uploaded) imageResult?.cancel()
-            return@coroutineScope CommandExecutionResult(true, detail, attempts)
+            val stateConfirmed = if (uploaded) {
+                stateResult.cancel()
+                false
+            } else {
+                withTimeoutOrNull(PhotoStateGraceMillis) { stateResult.await() } == true
+            }
+            val retryUploaded = if (uploaded || stateConfirmed) {
+                imageResult?.cancel()
+                false
+            } else {
+                imageResult?.cancel()
+                stateResult.cancel()
+                retryImageUploadAndConfirm(connection)
+            }
+            return@coroutineScope CommandExecutionResult(
+                success = stateConfirmed || uploaded || retryUploaded,
+                detail = "$detail; stateConfirmed=$stateConfirmed,inlineUpload=$uploaded,retryUpload=$retryUploaded",
+                attempts = attempts,
+                accepted = commandAccepted
+            )
         }
-        stateResult.cancel()
+        val stateConfirmed = stateResult.await()
         imageResult?.cancel()
-        CommandExecutionResult(true, detail, attempts)
+        CommandExecutionResult(
+            success = stateConfirmed || command.isAsyncHeadsetCommand(),
+            detail = "$detail; stateConfirmed=$stateConfirmed,acceptedWithoutState=${!stateConfirmed && command.isAsyncHeadsetCommand()}",
+            attempts = attempts
+        )
     }
 
-    private inline fun runCommandAttempt(name: String, block: () -> Response<*>): CommandAttempt =
+    private inline fun runCommandAttempt(
+        name: String,
+        acceptTimeoutAsSuccess: Boolean = false,
+        block: () -> Response<*>
+    ): CommandAttempt =
         runCatching {
             val response = block()
+            val timeoutAccepted = acceptTimeoutAsSuccess &&
+                response.errorCode == SdkTimeoutError &&
+                bridge.client.isConnected
+            val dataAccepted = response.data?.toString() == "true"
+            val success = response.isSuccess || dataAccepted || timeoutAccepted
+            Log.i(
+                SdkCommandLogTag,
+                "$name accepted=$success,sdkSuccess=${response.isSuccess},error=${response.errorCode},data=${response.data},timeoutAccepted=$timeoutAccepted"
+            )
             CommandAttempt(
                 name = name,
-                success = response.isSuccess,
+                success = success,
                 errorCode = response.errorCode,
                 data = response.data?.toString()
             )
         }.getOrElse { throwable ->
+            Log.w(SdkCommandLogTag, "$name failed: ${throwable.message}", throwable)
             CommandAttempt(
                 name = name,
                 success = false,
@@ -239,6 +313,132 @@ class UteSdkDeviceGateway(
                 data = throwable.message.orEmpty().ifBlank { throwable::class.java.simpleName }
             )
         }
+
+    private suspend fun photoCommandAttempts(connection: UteBleConnection): List<CommandAttempt> {
+        val gpsInfo = currentPhotoGpsInfo()
+        if (activeDevice.type == DeviceType.Headset || activeDevice.type == DeviceType.Glasses) {
+            return listOf(
+                runCommandAttempt("triggerGlassesPhotoCapture(gps=${gpsInfo != null})") {
+                    connection.triggerGlassesPhotoCapture(gpsInfo)
+                }
+            )
+        }
+        return listOf(
+            runCommandAttempt("triggerGlassesPhotoCapture(gps=${gpsInfo != null})") {
+                connection.triggerGlassesPhotoCapture(gpsInfo)
+            }
+        )
+    }
+
+    private suspend fun currentPhotoGpsInfo(): SmartGpsInfo? {
+        val location: GpsLocation = withTimeoutOrNull(PhotoGpsTimeoutMillis) {
+            try {
+                photoLocationProvider()
+            } catch (_: Throwable) {
+                null
+            }
+        }?.takeIf { it.isUsableForSmartPhoto() } ?: run {
+            Log.i(SdkCommandLogTag, "photo gps unavailable, sending SDK photo command without gps")
+            return null
+        }
+        Log.i(
+            SdkCommandLogTag,
+            "photo gps latitude=${String.format(Locale.US, "%.6f", location.latitude)},longitude=${String.format(Locale.US, "%.6f", location.longitude)}"
+        )
+        return SmartGpsInfo().apply {
+            setLatitude(location.latitude)
+            setLongitude(location.longitude)
+        }
+    }
+
+    private fun GpsLocation.isUsableForSmartPhoto(): Boolean =
+        latitude.isFinite() &&
+            longitude.isFinite() &&
+            latitude in -90.0..90.0 &&
+            longitude in -180.0..180.0 &&
+            (latitude != 0.0 || longitude != 0.0)
+
+    private fun DeviceCommand.isAsyncHeadsetCommand(): Boolean =
+        this == DeviceCommand.StartRecord ||
+            this == DeviceCommand.StopRecord ||
+            this == DeviceCommand.StartTalk ||
+            this == DeviceCommand.StopTalk
+
+    private fun audioRecordCommandAttempts(connection: UteBleConnection, start: Boolean): List<CommandAttempt> {
+        val attempts = mutableListOf<CommandAttempt>()
+        if (supportsAiRecorder()) {
+            attempts += if (start) {
+                runAudioStartAttempt(connection)
+            } else {
+                runAudioStopAttempt(connection)
+            }
+            if (attempts.lastOrNull()?.success == true) return attempts
+        }
+        attempts += runCommandAttempt(
+            name = if (start) "toggleHeadsetAudioRecording(start)" else "toggleHeadsetAudioRecording(stop)",
+            acceptTimeoutAsSuccess = true
+        ) {
+            connection.toggleHeadsetAudioRecording(
+                if (start) {
+                    GlassesHeadsetRecordingState.RECORDING_STATE_START
+                } else {
+                    GlassesHeadsetRecordingState.RECORDING_STATE_STOP
+                }
+            )
+        }
+        return attempts
+    }
+
+    private fun runAudioStartAttempt(connection: UteBleConnection): CommandAttempt =
+        runCatching {
+            val response = connection.appStartAudioRecord()
+            val success = response.isAudioStartAccepted()
+            if (success) aiRecorderSessionId = response.data?.sessionId ?: aiRecorderSessionId
+            Log.i(
+                SdkCommandLogTag,
+                "appStartAudioRecord accepted=$success,sdkSuccess=${response.isSuccess},error=${response.errorCode},session=${response.data?.sessionId},result=${response.data?.result}"
+            )
+            CommandAttempt(
+                name = "appStartAudioRecord",
+                success = success,
+                errorCode = response.errorCode,
+                data = "session=${response.data?.sessionId.orEmpty()},result=${response.data?.result}"
+            )
+        }.getOrElse { throwable ->
+            Log.w(SdkCommandLogTag, "appStartAudioRecord failed: ${throwable.message}", throwable)
+            CommandAttempt("appStartAudioRecord", success = false, errorCode = null, data = throwable.message.orEmpty())
+        }
+
+    private fun runAudioStopAttempt(connection: UteBleConnection): CommandAttempt =
+        runCatching {
+            val response = connection.appStopAudioRecord()
+            val success = response.isAudioStopAccepted()
+            if (success) aiRecorderSessionId = null
+            Log.i(
+                SdkCommandLogTag,
+                "appStopAudioRecord accepted=$success,sdkSuccess=${response.isSuccess},error=${response.errorCode},fileExist=${response.data?.fileExist},fileSize=${response.data?.fileSize}"
+            )
+            CommandAttempt(
+                name = "appStopAudioRecord",
+                success = success,
+                errorCode = response.errorCode,
+                data = "fileExist=${response.data?.fileExist},fileSize=${response.data?.fileSize}"
+            )
+        }.getOrElse { throwable ->
+            Log.w(SdkCommandLogTag, "appStopAudioRecord failed: ${throwable.message}", throwable)
+            CommandAttempt("appStopAudioRecord", success = false, errorCode = null, data = throwable.message.orEmpty())
+        }
+
+    private fun Response<AudioRecordInfo>.isAudioStartAccepted(): Boolean {
+        val result = data?.result ?: return isSuccess
+        return result == AudioRecordResult.RECORD_START_SUCCESS || result == AudioRecordResult.RECORD_ALREADY_IN_PROGRESS
+    }
+
+    private fun Response<AudioRecordStopInfo>.isAudioStopAccepted(): Boolean =
+        data != null || isSuccess
+
+    private fun supportsAiRecorder(): Boolean =
+        DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
 
     private data class CommandAttempt(
         val name: String,
@@ -253,47 +453,75 @@ class UteSdkDeviceGateway(
     private data class CommandExecutionResult(
         val success: Boolean,
         val detail: String,
-        val attempts: List<CommandAttempt> = emptyList()
+        val attempts: List<CommandAttempt> = emptyList(),
+        val accepted: Boolean = attempts.lastOrNull()?.success == true
     )
 
     private suspend fun awaitGlassesState(successStates: Set<Int>, failureStates: Set<Int>): Boolean =
         withTimeoutOrNull(CommandStateTimeoutMillis) {
             bridge.notifies
                 .filter { it.type == NotifyType.SMART_GLASSES_STATE_NOTIFY }
-                .mapNotNull { it.data as? GlassesStateInfo }
-                .mapNotNull { state ->
+                .mapNotNull { notify -> notify.data.toGlassesStateBits() }
+                .mapNotNull { stateBits ->
                     when {
-                        successStates.any { state.getStateInfo(it.toLong()) } -> true
-                        failureStates.any { state.getStateInfo(it.toLong()) } -> false
+                        successStates.any { stateBits.hasStateFlag(it) } -> true
+                        failureStates.any { stateBits.hasStateFlag(it) } -> false
                         else -> null
                     }
                 }
                 .first()
         } == true
 
+    private fun Any?.toGlassesStateBits(): Long? =
+        when (this) {
+            is GlassesStateInfo -> state
+            is Int -> toLong()
+            is Long -> this
+            else -> null
+        }
+
+    private fun Long.hasStateFlag(flag: Int): Boolean =
+        this and flag.toLong() != 0L
+
     private suspend fun awaitImageDataAndConfirm(connection: UteBleConnection): Boolean {
         val image = withTimeoutOrNull(PhotoDataTimeoutMillis) {
             bridge.notifies
                 .filter { it.type == NotifyType.SMART_GLASSES_IMAGE_DATA_NOTIFY }
                 .mapNotNull { it.data as? SmartImageDataInfo }
+                .mapNotNull { it.takeIf { image -> image.crcSuccess == true } }
                 .first()
         }
-        if (image?.crcSuccess != true) return false
+        if (image == null) return false
         persistImageData(image)
-        return withContext(Dispatchers.IO) {
-            runCatching { connection.notifyMediaSyncCompleted().isSuccess }.getOrDefault(false)
+        withContext(Dispatchers.IO) {
+            runCatching { connection.notifyMediaSyncCompleted() }
         }
+        return true
+    }
+
+    private suspend fun retryImageUploadAndConfirm(connection: UteBleConnection): Boolean = coroutineScope {
+        val imageResult = async(start = CoroutineStart.UNDISPATCHED) {
+            awaitImageDataAndConfirm(connection)
+        }
+        val requested = withContext(Dispatchers.IO) {
+            runCatching {
+                bridge.client.openOrCloseNotify(true)
+                connection.retryImageUpload().isSuccess
+            }.getOrDefault(false)
+        }
+        if (!requested) {
+            imageResult.cancel()
+            return@coroutineScope false
+        }
+        val uploaded = withTimeoutOrNull(PhotoRetryUploadTimeoutMillis) { imageResult.await() } == true
+        if (!uploaded) imageResult.cancel()
+        uploaded
     }
 
     private suspend fun persistImageData(image: SmartImageDataInfo) = withContext(Dispatchers.IO) {
         val source = image.file?.takeIf { it.exists() && it.isFile && it.length() > 0 } ?: return@withContext
         val directory = mediaDirectory ?: return@withContext
-        directory.mkdirs()
-        val extension = source.extension.ifBlank {
-            image.imaType.orEmpty().substringAfterLast('/', "jpg").ifBlank { "jpg" }
-        }.lowercase()
-        val target = File(directory, "glasses-photo-${System.currentTimeMillis()}.$extension")
-        runCatching { source.copyTo(target, overwrite = true) }
+        source.persistUniqueSmartMedia(directory, "glasses-photo", image.imaType.orEmpty(), "jpg")
     }
 
     private fun DeviceCommand.expectedState(): ExpectedDeviceState = when (this) {
@@ -329,40 +557,57 @@ class UteSdkDeviceGateway(
     }
 
     @SuppressLint("MissingPermission")
-    private suspend fun connectAndReadStatus(deviceId: String, discovered: ScannedDevice?): DeviceStatus {
+    private suspend fun connectAndReadStatus(deviceId: String, discovered: ScannedDevice?): DeviceStatus = coroutineScope {
         val listener = connectStateListener()
         runCatching { bridge.connection.setConnectStateListener(listener) }
         connectResult = CompletableDeferred()
         val useSdkAutoUserIdPairing = discovered.shouldUseSdkAutoUserIdPairing()
         runCatching { bridge.client.setSupportUserIdPair(useSdkAutoUserIdPairing) }
+        val pendingPairingNotify = if (useSdkAutoUserIdPairing) {
+            async(start = CoroutineStart.UNDISPATCHED) { awaitDevicePairingAccepted() }
+        } else {
+            null
+        }
         val connection = withContext(Dispatchers.IO) { bridge.connect(deviceId) }
         connection.setConnectStateListener(listener)
-        val connected = withTimeoutOrNull(ConnectTimeoutMillis) { connectResult?.await() } == true ||
+        val connectedBeforeAccount = withTimeoutOrNull(PreAccountConnectTimeoutMillis) { connectResult?.await() } == true ||
+            bridge.client.isConnected(deviceId) ||
+            bridge.client.isConnected
+        if (useSdkAutoUserIdPairing) {
+            val paired = completeDevicePairing(
+                connection = connection,
+                discovered = discovered,
+                deviceId = deviceId,
+                pendingNotify = pendingPairingNotify
+            )
+            if (!paired) {
+                Log.w(SdkCommandLogTag, "device pairing/account binding not confirmed before connect callback")
+            }
+        }
+        pendingPairingNotify?.cancel()
+        val connected = connectedBeforeAccount ||
+            withTimeoutOrNull(ConnectTimeoutMillis) { connectResult?.await() } == true ||
             bridge.client.isConnected(deviceId) ||
             bridge.client.isConnected
         if (!connected) {
             withContext(Dispatchers.IO) { runCatching { bridge.disconnect() } }
-            activeDevice = readStatus(deviceId, discovered, connected = false)
-            return activeDevice
+            activeDevice = quickStatus(deviceId, discovered, connected = false)
+            return@coroutineScope activeDevice
         }
         enableControlNotifications()
         if (discovered.requiresHeadsetAccountBinding()) {
-            if (useSdkAutoUserIdPairing) {
-                completeDevicePairing(connection, discovered)
-            }
             connectedAtByDevice.putIfAbsent(deviceId, System.currentTimeMillis())
+            bindPairingAccount(connection, discovered?.type ?: DeviceType.Headset, deviceId)
+            logHeadsetControlState(connection, "afterHeadsetSystemPairing")
             activeDevice = quickStatus(deviceId, discovered, connected = true)
-            return activeDevice
+            return@coroutineScope activeDevice
         }
-        if (useSdkAutoUserIdPairing) {
-            val paired = completeDevicePairing(connection, discovered)
-            if (!paired) {
-                bindPairingAccount(connection, discovered?.type ?: DeviceType.Headset)
-            }
+        if (!useSdkAutoUserIdPairing) {
+            bindPairingAccount(connection, discovered?.type ?: DeviceType.Headset, deviceId)
         }
         connectedAtByDevice.putIfAbsent(deviceId, System.currentTimeMillis())
         activeDevice = readStatus(deviceId, discovered, connected = true)
-        return activeDevice
+        return@coroutineScope activeDevice
     }
 
     private fun ScannedDevice?.shouldUseSdkAutoUserIdPairing(): Boolean =
@@ -390,50 +635,73 @@ class UteSdkDeviceGateway(
 
     private suspend fun completeDevicePairing(
         connection: UteBleConnection,
-        discovered: ScannedDevice?
+        discovered: ScannedDevice?,
+        deviceId: String = activeDevice.id,
+        pendingNotify: Deferred<Boolean>? = null
     ): Boolean = coroutineScope {
-        val notifyResult = async(start = CoroutineStart.UNDISPATCHED) {
-            withTimeoutOrNull(PairingNotifyTimeoutMillis) {
-                bridge.notifies
-                    .filter { it.type == NotifyType.DEVICE_PAIRED_STATE_NOTIFY }
-                    .mapNotNull { it.data as? DevicePairedState }
-                    .first()
-                    .pairedState == DevicePairedState.STATE_CONNECTED
-            } == true
-        }
+        val notifyResult = pendingNotify ?: async(start = CoroutineStart.UNDISPATCHED) { awaitDevicePairingAccepted() }
 
         val requestResult = withContext(Dispatchers.IO) {
             runCatching {
                 connection.requestDevicePairing(SdkPairingRequestEnable)
             }.getOrNull()
         }
+        Log.i(
+            SdkCommandLogTag,
+            "requestDevicePairing success=${requestResult?.isSuccess},error=${requestResult?.errorCode},paired=${requestResult?.data?.pairedState}"
+        )
         val requestAccepted = requestResult?.isSuccess == true
         val immediatePaired = requestResult?.data?.pairedState == DevicePairedState.STATE_CONNECTED
+        val notifyAlreadyPaired = notifyResult.takeIf { it.isCompleted }
+            ?.let { runCatching { it.await() }.getOrDefault(false) } == true
         val sdkPaired = when {
             immediatePaired -> {
                 notifyResult.cancel()
                 true
             }
+            notifyAlreadyPaired -> true
             requestAccepted -> notifyResult.await()
             else -> {
-                notifyResult.cancel()
-                false
+                withTimeoutOrNull(PairingNotifyGraceMillis) { notifyResult.await() } == true
             }
         }
+        if (!sdkPaired) notifyResult.cancel()
         if (!sdkPaired) return@coroutineScope false
 
-        val accountBound = bindPairingAccount(connection, discovered?.type ?: activeDevice.type)
+        val accountBound = bindPairingAccount(connection, discovered?.type ?: activeDevice.type, deviceId)
         if (accountBound && discovered?.bonded != true) {
             requestSystemBond()
         }
         accountBound
     }
 
+    private suspend fun awaitDevicePairingAccepted(): Boolean =
+        withTimeoutOrNull(PairingNotifyTimeoutMillis) {
+            bridge.notifies
+                .filter { it.type == NotifyType.DEVICE_PAIRED_STATE_NOTIFY }
+                .mapNotNull { it.data as? DevicePairedState }
+                .first()
+                .pairedState == DevicePairedState.STATE_CONNECTED
+        } == true
+
     private suspend fun enableControlNotifications() {
         withContext(Dispatchers.IO) {
             runCatching { bridge.client.openOrCloseNotify(true) }
         }
         delay(NotifyEnableSettleMillis)
+    }
+
+    private suspend fun prepareCommandControl(connection: UteBleConnection, deviceId: String, command: DeviceCommand) {
+        enableControlNotifications()
+        if (activeDevice.type !in setOf(DeviceType.Headset, DeviceType.Glasses)) return
+        if (accountBoundByDevice[deviceId] != true) {
+            val accountReady = bindPairingAccount(connection, activeDevice.type, deviceId)
+            if (!accountReady) {
+                Log.w(SdkCommandLogTag, "beforeCommand account binding not ready for command=$command")
+            }
+        }
+        awaitHeadsetControlWarmup(deviceId)
+        Log.i(SdkCommandLogTag, "beforeCommand command=$command,control=systemBluetoothPairing")
     }
 
     private suspend fun awaitHeadsetControlWarmup(deviceId: String) {
@@ -443,17 +711,70 @@ class UteSdkDeviceGateway(
         if (remaining > 0L) delay(remaining)
     }
 
-    private suspend fun bindPairingAccount(connection: UteBleConnection, type: DeviceType): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun bindPairingAccount(
+        connection: UteBleConnection,
+        type: DeviceType,
+        deviceId: String
+    ): Boolean = withContext(Dispatchers.IO) {
         val accountId = pairingAccountIdProvider().ifBlank { DefaultPairingAccountId }
-        if (type == DeviceType.Headset) {
-            return@withContext runCatching {
-                connection.setHeadsetAccount(HeadsetAccountConfig().apply { currentHuid = accountId }).isSuccess
-            }.getOrDefault(false)
-        }
-        runCatching {
-            connection.setHonorAccount(HonorAccountConfig().apply { currentHuid = accountId }).isSuccess
+        val honorBound = runCatching {
+            val response = connection.setHonorAccount(HonorAccountConfig().apply { currentHuid = accountId })
+            val accepted = response.isSuccess && response.data.isHonorAccountAccepted()
+            Log.i(
+                SdkCommandLogTag,
+                "setHonorAccount success=${response.isSuccess},accepted=$accepted,error=${response.errorCode},status=${response.data?.accountJudgmentStatus},account=${accountId.take(8)}..."
+            )
+            accepted
         }.getOrDefault(false)
+        val headsetBound = if (type == DeviceType.Headset) {
+            runCatching {
+                val firstResponse = connection.setHeadsetAccount(HeadsetAccountConfig().apply { currentHuid = accountId })
+                val response = if (firstResponse.data?.accountJudgmentStatus == HeadsetAccountConfig.ACCOUNT_DIFFERENT) {
+                    delay(AccountRebindConfirmWaitMillis)
+                    connection.setHeadsetAccount(HeadsetAccountConfig().apply { currentHuid = accountId })
+                } else {
+                    firstResponse
+                }
+                val accepted = response.isSuccess && response.data.isHeadsetAccountAccepted()
+                Log.i(
+                    SdkCommandLogTag,
+                    "setHeadsetAccount success=${response.isSuccess},accepted=$accepted,error=${response.errorCode},status=${response.data?.accountJudgmentStatus},account=${accountId.take(8)}..."
+                )
+                accepted
+            }.getOrDefault(false)
+        } else {
+            false
+        }
+        val bound = if (type == DeviceType.Headset) headsetBound || honorBound else honorBound
+        if (bound) accountBoundByDevice[deviceId] = true
+        bound
     }
+
+    private fun HonorAccountConfig?.isHonorAccountAccepted(): Boolean =
+        this == null ||
+            accountJudgmentStatus == HonorAccountConfig.ACCOUNT_SAME ||
+            accountJudgmentStatus == HonorAccountConfig.ACCOUNT_NO
+
+    private fun HeadsetAccountConfig?.isHeadsetAccountAccepted(): Boolean =
+        this == null ||
+            accountJudgmentStatus == HeadsetAccountConfig.ACCOUNT_SAME ||
+            accountJudgmentStatus == HeadsetAccountConfig.ACCOUNT_NO
+
+    private suspend fun logHeadsetControlState(connection: UteBleConnection, reason: String) = withContext(Dispatchers.IO) {
+        val bt3 = runCatching { connection.queryDeviceBt3State().data }.getOrNull()
+        Log.i(SdkCommandLogTag, "$reason bt3=${bt3.toBt3Summary()}")
+        val glassesInfo = runCatching { connection.getGlassesInfo().data }.getOrNull()
+        val store = glassesInfo?.glassesStoreInfo
+        Log.i(
+            SdkCommandLogTag,
+            "$reason glassesState=${glassesInfo?.state},photos=${store?.newTakenPictures}/${store?.totalPictures},audio=${store?.newRecordAudio}/${store?.totalRecordAudio},video=${store?.newRecordVideo}/${store?.totalRecordVideo},free=${store?.freeSpace},total=${store?.maxSpace}"
+        )
+    }
+
+    private fun DeviceBt3StateInfo?.toBt3Summary(): String =
+        this?.let {
+            "name=$deviceNameBt3,address=$deviceAddressBt3,switch=$deviceBtSwitch,paired=$deviceBtPairedState,connect=$deviceBtConnectState"
+        } ?: "null"
 
     @SuppressLint("MissingPermission")
     private suspend fun requestSystemBond(): Boolean {
@@ -484,11 +805,13 @@ class UteSdkDeviceGateway(
         connected: Boolean
     ): DeviceStatus = withContext(Dispatchers.IO) {
         val connection = bridge.connection
-        val battery = runCatching {
-            connection.smartGetBatteryInfo().takeIf { it.isSuccess }?.data?.percents
-        }.getOrNull()
-            ?: runCatching { connection.getBatteryInfo().takeIf { it.isSuccess }?.data?.percents }.getOrNull()
+        val readBattery = readBatteryPercent(connection)
+        val battery = readBattery
+            ?: cachedBattery(deviceId)
+            ?: activeDevice.batterySnapshotForDevice(deviceId)
+            ?: fallbackStatus.batterySnapshotForDevice(deviceId)
         val batteryKnown = battery != null
+        if (readBattery != null) rememberBattery(deviceId, readBattery)
         val smartInfo = runCatching { connection.smartGetDeviceInfo().data }.getOrNull()
         val glassesState = runCatching { connection.getGlassesStateInfo().takeIf { it.isSuccess }?.data }.getOrNull()
         val deviceInfo = runCatching {
@@ -498,8 +821,12 @@ class UteSdkDeviceGateway(
                 deviceVersionType = true
             }).data
         }.getOrNull()
-        val glassesInfo = runCatching { connection.getGlassesInfo().takeIf { it.isSuccess }?.data }.getOrNull()
-        val recorderStorage = runCatching { connection.getDeviceStorageInfo().takeIf { it.isSuccess }?.data }.getOrNull()
+        val glassesInfo = retryStatusRead {
+            connection.getGlassesInfo().takeIf { it.isSuccess }?.data
+        }
+        val recorderStorage = retryStatusRead {
+            connection.getDeviceStorageInfo().takeIf { it.isSuccess }?.data
+        }
         val store = glassesInfo?.glassesStoreInfo
         val sdkVideoRecording = when {
             glassesState?.getStateInfo(GlassesState.VIDEO_RECORDING_MODE.toLong()) == true -> true
@@ -515,13 +842,24 @@ class UteSdkDeviceGateway(
             glassesInfo?.state == GlassesState.STANDBY_MODE -> false
             else -> activeDevice.isTalking
         }
-        val readTotalGb = store?.maxSpace?.bytesToGb()?.takeIf { it > 0f }
-            ?: recorderStorage?.total?.bytesToGb()?.takeIf { it > 0f }
-        val totalGb = readTotalGb ?: fallbackStatus.storageTotalGb
-        val freeGb = store?.freeSpace?.bytesToGb()?.coerceAtMost(totalGb)
-            ?: recorderStorage?.free?.bytesToGb()?.coerceAtMost(totalGb)
-            ?: (totalGb - fallbackStatus.storageUsedGb)
-        val storageKnown = readTotalGb != null
+        val readTotalGb = store?.maxSpace?.storageBytesToGb()?.takeIf { it > 0f }
+            ?: recorderStorage?.total?.storageBytesToGb()?.takeIf { it > 0f }
+        val readFreeGb = store?.freeSpace?.storageBytesToGb()?.takeIf { it >= 0f }
+            ?: recorderStorage?.free?.storageBytesToGb()?.takeIf { it >= 0f }
+        val cachedStorage = cachedStorage(deviceId)
+            ?: activeDevice.storageSnapshotForDevice(deviceId)
+            ?: fallbackStatus.storageSnapshotForDevice(deviceId)
+        val readStorage = readTotalGb?.let { total ->
+            StorageSnapshot(
+                totalGb = total,
+                freeGb = (readFreeGb ?: cachedStorage?.freeGb ?: total).coerceIn(0f, total)
+            )
+        }
+        if (readStorage != null) rememberStorage(deviceId, readStorage)
+        val storage = readStorage ?: cachedStorage
+        val totalGb = storage?.totalGb ?: fallbackStatus.storageTotalGb
+        val freeGb = storage?.freeGb ?: (totalGb - fallbackStatus.storageUsedGb)
+        val storageKnown = storage != null
         val type = resolveStatusType(
             deviceId = deviceId,
             discovered = discovered,
@@ -635,6 +973,81 @@ class UteSdkDeviceGateway(
         this >= -85 -> 2
         else -> 1
     }
+
+    private suspend inline fun <T> retryStatusRead(crossinline block: () -> T?): T? {
+        repeat(StatusReadAttempts) { attempt ->
+            val value = runCatching { block() }.getOrNull()
+            if (value != null) return value
+            if (attempt < StatusReadAttempts - 1) delay(StatusReadRetryMillis)
+        }
+        return null
+    }
+
+    private suspend fun readBatteryPercent(connection: UteBleConnection): Int? =
+        retryStatusRead {
+            runCatching { connection.smartGetBatteryInfo().takeIf { it.isSuccess }?.data?.percents }
+                .getOrNull()
+                ?.takeIf { it in 0..100 }
+                ?: runCatching { connection.getBatteryInfo().takeIf { it.isSuccess }?.data?.percents }
+                    .getOrNull()
+                    ?.takeIf { it in 0..100 }
+                ?: systemBluetoothBatteryPercent()
+        }
+
+    @SuppressLint("MissingPermission")
+    private fun systemBluetoothBatteryPercent(): Int? {
+        val device = bridge.bluetoothDevice() ?: return null
+        return runCatching {
+            device.javaClass.getMethod("getBatteryLevel").invoke(device) as? Int
+        }.getOrNull()?.takeIf { it in 0..100 }
+    }
+
+    private fun DeviceStatus.batterySnapshotForDevice(deviceId: String): Int? =
+        battery.takeIf { id.equals(deviceId, ignoreCase = true) && batteryKnown && it in 0..100 }
+
+    private fun DeviceStatus.storageSnapshotForDevice(deviceId: String): StorageSnapshot? =
+        takeIf { id.equals(deviceId, ignoreCase = true) && storageKnown && storageTotalGb > 0f }?.let {
+            StorageSnapshot(
+                totalGb = storageTotalGb,
+                freeGb = (storageTotalGb - storageUsedGb).coerceIn(0f, storageTotalGb)
+            )
+        }
+
+    private fun rememberBattery(deviceId: String, battery: Int) {
+        val value = battery.coerceIn(0, 100)
+        lastKnownBatteryByDevice[deviceId] = value
+        statusCache.edit()
+            .putInt(statusCacheKey(deviceId, "battery"), value)
+            .apply()
+    }
+
+    private fun cachedBattery(deviceId: String): Int? =
+        lastKnownBatteryByDevice[deviceId]
+            ?: statusCache.getInt(statusCacheKey(deviceId, "battery"), UnknownBattery)
+                .takeIf { it in 0..100 }
+
+    private fun rememberStorage(deviceId: String, storage: StorageSnapshot) {
+        if (storage.totalGb <= 0f) return
+        val normalized = storage.copy(freeGb = storage.freeGb.coerceIn(0f, storage.totalGb))
+        lastKnownStorageByDevice[deviceId] = normalized
+        statusCache.edit()
+            .putFloat(statusCacheKey(deviceId, "storage_total_gb"), normalized.totalGb)
+            .putFloat(statusCacheKey(deviceId, "storage_free_gb"), normalized.freeGb)
+            .apply()
+    }
+
+    private fun cachedStorage(deviceId: String): StorageSnapshot? =
+        lastKnownStorageByDevice[deviceId] ?: run {
+            val total = statusCache.getFloat(statusCacheKey(deviceId, "storage_total_gb"), 0f)
+            if (total <= 0f) return@run null
+            val free = statusCache.getFloat(statusCacheKey(deviceId, "storage_free_gb"), total)
+            StorageSnapshot(totalGb = total, freeGb = free.coerceIn(0f, total)).also {
+                lastKnownStorageByDevice[deviceId] = it
+            }
+        }
+
+    private fun statusCacheKey(deviceId: String, field: String): String =
+        "${deviceId.uppercase()}_$field"
 
     private fun mergedScannedDevices(): List<ScannedDevice> {
         val systemDevices = systemBluetoothAudioDevices()
@@ -759,10 +1172,14 @@ class UteSdkDeviceGateway(
         fallbackStatus.copy(
             id = discovered.id,
             name = discovered.name,
-            online = discovered.isSystemAudioConnected() || discovered.bonded,
+            online = discovered.isSystemAudioConnected(),
             battery = fallbackStatus.battery,
             signalBars = discovered.signalBars,
-            onlineDuration = if (discovered.isSystemAudioConnected()) "系统蓝牙已连接" else "系统蓝牙已配对",
+            onlineDuration = if (discovered.isSystemAudioConnected()) {
+                "系统蓝牙已连接"
+            } else {
+                "系统蓝牙已配对，控制通道未连接"
+            },
             type = DeviceType.Headset
         )
 
@@ -776,11 +1193,20 @@ class UteSdkDeviceGateway(
         }
     }
 
-    private fun Long.bytesToGb(): Float = this / 1024f / 1024f / 1024f
+    private fun Long.storageBytesToGb(): Float {
+        if (this <= 0L) return 0f
+        val bytes = if (this < StorageKilobyteValueCeiling) this * 1024L else this
+        return bytes / 1024f / 1024f / 1024f
+    }
 
     private data class ExpectedDeviceState(
         val success: Set<Int>,
         val failure: Set<Int>
+    )
+
+    private data class StorageSnapshot(
+        val totalGb: Float,
+        val freeGb: Float
     )
 
     private companion object {
@@ -790,14 +1216,28 @@ class UteSdkDeviceGateway(
         const val UteBleControlScanned = "ute-ble-control-scanned"
         const val ScanMillis = 10_000L
         const val ConnectTimeoutMillis = 15_000L
+        const val PreAccountConnectTimeoutMillis = 2_500L
         const val PairingNotifyTimeoutMillis = 12_000L
+        const val PairingNotifyGraceMillis = 3_000L
+        const val AccountRebindConfirmWaitMillis = 4_000L
         const val CommandStateTimeoutMillis = 20_000L
         const val PhotoDataTimeoutMillis = 60_000L
         const val PhotoInlineSyncTimeoutMillis = 8_000L
+        const val PhotoStateGraceMillis = 6_000L
+        const val PhotoRetryUploadTimeoutMillis = 12_000L
+        const val PhotoGpsTimeoutMillis = 2_500L
+        const val PhotoCommandSettleMillis = 2_000L
         const val NotifyEnableSettleMillis = 250L
         const val HeadsetControlWarmupMillis = 8_000L
+        const val StatusReadAttempts = 2
+        const val StatusReadRetryMillis = 350L
+        const val StatusCacheName = "ute_device_status_cache"
+        const val UnknownBattery = -1
+        const val SdkTimeoutError = 408
+        const val SdkCommandLogTag = "PatrolUteDevice"
         const val SystemBondTimeoutMillis = 20_000L
         const val SystemBondPollMillis = 250L
+        const val StorageKilobyteValueCeiling = 1024L * 1024L * 16L
         const val SdkPairingRequestEnable = 1
         const val DefaultPairingAccountId = "patrollink-local-operator"
         val CommonOperationFailureStates = setOf(

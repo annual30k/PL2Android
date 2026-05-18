@@ -91,6 +91,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.patrollink.domain.AppUiState
+import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.OperationMessageType
@@ -175,7 +176,12 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                 Spacer(Modifier.height(12.dp))
                 if (files.isEmpty()) {
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        MediaEmptyState(filter = filter, timeFilter = timeFilter, phoneSelected = uiState.selectedMediaLocal)
+                        MediaEmptyState(
+                            filter = filter,
+                            timeFilter = timeFilter,
+                            phoneSelected = uiState.selectedMediaLocal,
+                            capabilities = uiState.deviceCapabilities
+                        )
                     }
                 } else {
                     LazyVerticalGrid(
@@ -731,8 +737,22 @@ private fun CompactCloudBadge(file: MediaFile, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun MediaEmptyState(filter: MediaFilter, timeFilter: MediaTimeFilter, phoneSelected: Boolean) {
+private fun MediaEmptyState(
+    filter: MediaFilter,
+    timeFilter: MediaTimeFilter,
+    phoneSelected: Boolean,
+    capabilities: DeviceCapabilities
+) {
     val colors = PatrolDisplay.colors
+    val description = when {
+        phoneSelected -> "可从设备端上传到手机，或等待现场采集生成。"
+        filter == MediaFilter.Video -> "录像控制已接入；当前 UTE SDK 未开放视频文件回传接口，需设备 Wi-Fi 文件服务或厂家同步协议。"
+        filter == MediaFilter.Audio && capabilities.supportsAudioRecord ->
+            "录音会在设备主动回传或 AI Recorder 文件列表可用后显示；若为空，说明当前设备未上报可同步录音。"
+        filter == MediaFilter.Audio -> "当前设备未声明可同步录音能力。"
+        filter == MediaFilter.Photo -> "照片拍摄后会自动回传到手机端；设备端通常不会保留可手动上传的照片列表。"
+        else -> "设备端当前没有可同步文件；照片可自动回传，录像暂不支持 BLE 上传手机。"
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -751,7 +771,7 @@ private fun MediaEmptyState(filter: MediaFilter, timeFilter: MediaTimeFilter, ph
         Text("暂无${timeFilter.emptyPrefix}${filter.label}文件", color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(6.dp))
         Text(
-            if (phoneSelected) "可从设备端上传到手机，或等待现场采集生成。" else "设备端当前没有匹配类型的媒体。",
+            description,
             color = colors.textMuted,
             fontSize = 12.sp,
             lineHeight = 18.sp,

@@ -168,6 +168,7 @@ data class AppUiState(
     val selectedMediaFileId: String? = null,
     val previewMediaFile: MediaFile? = null,
     val streamState: StreamRelayState = StreamRelayState.Idle,
+    val photoCaptureInProgress: Boolean = false,
     val sosActive: Boolean = false,
     val fontSizeMode: FontSizeMode = FontSizeMode.Standard,
     val displayThemeMode: DisplayThemeMode = DisplayThemeMode.System,

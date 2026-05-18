@@ -42,7 +42,7 @@ object RuntimeDependencyFactory {
     fun create(context: Context): RuntimeDependencies {
         val appContext = context.applicationContext
         val config = RuntimeConfigStore(appContext).read()
-        val tokenStore = RuntimeTokenStore()
+        val tokenStore = RuntimeTokenStore(appContext)
         val secureStore = AndroidKeystoreSecureStore(appContext)
         val emptyState = EmptyAppState.create()
         val uteBridge = if (config.useRealBle) UteSdkBridge(appContext) else null

@@ -91,6 +91,7 @@ object ServiceFactory {
         val emptyMediaGateway = EmptyMediaGateway()
         val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
         val uteMediaDirectory = File(context.filesDir, "patrol_media/ute")
+        val photoLocationGateway by lazy { AndroidLocationGateway(context, fallbackState.sosLocation) }
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
             WifiBackedMediaGateway(
                 wifiClient = WifiFileServiceClient(baseUrl, tokenProvider = tokenProvider),
@@ -121,7 +122,8 @@ object ServiceFactory {
                             bridge = uteBridge ?: UteSdkBridge(context),
                             fallbackStatus = fallbackState.device,
                             mediaDirectory = uteMediaDirectory,
-                            pairingAccountIdProvider = pairingAccountIdProvider
+                            pairingAccountIdProvider = pairingAccountIdProvider,
+                            photoLocationProvider = { photoLocationGateway.currentLocation() }
                         )
                     }
                 }

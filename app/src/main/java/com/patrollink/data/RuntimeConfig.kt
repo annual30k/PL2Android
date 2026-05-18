@@ -4,7 +4,6 @@ import android.content.Context
 import com.google.gson.Gson
 import com.patrollink.BuildConfig
 import com.patrollink.domain.AuthSession
-import java.security.MessageDigest
 
 data class RuntimeConfig(
     val restBaseUrl: String,
@@ -133,11 +132,13 @@ class RuntimeConfigStore(context: Context) {
     }
 }
 
-class RuntimeTokenStore {
+class RuntimeTokenStore(context: Context) {
+    private val pairingPrefs = context.getSharedPreferences(PairingPrefsName, Context.MODE_PRIVATE)
+
     @Volatile
     private var accessToken: String? = null
     @Volatile
-    private var pairingAccountId: String = DefaultPairingAccountId
+    private var pairingAccountId: String = savedPairingAccountId() ?: DefaultPairingAccountId
 
     fun token(): String? = accessToken
 
@@ -145,16 +146,29 @@ class RuntimeTokenStore {
 
     fun update(session: AuthSession?) {
         accessToken = session?.accessToken
-        pairingAccountId = session?.let { createPairingAccountId(it) } ?: DefaultPairingAccountId
+        val saved = savedPairingAccountId()
+        pairingAccountId = when {
+            saved != null -> saved
+            else -> pairingAccountId.ifBlank { DefaultPairingAccountId }
+        }
     }
 
-    private fun createPairingAccountId(session: AuthSession): String {
-        val source = session.refreshToken.ifBlank { session.accessToken }.ifBlank { DefaultPairingAccountId }
-        val digest = MessageDigest.getInstance("SHA-256").digest(source.toByteArray())
-        return digest.joinToString(separator = "") { "%02x".format(it) }.take(32)
+    fun updatePairingUsername(username: String?) {
+        val normalized = username
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        pairingAccountId = normalized.also { accountId ->
+            pairingPrefs.edit().putString(PairingAccountKey, accountId).apply()
+        }
     }
 
     private companion object {
+        const val PairingPrefsName = "patrollink_pairing"
+        const val PairingAccountKey = "account_id"
         const val DefaultPairingAccountId = "patrollink-local-operator"
     }
+
+    private fun savedPairingAccountId(): String? =
+        pairingPrefs.getString(PairingAccountKey, null)?.takeIf { it.isNotBlank() }
 }

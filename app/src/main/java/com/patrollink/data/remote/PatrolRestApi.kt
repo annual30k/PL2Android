@@ -17,6 +17,8 @@ interface PatrolRestApi {
     suspend fun startRealtimeAudioSync(deviceId: String): ApiEnvelope<DeviceControlResultDto>
     suspend fun stopRealtimeAudioSync(deviceId: String): ApiEnvelope<DeviceControlResultDto>
     suspend fun notifyMediaSyncCompleted(deviceId: String): ApiEnvelope<DeviceControlResultDto>
+    suspend fun clearDeviceAccount(deviceId: String): ApiEnvelope<DeviceControlResultDto>
+    suspend fun factoryResetDevice(deviceId: String, target: String): ApiEnvelope<DeviceControlResultDto>
     suspend fun alerts(page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<AlertDto>>
     suspend fun acknowledgeAlert(alertId: String): ApiEnvelope<AlertDto>
     suspend fun closeAlert(alertId: String, request: AlertCloseRequestDto): ApiEnvelope<AlertDto>

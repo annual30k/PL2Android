@@ -10,6 +10,7 @@ import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceCommand
 import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.DeviceEvent
+import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceWifiState
@@ -84,6 +85,8 @@ class EmptyDeviceControlGateway : DeviceControlGateway {
     override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
     override suspend fun stopRealtimeAudioSync(): Boolean = false
     override suspend fun notifyMediaSyncCompleted(): Boolean = false
+    override suspend fun clearDeviceAccount(): Boolean = false
+    override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean = false
 }
 
 class EmptyAlertGateway : AlertGateway {

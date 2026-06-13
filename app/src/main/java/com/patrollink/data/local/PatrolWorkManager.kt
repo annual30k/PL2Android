@@ -9,6 +9,10 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.patrollink.data.RestMediaGateway
+import com.patrollink.data.RuntimeConfigStore
+import com.patrollink.data.remote.OkHttpPatrolRestApi
+import com.patrollink.domain.BackgroundTaskType
 import com.patrollink.domain.BackgroundTask
 import com.patrollink.domain.BackgroundTaskGateway
 import com.patrollink.domain.BackgroundTaskReceipt
@@ -42,9 +46,35 @@ class OfflineCompensationWorker(
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        val gateway = RoomBackgroundTaskGateway(PatrolDatabase.get(applicationContext).offlineTaskDao())
+        val database = PatrolDatabase.get(applicationContext)
+        val gateway = RoomBackgroundTaskGateway(database.offlineTaskDao())
+        val uploader = createEvidenceUploadProcessor(database)
         val pending = gateway.pending()
-        pending.forEach { gateway.complete(it.task.id) }
+        var hasIncompleteTask = false
+        pending.forEach { receipt ->
+            val completed = when (receipt.task.type) {
+                BackgroundTaskType.UploadEvidence -> uploader?.process(receipt.task) == true
+                else -> true
+            }
+            if (completed) gateway.complete(receipt.task.id)
+            else hasIncompleteTask = true
+        }
+        if (hasIncompleteTask) return Result.retry()
         return Result.success()
+    }
+
+    private suspend fun createEvidenceUploadProcessor(database: PatrolDatabase): EvidenceUploadTaskProcessor? {
+        val config = RuntimeConfigStore(applicationContext).read()
+        if (config.restBaseUrl.isBlank()) return null
+        val secureStore = AndroidKeystoreSecureStore(applicationContext)
+        val accessToken = secureStore.readSession()?.accessToken
+        val api = OkHttpPatrolRestApi(
+            baseUrl = config.restBaseUrl,
+            tokenProvider = { accessToken }
+        )
+        return EvidenceUploadTaskProcessor(
+            localMediaStore = RoomLocalMediaStore(RoomMediaIndex(database.mediaFileDao())),
+            mediaGateway = RestMediaGateway(api)
+        )
     }
 }

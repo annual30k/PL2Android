@@ -1,5 +1,7 @@
 package com.patrollink.presentation.screen
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -39,10 +41,13 @@ import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +56,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -59,6 +65,7 @@ import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceEvent
 import com.patrollink.domain.DeviceEventLevel
+import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.ScannedDevice
@@ -336,32 +343,83 @@ private fun HeadsetCapabilityCard(device: DeviceStatus, capabilities: DeviceCapa
 
 @Composable
 private fun HeadsetActions(device: DeviceStatus, capabilities: DeviceCapabilities, recording: Boolean, photoBusy: Boolean, viewModel: PatrolViewModel) {
+    val confirmClearAccount = remember { mutableStateOf(false) }
     val enabled = device.canUseSdkControls()
     val recordEnabled = enabled && capabilities.supportsAudioRecord
     val photoEnabled = enabled && capabilities.supportsPhoto && !photoBusy
     val videoEnabled = enabled && capabilities.supportsVideo
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) {
-            ActionTile(
-                if (recording || device.isTalking) "停止录音" else "耳机录音",
-                if (recording || device.isTalking) "stop" else "talk",
-                active = recording || device.isTalking,
-                danger = recording || device.isTalking,
-                enabled = recordEnabled,
-                onClick = viewModel::toggleTalk
-            )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) {
+                ActionTile(
+                    if (recording || device.isTalking) "停止录音" else "耳机录音",
+                    if (recording || device.isTalking) "stop" else "talk",
+                    active = recording || device.isTalking,
+                    danger = recording || device.isTalking,
+                    enabled = recordEnabled,
+                    onClick = viewModel::toggleTalk
+                )
+            }
+            Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "拍照中" else "拍照", "camera", enabled = photoEnabled, onClick = viewModel::takePhoto) }
+            Box(Modifier.weight(1f)) {
+                ActionTile(
+                    if (device.isRecording) "停止录像" else "执法录像",
+                    if (device.isRecording) "stop" else "video",
+                    active = device.isRecording,
+                    danger = device.isRecording,
+                    enabled = videoEnabled,
+                    onClick = viewModel::toggleRecord
+                )
+            }
         }
-        Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "拍照中" else "拍照", "camera", enabled = photoEnabled, onClick = viewModel::takePhoto) }
-        Box(Modifier.weight(1f)) {
-            ActionTile(
-                if (device.isRecording) "停止录像" else "执法录像",
-                if (device.isRecording) "stop" else "video",
-                active = device.isRecording,
-                danger = device.isRecording,
-                enabled = videoEnabled,
-                onClick = viewModel::toggleRecord
-            )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) {
+                ActionTile("设备自检", "info", enabled = enabled, onClick = viewModel::runDeviceSelfCheck)
+            }
+            Box(Modifier.weight(1f)) {
+                ActionTile("重置配对", "info", danger = true, enabled = enabled, onClick = { confirmClearAccount.value = true })
+            }
         }
+    }
+    if (confirmClearAccount.value) {
+        AlertDialog(
+            onDismissRequest = { confirmClearAccount.value = false },
+            title = { Text("重置设备配对") },
+            text = { Text("先尝试清除设备账号；如果设备仍提示账号不一致，可恢复耳机或眼镜模块出厂设置。恢复出厂会删除设备端数据，完成后需要重新搜索并配对 PatrolLink。") },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            confirmClearAccount.value = false
+                            viewModel.clearConnectedDeviceAccount()
+                        }
+                    ) {
+                        Text("清账号", color = Danger)
+                    }
+                    TextButton(
+                        onClick = {
+                            confirmClearAccount.value = false
+                            viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Headset)
+                        }
+                    ) {
+                        Text("恢复耳机", color = Danger)
+                    }
+                    TextButton(
+                        onClick = {
+                            confirmClearAccount.value = false
+                            viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Glasses)
+                        }
+                    ) {
+                        Text("恢复眼镜", color = Danger)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearAccount.value = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
@@ -386,19 +444,35 @@ private fun GlassesCapabilityCard(device: DeviceStatus) {
 @Composable
 private fun GlassesActions(device: DeviceStatus, photoBusy: Boolean, viewModel: PatrolViewModel) {
     val enabled = device.canUseSdkControls()
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "抓拍中" else "抓拍", "camera", enabled = enabled && !photoBusy, onClick = viewModel::takePhoto) }
-        Box(Modifier.weight(1f)) {
-            ActionTile(
-                if (device.isRecording) "停止录像" else "执法录像",
-                if (device.isRecording) "stop" else "video",
-                active = device.isRecording,
-                danger = device.isRecording,
-                enabled = enabled,
-                onClick = viewModel::toggleRecord
-            )
+    val context = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "抓拍中" else "抓拍", "camera", enabled = enabled && !photoBusy, onClick = viewModel::takePhoto) }
+            Box(Modifier.weight(1f)) {
+                ActionTile(
+                    if (device.isRecording) "停止录像" else "执法录像",
+                    if (device.isRecording) "stop" else "video",
+                    active = device.isRecording,
+                    danger = device.isRecording,
+                    enabled = enabled,
+                    onClick = viewModel::toggleRecord
+                )
+            }
+            Box(Modifier.weight(1f)) { ActionTile("设备自检", "info", enabled = enabled, onClick = viewModel::runDeviceSelfCheck) }
         }
-        Box(Modifier.weight(1f)) { ActionTile("设备自检", "info", enabled = enabled, onClick = viewModel::runDeviceSelfCheck) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) {
+                ActionTile(
+                    "系统 Wi-Fi",
+                    "wifi",
+                    enabled = true,
+                    onClick = {
+                        context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }
+                )
+            }
+            Spacer(Modifier.weight(2f))
+        }
     }
 }
 
@@ -548,10 +622,9 @@ fun AddDeviceScreen(
     val colors = PatrolDisplay.colors
     val palette = addDevicePalette(colors.dark)
     val devices = remember(uiState.scannedDevices) { uiState.scannedDevices.distinctByDeviceIdentity() }
-    val connectedKeys = (uiState.connectedDevices + uiState.device)
+    val connectedDevices = (uiState.connectedDevices + uiState.device)
         .filter { it.isControllableDevice() }
-        .map { it.id }
-        .toSet()
+        .distinctBy { it.id }
     LaunchedEffect(Unit) {
         viewModel.refreshScannedDevices(showFailureMessage = true)
     }
@@ -570,7 +643,7 @@ fun AddDeviceScreen(
                 ScanHeader(
                     palette = palette,
                     devices = devices,
-                    connectedKeys = connectedKeys,
+                    connectedDevices = connectedDevices,
                     bluetoothEnabled = bluetoothEnabled,
                     onToggleBluetooth = onToggleBluetooth
                 )
@@ -601,12 +674,19 @@ fun AddDeviceScreen(
             }
             devices.forEach { device ->
                 item {
-                    val connected = device.isConnected(connectedKeys)
+                    val connected = device.isConnected(connectedDevices)
                     DiscoveredDeviceCard(
                         device = device,
                         palette = palette,
                         connected = connected,
-                        onUnbind = { viewModel.unbindDevice(device.id) },
+                        onUnbind = {
+                            viewModel.unbindDiscoveredDevice(
+                                scannedId = device.id,
+                                macAddress = device.macAddress,
+                                scannedName = device.name,
+                                scannedType = device.type
+                            )
+                        },
                         onConnect = {
                             viewModel.connectDiscoveredDevice(
                                 id = device.id,
@@ -629,7 +709,7 @@ fun AddDeviceScreen(
 private fun ScanHeader(
     palette: AddDevicePalette,
     devices: List<ScannedDevice>,
-    connectedKeys: Set<String>,
+    connectedDevices: List<DeviceStatus>,
     bluetoothEnabled: Boolean,
     onToggleBluetooth: () -> Unit
 ) {
@@ -697,7 +777,7 @@ private fun ScanHeader(
                 HeaderDeviceChip(
                     device = device,
                     palette = palette,
-                    connected = device.isConnected(connectedKeys),
+                    connected = device.isConnected(connectedDevices),
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .offset(
@@ -807,6 +887,7 @@ private fun DiscoveredDeviceCard(
     onUnbind: () -> Unit,
     onConnect: () -> Unit
 ) {
+    val confirmUnbind = remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
@@ -860,7 +941,7 @@ private fun DiscoveredDeviceCard(
                     else if (device.bonded) Color(0xFF2F7DF6)
                     else Color(0xFF4D8DF6)
                 )
-                .clickable(onClick = if (connected) onUnbind else onConnect),
+                .clickable(onClick = if (connected) { { confirmUnbind.value = true } } else onConnect),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -870,6 +951,28 @@ private fun DiscoveredDeviceCard(
                 maxLines = 1
             )
         }
+    }
+    if (confirmUnbind.value) {
+        AlertDialog(
+            onDismissRequest = { confirmUnbind.value = false },
+            title = { Text("解除设备绑定") },
+            text = { Text("将清除设备账号并从 PatrolLink 移除当前绑定。完成后需要重新搜索并配对设备。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmUnbind.value = false
+                        onUnbind()
+                    }
+                ) {
+                    Text("解除绑定", color = Danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUnbind.value = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
@@ -921,14 +1024,39 @@ private fun ScanTipsCard(palette: AddDevicePalette) {
     }
 }
 
-private fun ScannedDevice.isConnected(connectedKeys: Set<String>) =
-    id in connectedKeys || macAddress in connectedKeys
+private fun ScannedDevice.isConnected(connectedDevices: List<DeviceStatus>): Boolean {
+    val scannedId = id.normalizedDeviceKey()
+    val scannedMac = macAddress.normalizedDeviceKey()
+    return connectedDevices.any { device ->
+        val deviceId = device.id.normalizedDeviceKey()
+        device.id.equals(id, ignoreCase = true) ||
+            macAddress.isNotBlank() && device.id.equals(macAddress, ignoreCase = true) ||
+            deviceId.isNotBlank() && (
+                deviceId == scannedId ||
+                    deviceId == scannedMac ||
+                    scannedId.contains(deviceId) ||
+                    scannedMac.contains(deviceId)
+                ) ||
+            isKnownDualModeAudioDevice() && device.type == DeviceType.Headset && hasSimilarAudioName(device.name, name)
+    }
+}
+
+private fun String.normalizedDeviceKey(): String =
+    uppercase().filter { it.isLetterOrDigit() }
+
+private fun hasSimilarAudioName(left: String, right: String): Boolean {
+    if (left.isBlank() || right.isBlank()) return false
+    val leftNormalized = left.uppercase()
+    val rightNormalized = right.uppercase()
+    return listOf("E1-PRO", "FORCELINK", "HEADSET", "耳机").any { marker ->
+        marker in leftNormalized && marker in rightNormalized
+    } || leftNormalized == rightNormalized
+}
 
 private fun ScannedDevice.isKnownDualModeAudioDevice(): Boolean {
     val normalized = name.uppercase()
     return serviceUuid.startsWith("system-bluetooth-audio") ||
-        "E1-PRO" in normalized ||
-        normalized.startsWith("SMI-")
+        "E1-PRO" in normalized
 }
 
 private fun DeviceStatus.isControllableDevice(): Boolean =

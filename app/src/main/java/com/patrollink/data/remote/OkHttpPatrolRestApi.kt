@@ -84,6 +84,12 @@ class OkHttpPatrolRestApi(
     override suspend fun notifyMediaSyncCompleted(deviceId: String): ApiEnvelope<DeviceControlResultDto> =
         post("api/v1/devices/${deviceId.pathId()}/media-sync/completed", emptyMap<String, String>())
 
+    override suspend fun clearDeviceAccount(deviceId: String): ApiEnvelope<DeviceControlResultDto> =
+        post("api/v1/devices/${deviceId.pathId()}/account/clear", emptyMap<String, String>())
+
+    override suspend fun factoryResetDevice(deviceId: String, target: String): ApiEnvelope<DeviceControlResultDto> =
+        post("api/v1/devices/${deviceId.pathId()}/factory-reset?target=${target.pathId()}", emptyMap<String, String>())
+
     override suspend fun alerts(page: Int, pageSize: Int): ApiEnvelope<PageEnvelope<AlertDto>> =
         get("api/v1/alerts?page=$page&pageSize=$pageSize")
 

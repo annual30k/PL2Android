@@ -3,11 +3,13 @@ package com.patrollink.data
 import android.content.Context
 import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.local.AndroidKeystoreSecureStore
+import com.patrollink.data.local.WorkManagerBackgroundTaskGateway
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.remote.OkHttpPatrolRestApi
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.domain.PatrolCoordinator
+import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.SecureStore
 import com.patrollink.domain.LocationGateway
@@ -35,6 +37,7 @@ data class RuntimeDependencies(
     val patrolRestApi: PatrolRestApi?,
     val tokenStore: RuntimeTokenStore,
     val configStore: RuntimeConfigStore,
+    val offlineSyncEngine: OfflineSyncEngine,
     val config: RuntimeConfig
 )
 
@@ -60,7 +63,8 @@ object RuntimeDependencyFactory {
             config = config,
             sharedUteBridge = uteBridge,
             tokenProvider = tokenStore::token,
-            deviceIdProvider = { emptyState.device.id }
+            deviceIdProvider = { emptyState.device.id },
+            pairingAccountIdProvider = tokenStore::pairingAccountId
         )
         return RuntimeDependencies(
             coordinator = coordinator,
@@ -78,6 +82,7 @@ object RuntimeDependencyFactory {
             patrolRestApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let { OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenStore::token) },
             tokenStore = tokenStore,
             configStore = RuntimeConfigStore(appContext),
+            offlineSyncEngine = OfflineSyncEngine(WorkManagerBackgroundTaskGateway(appContext)),
             config = config
         )
     }

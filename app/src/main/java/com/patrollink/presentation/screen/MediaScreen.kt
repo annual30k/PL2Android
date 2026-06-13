@@ -1,12 +1,14 @@
 package com.patrollink.presentation.screen
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.foundation.background
@@ -56,6 +58,7 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.UploadFile
@@ -121,6 +124,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
     val colors = PatrolDisplay.colors
+    val context = LocalContext.current
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     var filter by remember { mutableStateOf(MediaFilter.All) }
     var timeFilter by remember { mutableStateOf(MediaTimeFilter.All) }
@@ -131,6 +135,19 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         .filter { it.local == uiState.selectedMediaLocal }
         .filter { filter.matches(it.kind) }
         .filter { timeFilter.matches(it.time) }
+    val pendingDeviceSyncIds = remember(files, uiState.mediaFiles, uiState.selectedMediaLocal) {
+        if (uiState.selectedMediaLocal) {
+            emptySet()
+        } else {
+            files
+                .filter { !it.transferStatus.inProgress }
+                .filter { deviceFile ->
+                    uiState.mediaFiles.none { it.id == deviceFile.id && it.local && !it.contentUri.isNullOrBlank() }
+                }
+                .map { it.id }
+                .toSet()
+        }
+    }
     val selected = files.firstOrNull { it.id == uiState.selectedMediaFileId } ?: files.firstOrNull()
     var pendingDelete by remember { mutableStateOf<MediaFile?>(null) }
     var pendingBatchDelete by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -174,6 +191,18 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                     }
                 )
                 Spacer(Modifier.height(12.dp))
+                if (!uiState.selectedMediaLocal) {
+                    DeviceMediaSyncBar(
+                        totalCount = files.size,
+                        pendingCount = pendingDeviceSyncIds.size,
+                        onWifiSettings = {
+                            runCatching { context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }
+                        },
+                        onRefresh = { viewModel.refreshMediaFiles(showFailureMessage = true) },
+                        onSync = { viewModel.syncDeviceMediaToPhone(pendingDeviceSyncIds, refreshFirst = true) }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
                 if (files.isEmpty()) {
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                         MediaEmptyState(
@@ -216,9 +245,22 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                 }
                 if (batchMode) {
                     MediaActionBar(
-                        primaryText = "全选",
-                        primaryIcon = Icons.Filled.SelectAll,
-                        onPrimary = { batchSelection = files.map { it.id }.toSet() },
+                        primaryText = if (uiState.selectedMediaLocal) "全选" else "同步",
+                        primaryIcon = if (uiState.selectedMediaLocal) Icons.Filled.SelectAll else Icons.Filled.PhoneAndroid,
+                        onPrimary = {
+                            if (uiState.selectedMediaLocal) {
+                                batchSelection = files.map { it.id }.toSet()
+                            } else {
+                                val ids = batchSelection.ifEmpty { pendingDeviceSyncIds }
+                                if (ids.isEmpty()) {
+                                    viewModel.showOperationMessage("没有待同步的设备文件", OperationMessageType.Warning)
+                                } else {
+                                    viewModel.syncDeviceMediaToPhone(ids)
+                                    batchSelection = emptySet()
+                                    batchMode = false
+                                }
+                            }
+                        },
                         onVerify = { viewModel.showOperationMessage("已选择 ${batchSelection.size} 个媒体文件", OperationMessageType.Info) },
                         onDelete = {
                             if (batchSelection.isEmpty()) {
@@ -539,6 +581,59 @@ private fun MediaCompactFilterBar(
 }
 
 @Composable
+private fun DeviceMediaSyncBar(
+    totalCount: Int,
+    pendingCount: Int,
+    onWifiSettings: () -> Unit,
+    onRefresh: () -> Unit,
+    onSync: () -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.border.copy(alpha = 0.72f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("设备文件", color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Black, maxLines = 1)
+            Text(
+                "$totalCount 个文件 · $pendingCount 个待同步",
+                color = colors.textMuted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(
+            onClick = onWifiSettings,
+            modifier = Modifier.size(42.dp)
+        ) {
+            Icon(Icons.Filled.PhoneAndroid, contentDescription = "设备 Wi-Fi", modifier = Modifier.size(20.dp), tint = colors.text)
+        }
+        IconButton(
+            onClick = onRefresh,
+            modifier = Modifier.size(42.dp)
+        ) {
+            Icon(Icons.Filled.Refresh, contentDescription = "刷新设备文件", modifier = Modifier.size(20.dp), tint = colors.text)
+        }
+        Button(
+            onClick = onSync,
+            modifier = Modifier.height(42.dp).widthIn(min = 112.dp)
+        ) {
+            Icon(Icons.Filled.PhoneAndroid, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("同步到手机", fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        }
+    }
+}
+
+@Composable
 private fun FilterChip(
     text: String,
     selected: Boolean,
@@ -746,12 +841,12 @@ private fun MediaEmptyState(
     val colors = PatrolDisplay.colors
     val description = when {
         phoneSelected -> "可从设备端上传到手机，或等待现场采集生成。"
-        filter == MediaFilter.Video -> "录像控制已接入；当前 UTE SDK 未开放视频文件回传接口，需设备 Wi-Fi 文件服务或厂家同步协议。"
+        filter == MediaFilter.Video -> "连接设备 Wi-Fi 后刷新设备文件，识别到视频即可同步到手机端。"
         filter == MediaFilter.Audio && capabilities.supportsAudioRecord ->
-            "录音会在设备主动回传或 AI Recorder 文件列表可用后显示；若为空，说明当前设备未上报可同步录音。"
+            "连接设备 Wi-Fi 后刷新设备文件，识别到录音即可同步到手机端。"
         filter == MediaFilter.Audio -> "当前设备未声明可同步录音能力。"
-        filter == MediaFilter.Photo -> "照片拍摄后会自动回传到手机端；设备端通常不会保留可手动上传的照片列表。"
-        else -> "设备端当前没有可同步文件；照片可自动回传，录像暂不支持 BLE 上传手机。"
+        filter == MediaFilter.Photo -> "连接设备 Wi-Fi 后刷新设备文件，识别到照片即可同步到手机端。"
+        else -> "连接设备 Wi-Fi 后刷新设备文件，识别到媒体即可同步到手机端。"
     }
     Column(
         Modifier

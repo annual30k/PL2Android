@@ -21,6 +21,8 @@ import com.patrollink.data.ute.UteSdkDeviceGateway
 import com.patrollink.data.ute.UteSdkFirmwareGateway
 import com.patrollink.data.ute.UteSdkMediaGateway
 import com.patrollink.data.ute.UteSdkStreamRelayGateway
+import com.patrollink.data.ute.UteWifiMediaClient
+import com.patrollink.data.ute.requireUteCloudUploadResult
 import com.patrollink.data.update.AndroidVersionInstaller
 import com.patrollink.data.voip.AndroidWebRtcIntercomClient
 import com.patrollink.data.voip.BluetoothVoipAudioRouter
@@ -91,6 +93,13 @@ object ServiceFactory {
         val emptyMediaGateway = EmptyMediaGateway()
         val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
         val uteMediaDirectory = File(context.filesDir, "patrol_media/ute")
+        val uteWifiMediaClient = uteBridge?.let {
+            UteWifiMediaClient(
+                context = context,
+                bridge = it,
+                pairingAccountIdProvider = pairingAccountIdProvider
+            )
+        }
         val photoLocationGateway by lazy { AndroidLocationGateway(context, fallbackState.sosLocation) }
         val wifiMediaGateway = config.wifiFileBaseUrl.takeIf { it.isNotBlank() }?.let { baseUrl ->
             WifiBackedMediaGateway(
@@ -138,7 +147,8 @@ object ServiceFactory {
                     fallbackGateway = restMediaGateway ?: emptyMediaGateway,
                     mediaDirectory = uteMediaDirectory,
                     officerBadgeNo = fallbackState.user.badgeNo,
-                    mediaIndex = mediaIndex
+                    mediaIndex = mediaIndex,
+                    wifiMediaClient = uteWifiMediaClient
                 )
                 restMediaGateway != null -> restMediaGateway
                 else -> emptyMediaGateway
@@ -172,12 +182,14 @@ object ServiceFactory {
         config: RuntimeConfig,
         sharedUteBridge: UteSdkBridge? = null,
         tokenProvider: () -> String? = { null },
-        deviceIdProvider: () -> String = { "" }
+        deviceIdProvider: () -> String = { "" },
+        pairingAccountIdProvider: () -> String = { "UNKNOWN_OPERATOR" }
     ): DeviceControlGateway =
         when {
             config.useRealBle -> UteSdkDeviceControlGateway(
                 bridge = sharedUteBridge ?: UteSdkBridge(context),
-                mediaDirectory = File(context.filesDir, "patrol_media/ute")
+                mediaDirectory = File(context.filesDir, "patrol_media/ute"),
+                pairingAccountIdProvider = pairingAccountIdProvider
             )
             config.restBaseUrl.isNotBlank() -> RestDeviceControlGateway(
                 OkHttpPatrolRestApi(baseUrl = config.restBaseUrl, tokenProvider = tokenProvider),
@@ -317,7 +329,7 @@ private class WifiBackedMediaGateway(
                     ?: deviceFile(fileId).copy(local = true, contentUri = Uri.fromFile(localFile).toString())
                 emit(local.copy(transferStatus = TransferStatus.Uploading, progress = 0.18f, lastTransferTarget = target))
                 val uploaded = fallbackGateway.uploadLocalFile(localFile, storageSide = "PHONE", bizType = "MEDIA", bizId = fileId)
-                val completed = (uploaded ?: local).copy(
+                val completed = requireUteCloudUploadResult(fileId, uploaded).copy(
                     id = fileId,
                     local = true,
                     transferStatus = TransferStatus.Done,

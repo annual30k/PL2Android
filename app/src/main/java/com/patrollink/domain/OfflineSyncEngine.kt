@@ -17,7 +17,7 @@ class OfflineSyncEngine(
     suspend fun enqueueEvidenceUpload(fileId: String, createdAt: Long): BackgroundTaskReceipt {
         return backgroundTaskGateway.enqueue(
             BackgroundTask(
-                id = "upload-evidence-$fileId-$createdAt",
+                id = "upload-evidence-$fileId",
                 type = BackgroundTaskType.UploadEvidence,
                 payloadId = fileId,
                 createdAt = createdAt

@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import com.patrollink.data.MockPatrolCoordinatorFactory
 import com.patrollink.data.MockVersionGateway
+import com.patrollink.data.InMemoryBackgroundTaskGateway
 import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.edge.CerebellumAsrTranscribeRequestDto
 import com.patrollink.data.edge.CerebellumAsrTranscribeResponseDto
@@ -31,16 +32,39 @@ import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.VersionUpdatePhase
 import com.google.gson.JsonParser
+import com.patrollink.domain.BackgroundTaskType
+import com.patrollink.domain.DeviceAdvancedSettings
+import com.patrollink.domain.DeviceCapabilities
+import com.patrollink.domain.DeviceCommand
+import com.patrollink.domain.DeviceControlGateway
+import com.patrollink.domain.DeviceEvent
+import com.patrollink.domain.DeviceFactoryResetTarget
+import com.patrollink.domain.DeviceGateway
+import com.patrollink.domain.DeviceStatus
+import com.patrollink.domain.DeviceWifiState
+import com.patrollink.domain.MediaFile
+import com.patrollink.domain.MediaGateway
+import com.patrollink.domain.OperationMessageType
+import com.patrollink.domain.OfflineSyncEngine
+import com.patrollink.domain.PatrolCoordinator
+import com.patrollink.domain.ScannedDevice
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PatrolViewModelTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
+
+    @get:Rule
+    val temp = TemporaryFolder()
 
     @Test
     fun loginMovesUiToAuthenticatedState() = runTest {
@@ -64,6 +88,18 @@ class PatrolViewModelTest {
 
         assertTrue(viewModel.uiState.value.device.isRecording)
         assertTrue(viewModel.uiState.value.device.isTalking)
+    }
+
+    @Test
+    fun photoCommandWithoutImmediateFilePromptsWifiMediaSync() = runTest {
+        val viewModel = testViewModel()
+        loginAndConnect(viewModel)
+
+        viewModel.takePhoto()
+        advanceUntilIdle()
+
+        assertEquals("拍照命令已下发；若媒体列表仍为空，请在设备文件页通过 Wi-Fi 同步", viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Info, viewModel.uiState.value.operationMessage?.type)
     }
 
     @Test
@@ -98,6 +134,460 @@ class PatrolViewModelTest {
         advanceUntilIdle()
         assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == fileId && !it.local })
         assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == fileId && it.local })
+    }
+
+    @Test
+    fun completedDeviceMediaDownloadEnqueuesBackgroundUpload() = runTest {
+        val localFile = temp.newFile("downloaded-device-video.mp4").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val remote = MediaFile(
+            id = "ute-wifi-video-1",
+            name = "downloaded-device-video.mp4",
+            kind = com.patrollink.domain.MediaKind.Video,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val taskGateway = InMemoryBackgroundTaskGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(DownloadingMediaGateway(remote, localFile)),
+            offlineSyncEngine = OfflineSyncEngine(taskGateway)
+        )
+        loginForTest(viewModel)
+
+        viewModel.downloadMedia(remote.id)
+        advanceUntilIdle()
+
+        val queued = taskGateway.pending().single().task
+        assertEquals(BackgroundTaskType.UploadEvidence, queued.type)
+        assertEquals(remote.id, queued.payloadId)
+    }
+
+    @Test
+    fun uploadingDeviceMediaFirstDownloadsToPhoneSandboxAndQueuesBackgroundUpload() = runTest {
+        val localFile = temp.newFile("uploaded-device-video.mp4").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val remote = MediaFile(
+            id = "ute-wifi-video-upload-1",
+            name = "uploaded-device-video.mp4",
+            kind = com.patrollink.domain.MediaKind.Video,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = DownloadingMediaGateway(remote, localFile)
+        val taskGateway = InMemoryBackgroundTaskGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            offlineSyncEngine = OfflineSyncEngine(taskGateway)
+        )
+        loginForTest(viewModel)
+
+        viewModel.uploadMedia(remote.id, local = false)
+        advanceUntilIdle()
+
+        assertEquals(listOf(TransferTarget.PhoneSandbox), mediaGateway.transferTargets)
+        val queued = taskGateway.pending().single().task
+        assertEquals(BackgroundTaskType.UploadEvidence, queued.type)
+        assertEquals(remote.id, queued.payloadId)
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneDownloadsMissingDeviceFilesAndQueuesBackgroundUploads() = runTest {
+        val devicePhoto = MediaFile(
+            id = "ute-wifi-photo-1",
+            name = "IMG_0001.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val deviceVideo = devicePhoto.copy(
+            id = "ute-wifi-video-2",
+            name = "GX010002.MP4",
+            kind = com.patrollink.domain.MediaKind.Video
+        )
+        val alreadyLocal = deviceVideo.copy(local = true, contentUri = temp.newFile("GX010002.MP4").toURI().toString())
+        val gateway = BatchDownloadingMediaGateway(
+            remote = listOf(devicePhoto, deviceVideo),
+            local = listOf(alreadyLocal),
+            downloadedFiles = mapOf(
+                devicePhoto.id to temp.newFile("IMG_0001.jpg").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) },
+                deviceVideo.id to temp.newFile("GX010002-download.MP4").apply { writeBytes(byteArrayOf(5, 6, 7, 8)) }
+            )
+        )
+        val taskGateway = InMemoryBackgroundTaskGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(gateway),
+            offlineSyncEngine = OfflineSyncEngine(taskGateway)
+        )
+        loginForTest(viewModel)
+
+        viewModel.syncDeviceMediaToPhone()
+        advanceUntilIdle()
+
+        assertEquals(listOf(devicePhoto.id), gateway.downloadedIds)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == devicePhoto.id && it.local && it.contentUri != null })
+        assertEquals(listOf(devicePhoto.id), taskGateway.pending().map { it.task.payloadId })
+        assertEquals("已同步 1 个设备文件到手机，后台上传任务已加入队列", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneRefreshesDeviceFilesWhenListIsEmpty() = runTest {
+        val devicePhoto = MediaFile(
+            id = "ute-wifi-photo-refresh-1",
+            name = "IMG_REFRESH.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val gateway = BatchDownloadingMediaGateway(
+            remote = emptyList(),
+            local = emptyList(),
+            downloadedFiles = mapOf(
+                devicePhoto.id to temp.newFile("IMG_REFRESH.jpg").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            )
+        )
+        val taskGateway = InMemoryBackgroundTaskGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(gateway),
+            offlineSyncEngine = OfflineSyncEngine(taskGateway)
+        )
+        loginForTest(viewModel)
+        assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == devicePhoto.id })
+
+        gateway.remote = listOf(devicePhoto)
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        advanceUntilIdle()
+
+        assertEquals(listOf(devicePhoto.id), gateway.downloadedIds)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == devicePhoto.id && it.local && it.contentUri != null })
+        assertEquals(listOf(devicePhoto.id), taskGateway.pending().map { it.task.payloadId })
+    }
+
+    @Test
+    fun refreshMediaFilesRemovesStaleDeviceFilesWhenDeviceReportsEmpty() = runTest {
+        val remote = MediaFile(
+            id = "ute-wifi-stale-video",
+            name = "stale-video.mp4",
+            kind = com.patrollink.domain.MediaKind.Video,
+            time = "123",
+            size = "1 MB",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = MutableListingMediaGateway(remote = listOf(remote))
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
+        loginForTest(viewModel)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == remote.id && !it.local })
+
+        mediaGateway.remote = emptyList()
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == remote.id && !it.local })
+    }
+
+    @Test
+    fun manualDeviceMediaRefreshShowsWifiFailureToOperator() = runTest {
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(FailingDeviceListingMediaGateway(IllegalStateException("device wifi unavailable: UTE_00F7")))
+        )
+        loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+
+        viewModel.refreshMediaFiles(showFailureMessage = true)
+        advanceUntilIdle()
+
+        assertEquals("设备文件读取失败：device wifi unavailable: UTE_00F7；请确认手机已连接设备热点后重试", viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Error, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
+    fun manualDeviceMediaRefreshShowsEmptyDeviceListToOperator() = runTest {
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(MutableListingMediaGateway(remote = emptyList(), local = emptyList()))
+        )
+        loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+
+        viewModel.refreshMediaFiles(showFailureMessage = true)
+        advanceUntilIdle()
+
+        assertEquals("设备端没有读取到媒体文件；请先拍照/录像/录音，或确认手机已连接设备热点后重试", viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Warning, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
+    fun failedCloudUploadEnqueuesEvidenceForBackgroundRetry() = runTest {
+        val localFile = temp.newFile("failed-upload.mp4").apply { writeBytes(byteArrayOf(7, 8, 9)) }
+        val media = MediaFile(
+            id = "ute-video-failed-upload",
+            name = "failed-upload.mp4",
+            kind = com.patrollink.domain.MediaKind.Video,
+            time = "123",
+            size = "3 B",
+            duration = null,
+            verified = true,
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = localFile.toURI().toString()
+        )
+        val taskGateway = InMemoryBackgroundTaskGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(FailingCloudMediaGateway(media)),
+            offlineSyncEngine = OfflineSyncEngine(taskGateway)
+        )
+        loginForTest(viewModel)
+
+        viewModel.uploadMedia(media.id, local = true)
+        advanceUntilIdle()
+
+        val queued = taskGateway.pending().single().task
+        assertEquals(BackgroundTaskType.UploadEvidence, queued.type)
+        assertEquals(media.id, queued.payloadId)
+    }
+
+    @Test
+    fun loginLoadsOfficerDutyAreaFromCurrentPatrolArea() = runTest {
+        val viewModel = testViewModel()
+
+        loginForTest(viewModel)
+
+        assertEquals(viewModel.uiState.value.patrolArea.name, viewModel.uiState.value.user.dutyArea)
+        assertEquals("TEAM-A-42", viewModel.uiState.value.patrolArea.teamId)
+        assertTrue(viewModel.uiState.value.patrolArea.boundary.isNotEmpty())
+        assertTrue(viewModel.uiState.value.patrolArea.route.isNotEmpty())
+    }
+
+    @Test
+    fun wifiAccountMismatchMessageIsShownToOperator() = runTest {
+        val expected = "设备账号不一致，请先在原应用解绑或重置设备后重新配对 PatrolLink"
+        val viewModel = testViewModel(
+            deviceControlGateway = FailingWifiControlGateway(IllegalStateException(expected))
+        )
+        loginAndConnect(viewModel)
+
+        viewModel.configureDeviceWifi(enabled = true, ssid = "", password = "")
+        advanceUntilIdle()
+
+        assertEquals(expected, viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Error, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
+    fun wifiManualConnectionMessageIsShownToOperator() = runTest {
+        val expected = "手机系统未授权连接设备热点 UTE_00F7；请在系统 Wi-Fi 弹窗或设置中手动选择 UTE_00F7，连接后返回 PatrolLink 重试媒体同步"
+        val viewModel = testViewModel(
+            deviceControlGateway = FailingWifiControlGateway(IllegalStateException(expected))
+        )
+        loginAndConnect(viewModel)
+
+        viewModel.configureDeviceWifi(enabled = true, ssid = "", password = "")
+        advanceUntilIdle()
+
+        assertEquals(expected, viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Error, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
+    fun wifiApStoppedStateMessageIsShownToOperator() = runTest {
+        val viewModel = testViewModel(
+            deviceControlGateway = FailingWifiControlGateway(IllegalStateException("device wifi did not enable: 5"))
+        )
+        loginAndConnect(viewModel)
+
+        viewModel.configureDeviceWifi(enabled = true, ssid = "", password = "")
+        advanceUntilIdle()
+
+        assertEquals("设备热点未开启，请确认设备电量和当前模式后重试；若仍失败，请在设备侧重启 Wi-Fi 或重启设备", viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Error, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
+    fun clearDeviceAccountUnbindsLocalDeviceAndPromptsReconnect() = runTest {
+        val gateway = ResetControlGateway(clearSuccess = true)
+        val viewModel = testViewModel(deviceControlGateway = gateway)
+        loginAndConnect(viewModel)
+
+        viewModel.clearConnectedDeviceAccount()
+        advanceUntilIdle()
+
+        assertTrue(gateway.clearCalled)
+        assertFalse(viewModel.uiState.value.device.online)
+        assertTrue(viewModel.uiState.value.connectedDevices.isEmpty())
+        assertEquals("设备账号已清除，请重新配对 PatrolLink", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun unbindDiscoveredDeviceClearsDeviceAccountWhenResolvedByMac() = runTest {
+        val gateway = ResetControlGateway(clearSuccess = true)
+        val viewModel = testViewModel(deviceControlGateway = gateway)
+        loginAndConnect(viewModel)
+
+        viewModel.unbindDiscoveredDevice(
+            scannedId = "ute-ble-control-scanned-FD:4A:BA:43:A2:43",
+            macAddress = "HEADSET_001"
+        )
+        advanceUntilIdle()
+
+        assertTrue(gateway.clearCalled)
+        assertFalse(viewModel.uiState.value.device.online)
+        assertTrue(viewModel.uiState.value.connectedDevices.isEmpty())
+        assertEquals("设备账号已清除，请重新配对 PatrolLink", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun unbindDiscoveredDeviceRemovesLocalBindingWhenDeviceAccountClearFails() = runTest {
+        val gateway = ResetControlGateway(clearSuccess = false)
+        val viewModel = testViewModel(deviceControlGateway = gateway)
+        loginAndConnect(viewModel)
+
+        viewModel.unbindDiscoveredDevice(
+            scannedId = "ute-ble-control-scanned-FD:4A:BA:43:A2:43",
+            macAddress = "HEADSET_001"
+        )
+        advanceUntilIdle()
+
+        assertTrue(gateway.clearCalled)
+        assertFalse(viewModel.uiState.value.device.online)
+        assertTrue(viewModel.uiState.value.connectedDevices.isEmpty())
+        assertEquals("设备端账号清除失败，已移除 PatrolLink 本地绑定；如仍无法重连，请在设备侧重置配对", viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Warning, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
+    fun unbindDiscoveredDeviceResolvesConnectedHeadsetByScannedNameWhenIdsDiffer() = runTest {
+        val gateway = ResetControlGateway(clearSuccess = true)
+        val viewModel = testViewModel(deviceControlGateway = gateway)
+        loginAndConnect(viewModel)
+
+        viewModel.unbindDiscoveredDevice(
+            scannedId = "FD:4A:BA:43:A2:43",
+            macAddress = "FD:4A:BA:43:A2:43",
+            scannedName = "ForceLink-H1",
+            scannedType = DeviceType.Headset
+        )
+        advanceUntilIdle()
+
+        assertTrue(gateway.clearCalled)
+        assertFalse(viewModel.uiState.value.device.online)
+        assertTrue(viewModel.uiState.value.connectedDevices.isEmpty())
+        assertEquals("设备账号已清除，请重新配对 PatrolLink", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun unbindDiscoveredDeviceClearsDeviceAccountWhenTargetIsConnectedButNotSelected() = runTest {
+        val gateway = ResetControlGateway(clearSuccess = true)
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithDeviceGateway(TwoDeviceGateway()),
+            deviceControlGateway = gateway
+        )
+        loginForTest(viewModel)
+        viewModel.connectDiscoveredDevice(
+            id = "HEADSET_001",
+            name = "ForceLink-H1",
+            mac = "2C:4A:91:3F:8B:02",
+            signalBars = 4,
+            type = DeviceType.Headset
+        )
+        viewModel.connectDiscoveredDevice(
+            id = "GLASSES_G1",
+            name = "PatrolGlass-G1",
+            mac = "6B:13:9E:41:D7:50",
+            signalBars = 4,
+            type = DeviceType.Glasses
+        )
+        advanceUntilIdle()
+
+        assertEquals("GLASSES_G1", viewModel.uiState.value.device.id)
+        assertTrue(viewModel.uiState.value.connectedDevices.any { it.id == "HEADSET_001" })
+
+        viewModel.unbindDiscoveredDevice(
+            scannedId = "HEADSET_001",
+            macAddress = "2C:4A:91:3F:8B:02",
+            scannedName = "ForceLink-H1",
+            scannedType = DeviceType.Headset
+        )
+        advanceUntilIdle()
+
+        assertTrue(gateway.clearCalled)
+        assertEquals("GLASSES_G1", viewModel.uiState.value.device.id)
+        assertTrue(viewModel.uiState.value.connectedDevices.none { it.id == "HEADSET_001" })
+        assertEquals("设备账号已清除，请重新配对 PatrolLink", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun systemConnectedGlassesRemainGlassesInConnectedDevices() = runTest {
+        val viewModel = testViewModel(coordinator = coordinatorWithDeviceGateway(SystemBluetoothScanGateway()))
+        loginForTest(viewModel)
+
+        viewModel.refreshScannedDevices()
+        advanceUntilIdle()
+
+        val connected = viewModel.uiState.value.connectedDevices.single { it.id == "78:02:B7:66:00:F7" }
+        assertEquals(DeviceType.Glasses, connected.type)
+        assertEquals(DeviceType.Glasses, viewModel.uiState.value.device.type)
+        assertTrue(viewModel.uiState.value.connectedDevices.none { it.id == "FD:4A:BA:43:A2:43" })
+    }
+
+    @Test
+    fun systemConnectedGlassesReplaceStaleE1CurrentDevice() = runTest {
+        val viewModel = testViewModel(coordinator = coordinatorWithDeviceGateway(StaleE1ThenConnectedGlassGateway()))
+        loginForTest(viewModel)
+
+        viewModel.connectDiscoveredDevice(
+            id = "FD:4A:BA:43:A2:43",
+            name = "E1-Pro-A243",
+            mac = "FD:4A:BA:43:A2:43",
+            signalBars = 4,
+            type = DeviceType.Headset
+        )
+        advanceUntilIdle()
+
+        assertEquals("FD:4A:BA:43:A2:43", viewModel.uiState.value.device.id)
+
+        viewModel.refreshScannedDevices()
+        advanceUntilIdle()
+
+        assertEquals("78:02:B7:66:00:F7", viewModel.uiState.value.device.id)
+        assertEquals(DeviceType.Glasses, viewModel.uiState.value.device.type)
+        assertTrue(viewModel.uiState.value.connectedDevices.any { it.id == "78:02:B7:66:00:F7" && it.type == DeviceType.Glasses })
+        assertTrue(viewModel.uiState.value.connectedDevices.none { it.id == "FD:4A:BA:43:A2:43" })
+    }
+
+    @Test
+    fun factoryResetHeadsetUnbindsLocalDeviceAndPromptsReconnect() = runTest {
+        val gateway = ResetControlGateway(factoryResetSuccess = true)
+        val viewModel = testViewModel(deviceControlGateway = gateway)
+        loginAndConnect(viewModel)
+
+        viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Headset)
+        advanceUntilIdle()
+
+        assertEquals(DeviceFactoryResetTarget.Headset, gateway.factoryResetTarget)
+        assertFalse(viewModel.uiState.value.device.online)
+        assertTrue(viewModel.uiState.value.connectedDevices.isEmpty())
+        assertEquals("耳机已恢复出厂并重启，请重新搜索并配对 PatrolLink", viewModel.uiState.value.operationMessage?.text)
     }
 
     @Test
@@ -164,11 +654,282 @@ class PatrolViewModelTest {
     }
 }
 
-private fun testViewModel(cerebellumApi: CerebellumApi? = null) = PatrolViewModel(
-    coordinator = MockPatrolCoordinatorFactory.create(),
+private fun testViewModel(
+    cerebellumApi: CerebellumApi? = null,
+    coordinator: PatrolCoordinator = MockPatrolCoordinatorFactory.create(),
+    offlineSyncEngine: OfflineSyncEngine? = null,
+    deviceControlGateway: DeviceControlGateway? = null
+) = PatrolViewModel(
+    coordinator = coordinator,
+    deviceControlGateway = deviceControlGateway,
     versionGateway = MockVersionGateway(),
-    cerebellumApi = cerebellumApi
+    cerebellumApi = cerebellumApi,
+    offlineSyncEngine = offlineSyncEngine
 )
+
+private fun coordinatorWithMedia(mediaGateway: MediaGateway) = PatrolCoordinator(
+    authGateway = com.patrollink.data.MockAuthGateway(),
+    deviceGateway = com.patrollink.data.MockDeviceGateway(),
+    alertGateway = com.patrollink.data.MockAlertGateway(),
+    mediaGateway = mediaGateway,
+    realtimeGateway = com.patrollink.data.MockRealtimeGateway(),
+    streamRelayGateway = com.patrollink.data.MockStreamRelayGateway(),
+    sosGateway = com.patrollink.data.MockSosGateway(),
+    patrolAreaGateway = com.patrollink.data.MockPatrolAreaGateway()
+)
+
+private fun coordinatorWithDeviceGateway(deviceGateway: DeviceGateway) = PatrolCoordinator(
+    authGateway = com.patrollink.data.MockAuthGateway(),
+    deviceGateway = deviceGateway,
+    alertGateway = com.patrollink.data.MockAlertGateway(),
+    mediaGateway = com.patrollink.data.MockMediaGateway(),
+    realtimeGateway = com.patrollink.data.MockRealtimeGateway(),
+    streamRelayGateway = com.patrollink.data.MockStreamRelayGateway(),
+    sosGateway = com.patrollink.data.MockSosGateway(),
+    patrolAreaGateway = com.patrollink.data.MockPatrolAreaGateway()
+)
+
+private class FailingCloudMediaGateway(private val localMedia: MediaFile) : MediaGateway {
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) listOf(localMedia) else emptyList()
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        error("network unavailable")
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class DownloadingMediaGateway(
+    private val remote: MediaFile,
+    private val localFile: java.io.File
+) : MediaGateway {
+    val transferTargets = mutableListOf<TransferTarget>()
+
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) emptyList() else listOf(remote)
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        transferTargets += target
+        emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f))
+        emit(
+            remote.copy(
+                local = true,
+                verified = true,
+                transferStatus = TransferStatus.Done,
+                progress = 1f,
+                contentUri = localFile.toURI().toString(),
+                lastTransferTarget = target
+            )
+        )
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class BatchDownloadingMediaGateway(
+    var remote: List<MediaFile>,
+    private val local: List<MediaFile>,
+    private val downloadedFiles: Map<String, java.io.File>
+) : MediaGateway {
+    val downloadedIds = mutableListOf<String>()
+
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) this.local else remote
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        val media = remote.first { it.id == fileId }
+        val localFile = downloadedFiles.getValue(fileId)
+        downloadedIds += fileId
+        emit(media.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f))
+        emit(
+            media.copy(
+                local = true,
+                verified = true,
+                transferStatus = TransferStatus.Done,
+                progress = 1f,
+                contentUri = localFile.toURI().toString(),
+                lastTransferTarget = target
+            )
+        )
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class TwoDeviceGateway : DeviceGateway {
+    private val devices = mutableMapOf(
+        "HEADSET_001" to testDevice("HEADSET_001", "ForceLink-H1", DeviceType.Headset),
+        "GLASSES_G1" to testDevice("GLASSES_G1", "PatrolGlass-G1", DeviceType.Glasses)
+    )
+
+    override fun scan(): Flow<List<ScannedDevice>> = flow {
+        emit(
+            listOf(
+                ScannedDevice("HEADSET_001", "ForceLink-H1", 4, "0000-pl2-ble-control", true, "2C:4A:91:3F:8B:02", DeviceType.Headset),
+                ScannedDevice("GLASSES_G1", "PatrolGlass-G1", 4, "0000-pl2-ble-control", false, "6B:13:9E:41:D7:50", DeviceType.Glasses)
+            )
+        )
+    }
+
+    override suspend fun bind(deviceId: String): DeviceStatus =
+        devices.getValue(deviceId).copy(online = true).also { devices[deviceId] = it }
+
+    override suspend fun unbind(deviceId: String): DeviceStatus? =
+        devices[deviceId]?.copy(online = false)?.also { devices[deviceId] = it }
+
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus =
+        devices.getValue(deviceId)
+}
+
+private class SystemBluetoothScanGateway : DeviceGateway {
+    override fun scan(): Flow<List<ScannedDevice>> = flow {
+        emit(
+            listOf(
+                ScannedDevice(
+                    id = "FD:4A:BA:43:A2:43",
+                    name = "E1-Pro-A243",
+                    signalBars = 3,
+                    serviceUuid = "system-bluetooth-audio-bonded",
+                    bonded = true,
+                    macAddress = "FD:4A:BA:43:A2:43",
+                    type = DeviceType.Headset
+                ),
+                ScannedDevice(
+                    id = "78:02:B7:66:00:F7",
+                    name = "Glory Glass 2-00F7",
+                    signalBars = 5,
+                    serviceUuid = "system-bluetooth-audio-connected",
+                    bonded = true,
+                    macAddress = "78:02:B7:66:00:F7",
+                    type = DeviceType.Glasses
+                )
+            )
+        )
+    }
+
+    override suspend fun bind(deviceId: String): DeviceStatus =
+        testDevice(deviceId, "Glory Glass 2-00F7", DeviceType.Glasses).copy(online = false)
+
+    override suspend fun unbind(deviceId: String): DeviceStatus? = null
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus =
+        testDevice(deviceId, "Glory Glass 2-00F7", DeviceType.Glasses).copy(online = false)
+}
+
+private class StaleE1ThenConnectedGlassGateway : DeviceGateway {
+    override fun scan(): Flow<List<ScannedDevice>> = flow {
+        emit(
+            listOf(
+                ScannedDevice(
+                    id = "FD:4A:BA:43:A2:43",
+                    name = "E1-Pro-A243",
+                    signalBars = 3,
+                    serviceUuid = "system-bluetooth-audio-bonded",
+                    bonded = true,
+                    macAddress = "FD:4A:BA:43:A2:43",
+                    type = DeviceType.Headset
+                ),
+                ScannedDevice(
+                    id = "78:02:B7:66:00:F7",
+                    name = "Glory Glass 2-00F7",
+                    signalBars = 5,
+                    serviceUuid = "system-bluetooth-audio-connected",
+                    bonded = true,
+                    macAddress = "78:02:B7:66:00:F7",
+                    type = DeviceType.Glasses
+                )
+            )
+        )
+    }
+
+    override suspend fun bind(deviceId: String): DeviceStatus =
+        testDevice(deviceId, "E1-Pro-A243", DeviceType.Headset)
+
+    override suspend fun unbind(deviceId: String): DeviceStatus? = null
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus =
+        testDevice(deviceId, "E1-Pro-A243", DeviceType.Headset)
+}
+
+private fun testDevice(id: String, name: String, type: DeviceType) = DeviceStatus(
+    id = id,
+    name = name,
+    online = true,
+    battery = 88,
+    signalBars = 4,
+    onlineDuration = "刚刚连接",
+    storageUsedGb = 0f,
+    storageTotalGb = 0f,
+    firmware = "",
+    isRecording = false,
+    isTalking = false,
+    cloudConnected = true,
+    type = type,
+    batteryKnown = true,
+    storageKnown = false
+)
+
+private class MutableListingMediaGateway(
+    var remote: List<MediaFile> = emptyList(),
+    var local: List<MediaFile> = emptyList()
+) : MediaGateway {
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) this.local else remote
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = emptyFlow()
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class FailingDeviceListingMediaGateway(private val failure: Throwable) : MediaGateway {
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) emptyList() else throw failure
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = emptyFlow()
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class FailingWifiControlGateway(private val failure: Throwable) : DeviceControlGateway {
+    override fun events(): Flow<DeviceEvent> = emptyFlow()
+    override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities = DeviceCapabilities(supportsWifi = true)
+    override suspend fun readWifi(): DeviceWifiState = DeviceWifiState()
+    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState {
+        throw failure
+    }
+    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = settings
+    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
+    override suspend fun stopRealtimeAudioSync(): Boolean = false
+    override suspend fun notifyMediaSyncCompleted(): Boolean = false
+    override suspend fun clearDeviceAccount(): Boolean = false
+    override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean = false
+}
+
+private class ResetControlGateway(
+    private val clearSuccess: Boolean = false,
+    private val factoryResetSuccess: Boolean = false
+) : DeviceControlGateway {
+    var clearCalled: Boolean = false
+    var factoryResetTarget: DeviceFactoryResetTarget? = null
+    override fun events(): Flow<DeviceEvent> = emptyFlow()
+    override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities = DeviceCapabilities()
+    override suspend fun readWifi(): DeviceWifiState = DeviceWifiState()
+    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState = DeviceWifiState()
+    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = settings
+    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
+    override suspend fun stopRealtimeAudioSync(): Boolean = false
+    override suspend fun notifyMediaSyncCompleted(): Boolean = false
+    override suspend fun clearDeviceAccount(): Boolean {
+        clearCalled = true
+        return clearSuccess
+    }
+    override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean {
+        factoryResetTarget = target
+        return factoryResetSuccess
+    }
+}
 
 @OptIn(ExperimentalCoroutinesApi::class)
 private suspend fun TestScope.loginForTest(viewModel: PatrolViewModel) {

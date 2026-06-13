@@ -1,16 +1,20 @@
 package com.patrollink.data.ute
 
+import android.util.Log
 import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.DeviceEvent
 import com.patrollink.domain.DeviceEventLevel
+import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
 import com.yc.nadalsdk.bean.Response
 import com.yc.nadalsdk.bean.recorder.AudioRecordInfo
 import com.yc.nadalsdk.bean.recorder.AudioRecordStopInfo
+import com.yc.nadalsdk.bean.smart.DeviceResetConfig
+import com.yc.nadalsdk.bean.smart.GlassesInfo
 import com.yc.nadalsdk.bean.smart.SmartAudioDataInfo
 import com.yc.nadalsdk.bean.smart.GlassesStoreInfo
 import com.yc.nadalsdk.bean.smart.SmartImageDataInfo
@@ -23,18 +27,25 @@ import com.yc.nadalsdk.constants.smart.GlassesHeadsetRecordingState
 import com.yc.nadalsdk.constants.smart.GlassesRecordDirection
 import com.yc.nadalsdk.constants.smart.HeadsetBrightnessLevel
 import com.yc.nadalsdk.constants.smart.HeadsetSoundMode
+import com.yc.nadalsdk.constants.smart.WifiState
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class UteSdkDeviceControlGateway(
     private val bridge: UteSdkBridge,
-    private val mediaDirectory: File? = null
+    private val mediaDirectory: File? = null,
+    private val pairingAccountIdProvider: () -> String = { "patrollink-local-operator" }
 ) : DeviceControlGateway {
     private var aiRecorderSessionId: String? = null
+    private val accountBinder by lazy { UteHeadsetAccountBinder(bridge, pairingAccountIdProvider) }
 
     override fun events(): Flow<DeviceEvent> =
         bridge.notifies.mapNotNull { notify ->
@@ -126,7 +137,7 @@ class UteSdkDeviceControlGateway(
             null
         }
         val headsetInfo = runCatching { bridge.connection.getHeadsetInfo().data }.getOrNull()
-        val hasGlassesInfo = glassesInfo != null
+        val hasGlassesInfo = glassesInfo.hasUsableGlassesInfo()
         val hasHeadsetInfo = headsetInfo != null
         val sdkControlConnected = runCatching { bridge.client.isConnected(device.id) }.getOrDefault(false) ||
             (bridge.client.isConnected && bridge.client.deviceAddress.equals(device.id, ignoreCase = true)) ||
@@ -134,14 +145,21 @@ class UteSdkDeviceControlGateway(
         val hasSmartStore = glassesInfo?.glassesStoreInfo != null
         val supportsAiRecorder = DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
         val supportsFileSpp = DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_FILE_TRANSFER_SPP)
+        val knownMediaHeadset = selectedHeadset && PatrolDeviceNameClassifier.isKnownAudioName(device.name)
+        val wifiInfo = if (sdkControlConnected && (selectedGlasses || selectedHeadset)) {
+            runCatching { bridge.connection.smartGetDeviceWiFiInfo().data }.getOrNull()
+        } else {
+            null
+        }
+        val hasDeviceWifi = !wifiInfo?.wiFiSSID.isNullOrBlank() || !wifiInfo?.wiFiPassword.isNullOrBlank()
         val smartCameraControl = sdkControlConnected && hasGlassesInfo
-        val headsetCameraControl = selectedHeadset && (sdkControlConnected || device.online)
+        val headsetCameraControl = knownMediaHeadset && (sdkControlConnected || device.online)
         val cameraControl = (selectedGlasses && smartCameraControl) || headsetCameraControl
         DeviceCapabilities(
             supportsGlasses = selectedGlasses && hasGlassesInfo,
             supportsEarphone = selectedHeadset && (sdkControlConnected || hasHeadsetInfo),
-            supportsWifi = selectedGlasses && hasGlassesInfo,
-            supportsFileTransfer = sdkControlConnected && (hasSmartStore || supportsFileSpp),
+            supportsWifi = sdkControlConnected && ((selectedGlasses && hasGlassesInfo) || (selectedHeadset && hasDeviceWifi)),
+            supportsFileTransfer = sdkControlConnected && (hasSmartStore || supportsFileSpp || hasDeviceWifi),
             supportsPhoto = cameraControl,
             supportsVideo = cameraControl,
             supportsAudioRecord = selectedHeadset && (supportsAiRecorder || cameraControl),
@@ -149,18 +167,25 @@ class UteSdkDeviceControlGateway(
         )
     }
 
+    private fun GlassesInfo?.hasUsableGlassesInfo(): Boolean =
+        this?.glassesStoreInfo != null || (this?.state ?: 0) != 0
+
     override suspend fun readWifi(): DeviceWifiState = withContext(Dispatchers.IO) {
         val wifi = runCatching { bridge.connection.smartGetDeviceWiFiInfo().data }.getOrNull()
         val state = runCatching { bridge.connection.smartGetDeviceWiFiStateInfo().data }.getOrNull()
+        val currentState = state?.state ?: wifi?.state ?: 0
         DeviceWifiState(
-            enabled = (wifi?.state ?: state?.state ?: 0) != 0,
+            enabled = currentState.isWifiEnabledState(),
             ssid = wifi?.wiFiSSID.orEmpty(),
             passwordConfigured = !wifi?.wiFiPassword.isNullOrBlank(),
-            connected = (state?.state ?: wifi?.state ?: 0) != 0
+            connected = currentState.isWifiApReadyState()
         )
     }
 
     override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState = withContext(Dispatchers.IO) {
+        if (enabled) {
+            UteAccountBindingGuard.requireAcceptedForWifi(accountBinder.bind("device-control-wifi"))
+        }
         if (ssid.isNotBlank()) {
             val ssidResponse = bridge.connection.smartSetDeviceWiFiSSID(ssid)
             check(ssidResponse.isSuccess) { "device wifi ssid failed: ${ssidResponse.errorCode}" }
@@ -169,9 +194,34 @@ class UteSdkDeviceControlGateway(
             val passwordResponse = bridge.connection.smartSetDeviceWiFiPassword(password)
             check(passwordResponse.isSuccess) { "device wifi password failed: ${passwordResponse.errorCode}" }
         }
+        val currentWifi = runCatching { bridge.connection.smartGetDeviceWiFiInfo().data }.getOrNull()
+        if (enabled) {
+            applyWifiOpenWarmup(
+                targetSsid = ssid.ifBlank { currentWifi?.wiFiSSID.orEmpty() },
+                targetPassword = password.ifBlank { currentWifi?.wiFiPassword.orEmpty() }
+            )
+        }
+        val notifyState = if (enabled) async { waitForWifiEnabledNotify() } else null
         val switchResponse = bridge.connection.smartSetDeviceWiFiSwitch(enabled)
-        check(switchResponse.isSuccess) { "device wifi switch failed: ${switchResponse.errorCode}" }
-        delay(WifiStateSettleMillis)
+        check(switchResponse.isSuccess || switchResponse.data == true) { "device wifi switch failed: ${switchResponse.errorCode}" }
+        if (enabled) {
+            val polledState = waitForWifiEnabledState()
+            val notifiedState = notifyState?.await()
+            val selectedState = when {
+                polledState.isWifiApReadyState() -> polledState
+                notifiedState?.isWifiApReadyState() == true -> notifiedState
+                notifiedState?.isWifiEnabledState() == true -> notifiedState
+                polledState.isWifiEnabledState() -> polledState
+                else -> polledState
+            }
+            check(selectedState.isWifiEnabledState()) { "device wifi did not enable: $selectedState" }
+            if (!selectedState.isWifiApReadyState()) {
+                Log.i(Tag, "device wifi accepted open but AP is not ready yet: state=$selectedState")
+                delay(WifiOpenSuccessSettleMillis)
+            }
+        } else {
+            delay(WifiStateSettleMillis)
+        }
         val next = readWifi()
         check(!enabled || next.enabled) { "device wifi switch accepted but stayed disabled: ${next.ssid}" }
         next
@@ -197,6 +247,41 @@ class UteSdkDeviceControlGateway(
             DeviceType.Sensor -> Unit
         }
         settings
+    }
+
+    private suspend fun applyWifiOpenWarmup(targetSsid: String, targetPassword: String) {
+        runCatching { bridge.client.openOrCloseNotify(true) }
+        if (targetSsid.isNotBlank()) {
+            runCatching { bridge.connection.smartSetDeviceWiFiSSID(targetSsid) }
+                .onFailure { Log.w(Tag, "wifi warmup ssid failed: ${it.message}") }
+        }
+        if (targetPassword.isNotBlank()) {
+            runCatching { bridge.connection.smartSetDeviceWiFiPassword(targetPassword) }
+                .onFailure { Log.w(Tag, "wifi warmup password failed: ${it.message}") }
+        }
+        runCatching { bridge.connection.setGlassesRecordingDirection(GlassesRecordDirection.VERTICAL_SCREEN) }
+        runCatching { bridge.connection.setGlassesRecordingDuration(GloryViewRecordingDurationSeconds) }
+        runCatching {
+            bridge.connection.setVideoParameters(
+                VideoParametersInfo(
+                    GloryViewVideoWidth,
+                    GloryViewVideoHeight,
+                    GloryViewVideoFrameRate
+                )
+            )
+        }
+        runCatching { bridge.connection.getGlassesInfo() }
+            .onSuccess { response ->
+                val store = response.data?.glassesStoreInfo
+                Log.i(
+                    Tag,
+                    "wifi warmup glasses state=${response.data?.state},store=photo=${store?.newTakenPictures}/${store?.totalPictures},audio=${store?.newRecordAudio}/${store?.totalRecordAudio},video=${store?.newRecordVideo}/${store?.totalRecordVideo}"
+                )
+            }
+        runCatching { bridge.connection.notifyMediaSyncCompleted() }
+        runCatching { UteSmartAuthWarmup(bridge).run(GloryViewAuthWarmupMillis) }
+            .onSuccess { Log.i(Tag, "wifi warmup auth $it") }
+            .onFailure { Log.w(Tag, "wifi warmup auth failed: ${it.message}") }
     }
 
     override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = withContext(Dispatchers.IO) {
@@ -240,6 +325,37 @@ class UteSdkDeviceControlGateway(
         runCatching { bridge.connection.notifyMediaSyncCompleted().isSuccess }.getOrDefault(false)
     }
 
+    override suspend fun clearDeviceAccount(): Boolean = withContext(Dispatchers.IO) {
+        val response = bridge.connection.clearAccountID()
+        Log.i(Tag, "clearAccountID success=${response.isSuccess},error=${response.errorCode},data=${response.data}")
+        response.isSuccess
+    }
+
+    override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean = withContext(Dispatchers.IO) {
+        if (!hasResetCapableSmartIdentity()) {
+            Log.w(Tag, "factoryResetDevice refused; current SDK connection has no smart identity or wifi config")
+            return@withContext false
+        }
+        val config = DeviceResetConfig().apply {
+            config = DeviceResetConfig.FACTORY_RESET_AND_RESTART
+        }
+        val response = when (target) {
+            DeviceFactoryResetTarget.Glasses -> bridge.connection.glassesDeviceResetOperation(config)
+            DeviceFactoryResetTarget.Headset -> bridge.connection.headsetDeviceResetOperation(config)
+        }
+        Log.i(Tag, "factoryResetDevice target=$target success=${response.isSuccess},error=${response.errorCode},data=${response.data}")
+        response.isSuccess
+    }
+
+    private fun hasResetCapableSmartIdentity(): Boolean {
+        val smartInfo = runCatching { bridge.connection.smartGetDeviceInfo().takeIf { it.isSuccess }?.data }.getOrNull()
+        if (!smartInfo?.serialNumber.isNullOrBlank() || !smartInfo?.glassesSn.isNullOrBlank() || !smartInfo?.address.isNullOrBlank()) {
+            return true
+        }
+        val wifiInfo = runCatching { bridge.connection.smartGetDeviceWiFiInfo().data }.getOrNull()
+        return !wifiInfo?.wiFiSSID.isNullOrBlank() || !wifiInfo?.wiFiPassword.isNullOrBlank()
+    }
+
     private fun DeviceAdvancedSettings.toHeadsetBrightnessLevel(): Int =
         when (brightnessLevel.coerceIn(1, 3)) {
             1 -> HeadsetBrightnessLevel.BRIGHTNESS_LEVEL_1
@@ -278,7 +394,50 @@ class UteSdkDeviceControlGateway(
     private fun supportsAiRecorder(): Boolean =
         DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
 
+    private suspend fun waitForWifiEnabledNotify(): Int? =
+        withTimeoutOrNull(WifiApReadyTimeoutMillis) {
+            bridge.notifies
+                .filter { it.type == NotifyType.SMART_WIFI_STATE_NOTIFY }
+                .mapNotNull { it.data?.toString()?.toIntOrNull() }
+                .first { it.isWifiEnabledState() || it.isWifiApReadyState() }
+        }
+
+    private suspend fun waitForWifiEnabledState(): Int {
+        val deadline = System.currentTimeMillis() + WifiApReadyTimeoutMillis
+        var lastState = 0
+        while (System.currentTimeMillis() < deadline) {
+            lastState = withContext(Dispatchers.IO) {
+                val stateInfo = runCatching { bridge.connection.smartGetDeviceWiFiStateInfo().data?.state }.getOrNull()
+                val infoState = runCatching { bridge.connection.smartGetDeviceWiFiInfo().data?.state }.getOrNull()
+                stateInfo ?: infoState ?: lastState
+            }
+            if (lastState.isWifiEnabledState() || lastState.isWifiApReadyState()) return lastState
+            delay(WifiApPollMillis)
+        }
+        return lastState
+    }
+
+    private fun Int.isWifiEnabledState(): Boolean =
+        this != 0 &&
+            this != WifiState.WIFI_AP_STOP &&
+            this != WifiState.WIFI_CLOSE_SUCCESS &&
+            this != WifiState.WIFI_CLOSE_FAILED &&
+            this != WifiState.WIFI_OPEN_FAILED &&
+            this != WifiState.IFI_AP_CONNECT_FAILED
+
+    private fun Int.isWifiApReadyState(): Boolean =
+        this == WifiState.IFI_AP_READY || this == WifiState.IFI_AP_CONNECT
+
     private companion object {
+        const val Tag = "UteSdkDeviceControl"
         const val WifiStateSettleMillis = 1_500L
+        const val WifiApReadyTimeoutMillis = 18_000L
+        const val WifiOpenSuccessSettleMillis = 8_000L
+        const val WifiApPollMillis = 1_500L
+        const val GloryViewAuthWarmupMillis = 2_800L
+        const val GloryViewRecordingDurationSeconds = 24 * 60 * 60
+        const val GloryViewVideoWidth = 240
+        const val GloryViewVideoHeight = 0
+        const val GloryViewVideoFrameRate = 16
     }
 }

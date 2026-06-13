@@ -28,6 +28,11 @@ data class CerebellumRuntimeSettings(
     val apiKey: String
 )
 
+data class BackendRuntimeSettings(
+    val restBaseUrl: String,
+    val webSocketUrl: String
+)
+
 private data class RuntimeConfigFile(
     val restBaseUrl: String? = null,
     val webSocketUrl: String? = null,
@@ -47,6 +52,7 @@ class RuntimeConfigStore(context: Context) {
     private val packagedConfig by lazy { readPackagedConfig() }
 
     fun read(): RuntimeConfig {
+        migrateLegacyBackendSettings()
         migrateLegacyCerebellumBaseUrl()
         return RuntimeConfig(
             restBaseUrl = configString(KEY_REST_BASE_URL, packagedConfig?.restBaseUrl, BuildConfig.REST_BASE_URL),
@@ -74,6 +80,28 @@ class RuntimeConfigStore(context: Context) {
             )
         }
 
+    fun readBackendSettings(): BackendRuntimeSettings =
+        read().let { config ->
+            BackendRuntimeSettings(
+                restBaseUrl = config.restBaseUrl,
+                webSocketUrl = config.webSocketUrl
+            )
+        }
+
+    fun saveBackendSettings(restBaseUrl: String, webSocketUrl: String = ""): BackendRuntimeSettings {
+        val settings = normalizeBackendSettings(restBaseUrl, webSocketUrl)
+        prefs.edit().apply {
+            if (settings.restBaseUrl.isBlank()) {
+                remove(KEY_REST_BASE_URL)
+                remove(KEY_WEBSOCKET_URL)
+            } else {
+                putString(KEY_REST_BASE_URL, settings.restBaseUrl)
+                putString(KEY_WEBSOCKET_URL, settings.webSocketUrl)
+            }
+        }.apply()
+        return readBackendSettings()
+    }
+
     fun saveCerebellumSettings(baseUrl: String, apiKey: String): CerebellumRuntimeSettings {
         prefs.edit()
             .putString(KEY_CEREBELLUM_BASE_URL, baseUrl.trim())
@@ -98,6 +126,28 @@ class RuntimeConfigStore(context: Context) {
             }
         }.getOrNull()
 
+    private fun migrateLegacyBackendSettings() {
+        val savedRest = prefs.getString(KEY_REST_BASE_URL, null)?.trim()?.trimEnd('/')
+        val savedWebSocket = prefs.getString(KEY_WEBSOCKET_URL, null)?.trim()?.trimEnd('/')
+        val shouldMigrateRest = savedRest != null && savedRest in LEGACY_REST_BASE_URLS
+        val shouldMigrateWebSocket = savedWebSocket != null && savedWebSocket in LEGACY_WEBSOCKET_URLS
+        if (!shouldMigrateRest && !shouldMigrateWebSocket) return
+
+        val packagedRest = packagedConfig?.restBaseUrl?.trim()?.trimEnd('/')
+            ?.takeUnless { it.isBlank() || it in LEGACY_REST_BASE_URLS }
+            ?: BuildConfig.REST_BASE_URL.trim().trimEnd('/')
+                .takeUnless { it.isBlank() || it in LEGACY_REST_BASE_URLS }
+            ?: return
+        val packagedWebSocket = packagedConfig?.webSocketUrl?.trim()?.trimEnd('/')
+            ?.takeUnless { it.isBlank() || it in LEGACY_WEBSOCKET_URLS }
+            ?: normalizeBackendSettings(packagedRest, "").webSocketUrl
+
+        prefs.edit()
+            .putString(KEY_REST_BASE_URL, packagedRest)
+            .putString(KEY_WEBSOCKET_URL, packagedWebSocket)
+            .apply()
+    }
+
     private fun migrateLegacyCerebellumBaseUrl() {
         val saved = prefs.getString(KEY_CEREBELLUM_BASE_URL, null)?.trim()?.trimEnd('/') ?: return
         val packaged = packagedConfig?.cerebellumBaseUrl?.trim()?.trimEnd('/')
@@ -112,19 +162,43 @@ class RuntimeConfigStore(context: Context) {
         }
     }
 
-    private companion object {
+    companion object {
+        internal fun normalizeBackendSettings(restBaseUrl: String, webSocketUrl: String): BackendRuntimeSettings {
+            val rest = restBaseUrl.trim().trimEnd('/')
+            val websocket = webSocketUrl.trim().trimEnd('/').ifBlank {
+                when {
+                    rest.startsWith("https://") -> "wss://${rest.removePrefix("https://")}/resource/websocket"
+                    rest.startsWith("http://") -> "ws://${rest.removePrefix("http://")}/resource/websocket"
+                    else -> ""
+                }
+            }
+            return BackendRuntimeSettings(restBaseUrl = rest, webSocketUrl = websocket)
+        }
+
         const val PACKAGED_CONFIG_FILE = "patrol-runtime.json"
-        const val KEY_REST_BASE_URL = "rest_base_url"
-        const val KEY_WEBSOCKET_URL = "websocket_url"
-        const val KEY_WIFI_FILE_BASE_URL = "wifi_file_base_url"
-        const val KEY_CEREBELLUM_BASE_URL = "cerebellum_base_url"
-        const val KEY_CEREBELLUM_API_KEY = "cerebellum_api_key"
-        const val KEY_BLE_SERVICE_UUID = "ble_service_uuid"
-        const val KEY_BLE_COMMAND_UUID = "ble_command_uuid"
-        const val KEY_BLE_STATUS_UUID = "ble_status_uuid"
-        const val KEY_STREAM_RELAY_URL = "stream_relay_url"
-        const val KEY_USE_REAL_BLE = "use_real_ble"
-        val LEGACY_CEREBELLUM_BASE_URLS = setOf(
+        private const val KEY_REST_BASE_URL = "rest_base_url"
+        private const val KEY_WEBSOCKET_URL = "websocket_url"
+        private const val KEY_WIFI_FILE_BASE_URL = "wifi_file_base_url"
+        private const val KEY_CEREBELLUM_BASE_URL = "cerebellum_base_url"
+        private const val KEY_CEREBELLUM_API_KEY = "cerebellum_api_key"
+        private const val KEY_BLE_SERVICE_UUID = "ble_service_uuid"
+        private const val KEY_BLE_COMMAND_UUID = "ble_command_uuid"
+        private const val KEY_BLE_STATUS_UUID = "ble_status_uuid"
+        private const val KEY_STREAM_RELAY_URL = "stream_relay_url"
+        private const val KEY_USE_REAL_BLE = "use_real_ble"
+        private val LEGACY_REST_BASE_URLS = setOf(
+            "http://10.0.2.2:8080",
+            "http://127.0.0.1:8080",
+            "http://localhost:8080",
+            "https://api.patrollink.example.com"
+        )
+        private val LEGACY_WEBSOCKET_URLS = setOf(
+            "ws://10.0.2.2:8080/resource/websocket",
+            "ws://127.0.0.1:8080/resource/websocket",
+            "ws://localhost:8080/resource/websocket",
+            "wss://api.patrollink.example.com/resource/websocket"
+        )
+        private val LEGACY_CEREBELLUM_BASE_URLS = setOf(
             "http://10.0.2.2:8089",
             "http://127.0.0.1:8089",
             "http://localhost:8089"

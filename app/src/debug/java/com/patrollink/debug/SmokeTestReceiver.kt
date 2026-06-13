@@ -4,6 +4,10 @@ import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -12,28 +16,42 @@ import com.patrollink.data.RuntimeConfigStore
 import com.patrollink.data.RuntimeTokenStore
 import com.patrollink.data.ServiceFactory
 import com.patrollink.data.ute.UteSdkBridge
+import com.patrollink.data.ute.UteWifiMediaClient
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.EmptyAppState
 import com.patrollink.domain.FirmwareDeviceMetadata
 import com.patrollink.domain.FirmwareGateway
+import com.patrollink.domain.MediaFile
+import com.patrollink.domain.MediaKind
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.ScannedDevice
+import com.patrollink.domain.TransferStatus
+import com.patrollink.domain.TransferTarget
 import com.yc.nadalsdk.bean.DeviceBt3StateInfo
+import com.yc.nadalsdk.bean.DeviceInfoRequest
 import com.yc.nadalsdk.bean.HonorAccountConfig
 import com.yc.nadalsdk.bean.Notify
 import com.yc.nadalsdk.bean.Response
 import com.yc.nadalsdk.bean.recorder.AudioRecordStopInfo
 import com.yc.nadalsdk.bean.recorder.RequestAudioRecordFileInfo
+import com.yc.nadalsdk.bean.smart.DeviceResetConfig
+import com.yc.nadalsdk.bean.smart.GlassesInfo
 import com.yc.nadalsdk.bean.smart.GlassesStateInfo
 import com.yc.nadalsdk.bean.smart.HeadsetAccountConfig
 import com.yc.nadalsdk.bean.smart.SmartAudioDataInfo
 import com.yc.nadalsdk.bean.smart.SmartAuthorizationCode
 import com.yc.nadalsdk.bean.smart.SmartImageDataInfo
+import com.yc.nadalsdk.bean.smart.VideoParametersInfo
 import com.yc.nadalsdk.ble.open.DeviceModeJX
 import com.yc.nadalsdk.constants.NotifyType
 import com.yc.nadalsdk.constants.recorder.AudioRecordResult
+import com.yc.nadalsdk.constants.smart.GlassesHeadsetRecordingState
+import com.yc.nadalsdk.constants.smart.GlassesRecordDirection
 import com.yc.nadalsdk.constants.smart.GlassesState
 import java.io.File
+import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.lang.reflect.Modifier
 import java.text.SimpleDateFormat
 import java.util.Collections
@@ -47,6 +65,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 class SmokeTestReceiver : BroadcastReceiver() {
@@ -96,9 +115,74 @@ class SmokeTestActivity : Activity() {
     }
 }
 
+object SmokePairingAccountResolver {
+    fun resolve(override: String, currentUserBadge: String, loginAccount: String): String =
+        override.trim()
+            .ifBlank { currentUserBadge.trim() }
+            .ifBlank { loginAccount.trim() }
+            .ifBlank { "SMOKE_OPERATOR" }
+}
+
+object SmokeDangerousActionGuard {
+    fun canClearDeviceAccount(enabled: Boolean, confirmation: String): Boolean =
+        enabled && confirmation == ClearDeviceAccountConfirmation
+
+    fun canFactoryResetDevice(target: String, confirmation: String): Boolean =
+        target.normalizedFactoryResetTarget() != null && confirmation == FactoryResetDeviceConfirmation
+
+    fun shouldStopAfterClearAccountAttempt(enabled: Boolean): Boolean = enabled
+
+    fun shouldStopAfterFactoryResetAttempt(target: String): Boolean = target.isNotBlank()
+
+    const val ClearDeviceAccountConfirmation = "CLEAR_DEVICE_ACCOUNT"
+    const val FactoryResetDeviceConfirmation = "FACTORY_RESET_DEVICE"
+}
+
+private fun String.normalizedFactoryResetTarget(): String? =
+    trim().lowercase(Locale.US).takeIf { it == "headset" || it == "glasses" }
+
+private fun String.toSmokeMediaKindOrNull(): MediaKind? =
+    when (trim().lowercase(Locale.US)) {
+        "photo", "image", "picture", "jpg", "jpeg", "png" -> MediaKind.Photo
+        "video", "mp4", "mov" -> MediaKind.Video
+        "audio", "record", "recording", "voice", "opus", "wav", "amr", "aac", "pcm" -> MediaKind.Audio
+        else -> null
+    }
+
+data class SmokeWifiPreflightOptions(
+    val requestPairingBeforeWifi: Boolean,
+    val probeAccountBeforeWifi: Boolean
+) {
+    val enabled: Boolean = requestPairingBeforeWifi || probeAccountBeforeWifi
+}
+
+data class SmokeHeadsetAiRecorderOptions(
+    val forceCommands: Boolean
+) {
+    fun shouldRun(supported: Boolean): Boolean = supported || forceCommands
+}
+
+data class SmokeDirectWifiSwitchOptions(
+    val noAccountGuard: Boolean
+)
+
+data class SmokeWifiMediaSyncOptions(
+    val downloadFirst: Boolean,
+    val downloadKind: MediaKind? = null,
+    val currentPhoneWifiOnly: Boolean = false
+) {
+    fun selectDownloadCandidate(files: List<MediaFile>): MediaFile? =
+        if (downloadKind != null) {
+            files.firstOrNull { it.kind == downloadKind }
+        } else {
+            files.firstOrNull()
+        }
+}
+
 private object SmokeTestRunner {
     suspend fun run(context: Context, intent: Intent): File {
-        val report = SmokeReport()
+        val report = SmokeReport(context)
+        report.step("RUN_START", "timestamp=${Timestamp.format(Date())}")
         try {
             execute(context, intent, report)
         } catch (throwable: Throwable) {
@@ -112,12 +196,62 @@ private object SmokeTestRunner {
         val password = intent.getStringExtra("password").orEmpty()
         val runCommands = intent.getBooleanExtra("commands", true)
         val enableWifi = intent.getBooleanExtra("wifi", false)
+        val wifiProbeOnly = intent.getBooleanExtra("wifiProbeOnly", false)
+        val wifiProbeMillis = intent.getLongExtra("wifiProbeMillis", WifiProbeOnlyDefaultMillis)
         val runAuth = intent.getBooleanExtra("auth", true)
+        val skipLogin = intent.getBooleanExtra("skipLogin", false)
         val runPairing = intent.getBooleanExtra("pairing", false)
         val runAccountProbe = intent.getBooleanExtra("accountProbe", false)
+        val runMediaCommandMatrix = intent.getBooleanExtra("mediaCommandMatrix", false)
+        val runMediaCommandMatrixAudio = intent.getBooleanExtra("mediaCommandMatrixAudio", false)
+        val wifiPreflightOptions = SmokeWifiPreflightOptions(
+            requestPairingBeforeWifi = intent.getBooleanExtra("preWifiPairing", false),
+            probeAccountBeforeWifi = intent.getBooleanExtra("preWifiAccountProbe", false)
+        )
         val runBt3Probe = intent.getBooleanExtra("bt3", false)
+        val clearDeviceAccount = intent.getBooleanExtra("clearDeviceAccount", false)
+        val clearDeviceAccountConfirm = intent.getStringExtra("clearDeviceAccountConfirm").orEmpty()
+        val factoryResetTarget = intent.getStringExtra("factoryResetTarget").orEmpty()
+        val factoryResetConfirm = intent.getStringExtra("factoryResetConfirm").orEmpty()
         val authCode = intent.getStringExtra("authCode").orEmpty()
-        val config = RuntimeConfigStore(context).read()
+        val pairingAccountOverride = intent.getStringExtra("pairingAccountId").orEmpty()
+        val aiRecorderOptions = SmokeHeadsetAiRecorderOptions(
+            forceCommands = intent.getBooleanExtra("forceAiRecorder", false)
+        )
+        val directWifiSwitchOptions = SmokeDirectWifiSwitchOptions(
+            noAccountGuard = intent.getBooleanExtra("directWifiSwitchNoAccountGuard", false)
+        )
+        val wifiMediaSyncOptions = SmokeWifiMediaSyncOptions(
+            downloadFirst = intent.getBooleanExtra("wifiDownloadFirst", false),
+            downloadKind = intent.getStringExtra("wifiDownloadKind").orEmpty().toSmokeMediaKindOrNull(),
+            currentPhoneWifiOnly = intent.getBooleanExtra("wifiMediaOnly", false)
+        )
+        val commandHoldMillis = intent.getLongExtra("commandHoldMillis", CommandHoldMillis)
+            .coerceIn(MinCommandHoldMillis, MaxCommandHoldMillis)
+        report.step(
+            "WIFI_MEDIA_OPTIONS",
+            "downloadFirst=${wifiMediaSyncOptions.downloadFirst},downloadKind=${wifiMediaSyncOptions.downloadKind ?: "any"},currentPhoneWifiOnly=${wifiMediaSyncOptions.currentPhoneWifiOnly}"
+        )
+        report.step("COMMAND_OPTIONS", "holdMillis=$commandHoldMillis")
+        val targetDeviceId = intent.getStringExtra("targetDeviceId").orEmpty()
+        val targetDeviceName = intent.getStringExtra("targetDeviceName").orEmpty()
+        val configStore = RuntimeConfigStore(context)
+        val overrideRestBaseUrl = intent.getStringExtra("restBaseUrl").orEmpty()
+        val overrideWebSocketUrl = intent.getStringExtra("webSocketUrl").orEmpty()
+        if (overrideRestBaseUrl.isNotBlank() || overrideWebSocketUrl.isNotBlank()) {
+            val saved = configStore.saveBackendSettings(overrideRestBaseUrl, overrideWebSocketUrl)
+            report.step("CONFIG_OVERRIDE", "rest=${saved.restBaseUrl},websocket=${saved.webSocketUrl}")
+        }
+        val config = configStore.read()
+        report.step("CONFIG", "rest=${config.restBaseUrl}, realBle=${config.useRealBle}")
+        if (intent.getBooleanExtra("configOnly", false)) {
+            report.step("CONFIG_ONLY", "done")
+            return
+        }
+        if (wifiProbeOnly) {
+            runWifiNetworkProbeLoop(report, context, wifiProbeMillis)
+            return
+        }
         val bridge = UteSdkBridge(context)
         val tokenStore = RuntimeTokenStore(context.applicationContext)
         val emptyState = EmptyAppState.create()
@@ -138,16 +272,32 @@ private object SmokeTestRunner {
             operatorIdProvider = { account.ifBlank { "SMOKE_OPERATOR" } }
         )
 
-        report.step("CONFIG", "rest=${config.restBaseUrl}, realBle=${config.useRealBle}")
-        val session = runStep(report, "LOGIN") {
-            coordinator.loginAndStartSession(account, password)
-        } ?: return
-        tokenStore.update(session)
-        tokenStore.updatePairingUsername(account)
-        val currentUser = runStep(report, "CURRENT_USER") { coordinator.currentUser() }
-        tokenStore.updatePairingUsername(currentUser?.badgeNo ?: account)
+        if (skipLogin) {
+            report.step("LOGIN", "skipped")
+            val pairingAccountId = SmokePairingAccountResolver.resolve(
+                override = pairingAccountOverride,
+                currentUserBadge = "",
+                loginAccount = account.ifBlank { "SMOKE_OPERATOR" }
+            )
+            tokenStore.updatePairingUsername(pairingAccountId)
+            report.step("PAIRING_ACCOUNT", pairingAccountId)
+            report.step("CURRENT_USER", "skipped")
+        } else {
+            val session = runStep(report, "LOGIN") {
+                coordinator.loginAndStartSession(account, password)
+            } ?: return
+            tokenStore.update(session)
+            val currentUser = runStep(report, "CURRENT_USER") { coordinator.currentUser() }
+            val pairingAccountId = SmokePairingAccountResolver.resolve(
+                override = pairingAccountOverride,
+                currentUserBadge = currentUser?.badgeNo.orEmpty(),
+                loginAccount = account
+            )
+            tokenStore.updatePairingUsername(pairingAccountId)
+            report.step("PAIRING_ACCOUNT", pairingAccountId)
+        }
         val devices = scanDevices(report, coordinator)
-        val selected = devices.preferredControlDevice()
+        val selected = devices.selectedSmokeDevice(targetDeviceId, targetDeviceName)
         if (selected == null) {
             report.fail("SCAN_BIND", "未扫描到可绑定设备")
             return
@@ -161,19 +311,117 @@ private object SmokeTestRunner {
         }
         report.step("DEVICE_STATUS", bound.summary())
         if (!bound.online) return
+        if (runDangerousDeviceAccountActions(report, bridge, clearDeviceAccount, clearDeviceAccountConfirm, factoryResetTarget, factoryResetConfirm)) {
+            return
+        }
         if (runCommands) {
             collectInterestingNotifies(report, bridge, "COMMAND_NOTIFIES", CommandNotifyProbeMillis) {
-                runDeviceCommands(report, coordinator, bridge, bound)
+                runDeviceCommands(report, coordinator, bridge, bound, commandHoldMillis)
             }
         }
-        runDeviceCapabilities(report, context, config, bridge, bound, enableWifi)
+        if (runMediaCommandMatrix) {
+            runDirectMediaCommandMatrix(report, bridge, runAudio = runMediaCommandMatrixAudio)
+        }
+        if (enableWifi && wifiPreflightOptions.enabled) {
+            runPairingAccountProbe(
+                report = report,
+                bridge = bridge,
+                pairingAccountId = tokenStore.pairingAccountId(),
+                runPairing = wifiPreflightOptions.requestPairingBeforeWifi,
+                runAccountProbe = wifiPreflightOptions.probeAccountBeforeWifi,
+                labelPrefix = "PRE_WIFI"
+            )
+        }
+        runDeviceCapabilities(report, context, config, bridge, bound, enableWifi, directWifiSwitchOptions, wifiMediaSyncOptions, tokenStore.pairingAccountId(), coordinator)
         if (bound.type == com.patrollink.domain.DeviceType.Headset) {
             runHeadsetDiagnostics(report, bridge, runBt3Probe)
-            runHeadsetAiRecorderCommands(report, bridge)
+            runHeadsetAiRecorderCommands(report, bridge, aiRecorderOptions)
         }
         runMediaChecks(report, coordinator, bridge)
         runFirmwareCheck(report, firmwareGateway, bound)
         runControlChannelDiagnostics(report, bridge, tokenStore.pairingAccountId(), runAuth, runPairing, runAccountProbe, authCode)
+    }
+
+    private suspend fun runDangerousDeviceAccountActions(
+        report: SmokeReport,
+        bridge: UteSdkBridge,
+        clearDeviceAccount: Boolean,
+        clearDeviceAccountConfirm: String,
+        factoryResetTarget: String,
+        factoryResetConfirm: String
+    ): Boolean {
+        if (!clearDeviceAccount && factoryResetTarget.isBlank()) {
+            report.step(
+                "SDK_CLEAR_ACCOUNT",
+                "skipped; pass --ez clearDeviceAccount true --es clearDeviceAccountConfirm ${SmokeDangerousActionGuard.ClearDeviceAccountConfirmation} to clear device account"
+            )
+            report.step(
+                "SDK_FACTORY_RESET",
+                "skipped; pass --es factoryResetTarget headset|glasses --es factoryResetConfirm ${SmokeDangerousActionGuard.FactoryResetDeviceConfirmation} to factory reset one module"
+            )
+            return false
+        }
+        if (clearDeviceAccount && factoryResetTarget.isNotBlank()) {
+            report.fail("SDK_DANGEROUS_ACTION", "refused; choose only one of clearDeviceAccount or factoryResetTarget")
+            return true
+        }
+        if (!SmokeDangerousActionGuard.canClearDeviceAccount(clearDeviceAccount, clearDeviceAccountConfirm)) {
+            if (factoryResetTarget.isNotBlank()) {
+                return runFactoryResetAction(report, bridge, factoryResetTarget, factoryResetConfirm)
+            }
+            report.fail(
+                "SDK_CLEAR_ACCOUNT",
+                "refused; confirmation must equal ${SmokeDangerousActionGuard.ClearDeviceAccountConfirmation}"
+            )
+            return SmokeDangerousActionGuard.shouldStopAfterClearAccountAttempt(clearDeviceAccount)
+        }
+        runStep(report, "SDK_CLEAR_ACCOUNT_ENABLE_NOTIFY") {
+            bridge.client.openOrCloseNotify(true)
+            "enabled=true"
+        }
+        delay(NotifyCollectorWarmupMillis)
+        runStep(report, "SDK_CLEAR_ACCOUNT") {
+            val response = bridge.connection.clearAccountID()
+            check(response.isSuccess) { response.toSmokeSummary() }
+            response.toSmokeSummary()
+        }
+        report.step("SDK_CLEAR_ACCOUNT_NEXT", "reconnect and pair PatrolLink before running more smoke steps")
+        return SmokeDangerousActionGuard.shouldStopAfterClearAccountAttempt(clearDeviceAccount)
+    }
+
+    private suspend fun runFactoryResetAction(
+        report: SmokeReport,
+        bridge: UteSdkBridge,
+        factoryResetTarget: String,
+        factoryResetConfirm: String
+    ): Boolean {
+        val target = factoryResetTarget.normalizedFactoryResetTarget()
+        if (target == null || !SmokeDangerousActionGuard.canFactoryResetDevice(factoryResetTarget, factoryResetConfirm)) {
+            report.fail(
+                "SDK_FACTORY_RESET",
+                "refused; target must be headset|glasses and confirmation must equal ${SmokeDangerousActionGuard.FactoryResetDeviceConfirmation}"
+            )
+            return SmokeDangerousActionGuard.shouldStopAfterFactoryResetAttempt(factoryResetTarget)
+        }
+        runStep(report, "SDK_FACTORY_RESET_ENABLE_NOTIFY") {
+            bridge.client.openOrCloseNotify(true)
+            "enabled=true"
+        }
+        delay(NotifyCollectorWarmupMillis)
+        runStep(report, "SDK_FACTORY_RESET") {
+            val config = DeviceResetConfig().apply {
+                this.config = DeviceResetConfig.FACTORY_RESET_AND_RESTART
+            }
+            val response = if (target == "headset") {
+                bridge.connection.headsetDeviceResetOperation(config)
+            } else {
+                bridge.connection.glassesDeviceResetOperation(config)
+            }
+            check(response.isSuccess) { response.toSmokeSummary() }
+            "target=$target ${response.toSmokeSummary()}"
+        }
+        report.step("SDK_FACTORY_RESET_NEXT", "wait for device restart, then rescan and pair PatrolLink before running more smoke steps")
+        return SmokeDangerousActionGuard.shouldStopAfterFactoryResetAttempt(factoryResetTarget)
     }
 
     private suspend fun scanDevices(report: SmokeReport, coordinator: PatrolCoordinator): List<ScannedDevice> {
@@ -203,32 +451,7 @@ private object SmokeTestRunner {
             bridge.client.openOrCloseNotify(true)
             "enabled=true"
         }
-        collectInterestingNotifies(report, bridge, "PAIRING_NOTIFIES", PairingNotifyProbeMillis) {
-            if (runPairing) {
-                runStep(report, "SDK_REQUEST_PAIRING") {
-                    val response = bridge.connection.requestDevicePairing(1)
-                    "success=${response.isSuccess},error=${response.errorCode},paired=${response.data?.pairedState}"
-                }
-            } else {
-                report.step("SDK_REQUEST_PAIRING", "skipped; pass --ez pairing true to probe, current headset rejects this path with 408")
-            }
-            if (runAccountProbe) {
-                runStep(report, "SDK_SET_HEADSET_ACCOUNT") {
-                    val response = bridge.connection.setHeadsetAccount(HeadsetAccountConfig().apply {
-                        currentHuid = pairingAccountId
-                    })
-                    "success=${response.isSuccess},error=${response.errorCode},status=${response.data?.accountJudgmentStatus}"
-                }
-                runStep(report, "SDK_SET_HONOR_ACCOUNT") {
-                    val response = bridge.connection.setHonorAccount(HonorAccountConfig().apply {
-                        currentHuid = pairingAccountId
-                    })
-                    "success=${response.isSuccess},error=${response.errorCode},status=${response.data?.accountJudgmentStatus}"
-                }
-            } else {
-                report.step("SDK_SET_ACCOUNT", "skipped; pass --ez accountProbe true to probe, this can leave the current headset in 408 state")
-            }
-        }
+        runPairingAccountProbe(report, bridge, pairingAccountId, runPairing, runAccountProbe, labelPrefix = "")
         if (runAuth) {
             collectInterestingNotifies(report, bridge, "SMART_AUTH_NOTIFIES", SmartAuthNotifyProbeMillis) {
                 runStep(report, "SMART_START_AUTHENTICATION") {
@@ -244,7 +467,48 @@ private object SmokeTestRunner {
                 }
             }
         }
-        runStep(report, "SDK_FEATURE_FLAGS") { sdkFeatureFlags() }
+        runStep(report, "SDK_FEATURE_FLAGS") {
+            withTimeoutOrNull(SdkFeatureFlagsTimeoutMillis) {
+                withContext(Dispatchers.IO) { sdkFeatureFlags() }
+            } ?: "timeout"
+        }
+    }
+
+    private suspend fun runPairingAccountProbe(
+        report: SmokeReport,
+        bridge: UteSdkBridge,
+        pairingAccountId: String,
+        runPairing: Boolean,
+        runAccountProbe: Boolean,
+        labelPrefix: String
+    ) {
+        val prefix = labelPrefix.takeIf { it.isNotBlank() }?.let { "${it}_" }.orEmpty()
+        collectInterestingNotifies(report, bridge, "${prefix}PAIRING_NOTIFIES", PairingNotifyProbeMillis) {
+            if (runPairing) {
+                runStep(report, "${prefix}SDK_REQUEST_PAIRING") {
+                    val response = bridge.connection.requestDevicePairing(1)
+                    "success=${response.isSuccess},error=${response.errorCode},paired=${response.data?.pairedState}"
+                }
+            } else {
+                report.step("${prefix}SDK_REQUEST_PAIRING", "skipped; pass --ez pairing true to probe, current headset rejects this path with 408")
+            }
+            if (runAccountProbe) {
+                runStep(report, "${prefix}SDK_SET_HEADSET_ACCOUNT") {
+                    val response = bridge.connection.setHeadsetAccount(HeadsetAccountConfig().apply {
+                        currentHuid = pairingAccountId
+                    })
+                    "success=${response.isSuccess},error=${response.errorCode},status=${response.data?.accountJudgmentStatus}"
+                }
+                runStep(report, "${prefix}SDK_SET_HONOR_ACCOUNT") {
+                    val response = bridge.connection.setHonorAccount(HonorAccountConfig().apply {
+                        currentHuid = pairingAccountId
+                    })
+                    "success=${response.isSuccess},error=${response.errorCode},status=${response.data?.accountJudgmentStatus}"
+                }
+            } else {
+                report.step("${prefix}SDK_SET_ACCOUNT", "skipped; pass --ez accountProbe true to probe, this can leave the current headset in 408 state")
+            }
+        }
     }
 
     private suspend fun runDeviceCapabilities(
@@ -253,25 +517,344 @@ private object SmokeTestRunner {
         config: com.patrollink.data.RuntimeConfig,
         bridge: UteSdkBridge,
         device: DeviceStatus,
-        enableWifi: Boolean
+        enableWifi: Boolean,
+        directWifiSwitchOptions: SmokeDirectWifiSwitchOptions,
+        wifiMediaSyncOptions: SmokeWifiMediaSyncOptions,
+        pairingAccountId: String,
+        coordinator: PatrolCoordinator
     ) {
         val gateway = ServiceFactory.createDeviceControlGateway(
             context = context,
             config = config,
             sharedUteBridge = bridge,
             tokenProvider = { null },
-            deviceIdProvider = { device.id }
+            deviceIdProvider = { device.id },
+            pairingAccountIdProvider = { pairingAccountId }
         )
         runStep(report, "DEVICE_CAPABILITIES") { gateway.capabilities(device) }
         runStep(report, "READ_WIFI") { gateway.readWifi() }
-        if (enableWifi) {
-            runStep(report, "ENABLE_WIFI") { gateway.configureWifi(enabled = true, ssid = "", password = "") }
-            delay(2_000L)
-            runStep(report, "READ_WIFI_AFTER_ENABLE") { gateway.readWifi() }
+        if (directWifiSwitchOptions.noAccountGuard) {
+            runDirectWifiSwitchProbe(report, context, bridge, gateway)
+        }
+        if (enableWifi || wifiMediaSyncOptions.currentPhoneWifiOnly) {
+            runStep(report, "SDK_ENABLE_NOTIFY_BEFORE_WIFI") {
+                bridge.client.openOrCloseNotify(true)
+                "enabled=true"
+            }
+            if (wifiMediaSyncOptions.currentPhoneWifiOnly) {
+                runStep(report, "ENABLE_WIFI") { "skipped; wifiMediaOnly uses current phone Wi-Fi" }
+            } else {
+                collectInterestingNotifies(report, bridge, "WIFI_NOTIFIES", WifiNotifyProbeMillis) {
+                    val wifiInfo = runCatching { bridge.connection.smartGetDeviceWiFiInfo().data }.getOrNull()
+                    report.step(
+                        "READ_WIFI_RAW",
+                        "state=${wifiInfo?.state},ssid=${wifiInfo?.wiFiSSID.orEmpty()},passwordLen=${wifiInfo?.wiFiPassword?.length ?: 0}"
+                    )
+                    runStep(report, "ENABLE_WIFI") { gateway.configureWifi(enabled = true, ssid = "", password = "") }
+                    val readySummary = runStep(report, "WAIT_WIFI_READY") { waitForWifiReady(gateway) }.orEmpty()
+                    if (!readySummary.startsWith("ready=true") && !wifiInfo?.wiFiSSID.isNullOrBlank() && !wifiInfo?.wiFiPassword.isNullOrBlank()) {
+                        runStep(report, "ENABLE_WIFI_WITH_EXISTING_CONFIG") {
+                            gateway.configureWifi(
+                                enabled = true,
+                                ssid = wifiInfo?.wiFiSSID.orEmpty(),
+                                password = wifiInfo?.wiFiPassword.orEmpty()
+                            )
+                        }
+                        runStep(report, "WAIT_WIFI_READY_AFTER_CONFIG") { waitForWifiReady(gateway) }
+                    }
+                    runStep(report, "READ_WIFI_AFTER_ENABLE") { gateway.readWifi() }
+                }
+            }
+            runWifiNetworkProbe(report, context)
+            val wifiMediaClient = UteWifiMediaClient(
+                context = context,
+                bridge = bridge,
+                pairingAccountIdProvider = { pairingAccountId }
+            )
+            runStep(report, "UTE_WIFI_MEDIA_DIAGNOSTICS") {
+                withTimeoutOrNull(WifiMediaDiagnosticsTimeoutMillis) {
+                    wifiMediaClient.diagnostics(currentPhoneWifiOnly = wifiMediaSyncOptions.currentPhoneWifiOnly)
+                } ?: "timeout"
+            }
+            val wifiFiles = mutableListOf<MediaFile>()
+            runStep(report, "UTE_WIFI_MEDIA_LIST") {
+                withTimeoutOrNull(WifiMediaListSmokeTimeoutMillis) {
+                    wifiMediaClient.listFiles(currentPhoneWifiOnly = wifiMediaSyncOptions.currentPhoneWifiOnly)
+                        .also { files ->
+                            wifiFiles.clear()
+                            wifiFiles += files
+                        }
+                        .map { "${it.id}:${it.kind}:${it.name}:${it.size}" }
+                } ?: "timeout"
+            }
+            runWifiMediaClientDownloadFirst(report, context, wifiMediaClient, wifiFiles, wifiMediaSyncOptions)
+            runWifiMediaDownloadFirst(report, coordinator, wifiMediaSyncOptions)
         }
     }
 
+    private suspend fun runWifiMediaClientDownloadFirst(
+        report: SmokeReport,
+        context: Context,
+        client: UteWifiMediaClient,
+        files: List<MediaFile>,
+        options: SmokeWifiMediaSyncOptions
+    ) {
+        if (!options.downloadFirst) {
+            report.step("UTE_WIFI_DIRECT_DOWNLOAD_FIRST", "skipped; pass --ez wifiDownloadFirst true after device media list succeeds")
+            return
+        }
+        val first = options.selectDownloadCandidate(files)
+        if (first == null) {
+            report.fail("UTE_WIFI_DIRECT_DOWNLOAD_FIRST", "no listed wifi media file to download kind=${options.downloadKind ?: "any"}")
+            return
+        }
+        runStep(report, "UTE_WIFI_DIRECT_DOWNLOAD_FIRST") {
+            val directory = File(context.getExternalFilesDir(null) ?: context.filesDir, "wifi-smoke-downloads")
+                .also { it.mkdirs() }
+            val downloaded = withTimeoutOrNull(WifiMediaDownloadTimeoutMillis) {
+                client.download(first.id, directory, currentPhoneWifiOnly = options.currentPhoneWifiOnly)
+            } ?: error("direct download timeout: ${first.id}")
+            "${first.id}:${downloaded.name}:${downloaded.length()}:path=${downloaded.absolutePath}"
+        }
+    }
+
+    private suspend fun runWifiMediaDownloadFirst(
+        report: SmokeReport,
+        coordinator: PatrolCoordinator,
+        options: SmokeWifiMediaSyncOptions
+    ) {
+        if (!options.downloadFirst) {
+            report.step("UTE_WIFI_MEDIA_DOWNLOAD_FIRST", "skipped; pass --ez wifiDownloadFirst true after manually connecting the phone to device hotspot")
+            return
+        }
+        val deviceFiles = runStep(report, "UTE_WIFI_MEDIA_DOWNLOAD_CANDIDATES") {
+            withTimeoutOrNull(WifiMediaListSmokeTimeoutMillis) {
+                coordinator.mediaFiles(local = false)
+            } ?: error("device media list timeout")
+        }.orEmpty()
+        val first = options.selectDownloadCandidate(deviceFiles)
+        if (first == null) {
+            report.fail("UTE_WIFI_MEDIA_DOWNLOAD_FIRST", "no device media file to download kind=${options.downloadKind ?: "any"}")
+            return
+        }
+        val emitted = mutableListOf<String>()
+        runStep(report, "UTE_WIFI_MEDIA_DOWNLOAD_FIRST") {
+            withTimeoutOrNull(WifiMediaDownloadTimeoutMillis) {
+                coordinator.transferMedia(first.id, TransferTarget.PhoneSandbox).collect { media ->
+                    emitted += media.toTransferSmokeSummary()
+                }
+            } ?: error("download timeout: ${first.id}")
+            check(emitted.isNotEmpty()) { "download emitted no transfer states: ${first.id}" }
+            emitted.joinToString(separator = " | ")
+        }
+        runStep(report, "UTE_WIFI_MEDIA_LOCAL_AFTER_DOWNLOAD") {
+            withTimeoutOrNull(MediaCheckTimeoutMillis) {
+                coordinator.mediaFiles(local = true)
+                    .filter { it.id == first.id || it.name == first.name || it.contentUri?.contains(first.name.substringBeforeLast('.')) == true }
+                    .map { "${it.id}:${it.kind}:${it.size}:uri=${it.contentUri.orEmpty()}:status=${it.transferStatus}" }
+            } ?: "timeout"
+        }
+    }
+
+    private suspend fun runDirectWifiSwitchProbe(
+        report: SmokeReport,
+        context: Context,
+        bridge: UteSdkBridge,
+        gateway: com.patrollink.domain.DeviceControlGateway
+    ) {
+        runStep(report, "DIRECT_WIFI_PROBE_WARNING") {
+            "debug-only probe bypasses PatrolLink account guard and calls SDK smartSetDeviceWiFiSwitch directly"
+        }
+        collectInterestingNotifies(report, bridge, "DIRECT_WIFI_NOTIFIES", WifiNotifyProbeMillis) {
+            runStep(report, "DIRECT_WIFI_ENABLE_NOTIFY") {
+                bridge.client.openOrCloseNotify(true)
+                "enabled=true"
+            }
+            runStep(report, "DIRECT_READ_WIFI_RAW") {
+                val wifiInfo = bridge.connection.smartGetDeviceWiFiInfo().data
+                "state=${wifiInfo?.state},ssid=${wifiInfo?.wiFiSSID.orEmpty()},passwordLen=${wifiInfo?.wiFiPassword?.length ?: 0}"
+            }
+            runStep(report, "DIRECT_WIFI_SWITCH_ON_NO_ACCOUNT_GUARD") {
+                val response = bridge.connection.smartSetDeviceWiFiSwitch(true)
+                check(response.isSuccess || response.data == true) {
+                    "success=${response.isSuccess},error=${response.errorCode},data=${response.data}"
+                }
+                "success=${response.isSuccess},error=${response.errorCode},data=${response.data}"
+            }
+            runStep(report, "DIRECT_WAIT_WIFI_READY_NO_ACCOUNT_GUARD") { waitForWifiReady(gateway) }
+            runStep(report, "DIRECT_READ_WIFI_AFTER_SWITCH") { gateway.readWifi() }
+        }
+        runWifiNetworkProbe(report, context)
+        runStep(report, "DIRECT_WIFI_SWITCH_OFF_NO_ACCOUNT_GUARD") {
+            val response = bridge.connection.smartSetDeviceWiFiSwitch(false)
+            "success=${response.isSuccess},error=${response.errorCode},data=${response.data}"
+        }
+    }
+
+    private suspend fun waitForWifiReady(gateway: com.patrollink.domain.DeviceControlGateway): String {
+        val samples = mutableListOf<String>()
+        val deadline = System.currentTimeMillis() + WifiReadyWaitMillis
+        while (System.currentTimeMillis() < deadline) {
+            delay(WifiReadyPollMillis)
+            val state = gateway.readWifi()
+            samples += "enabled=${state.enabled},connected=${state.connected},ssid=${state.ssid}"
+            if (state.enabled || state.connected) {
+                return "ready=true; ${samples.joinToString(separator = " | ")}"
+            }
+        }
+        return "ready=false; ${samples.joinToString(separator = " | ")}"
+    }
+
+    private suspend fun runWifiNetworkProbe(report: SmokeReport, context: Context) {
+        runStep(report, "WIFI_ANDROID_NETWORK") { androidWifiSummary(context) }
+        runStep(report, "WIFI_FILE_PROBE") { probeWifiFileService(context) }
+    }
+
+    private suspend fun runWifiNetworkProbeLoop(report: SmokeReport, context: Context, durationMillis: Long) {
+        val boundedDuration = durationMillis.coerceIn(WifiProbeOnlyMinMillis, WifiProbeOnlyMaxMillis)
+        val deadline = System.currentTimeMillis() + boundedDuration
+        var index = 1
+        report.step("WIFI_PROBE_ONLY", "durationMs=$boundedDuration")
+        do {
+            runStep(report, "WIFI_ANDROID_NETWORK_$index") { androidWifiSummary(context) }
+            runStep(report, "WIFI_FILE_PROBE_$index") { probeWifiFileService(context) }
+            index += 1
+            if (System.currentTimeMillis() < deadline) delay(WifiProbeOnlyIntervalMillis)
+        } while (System.currentTimeMillis() < deadline)
+    }
+
+    private fun androidWifiSummary(context: Context): String {
+        val wifi = context.getSystemService(WifiManager::class.java)
+        val info = wifi?.connectionInfo
+        val uteScanResults = runCatching {
+            wifi?.scanResults.orEmpty()
+                .filter { it.SSID.startsWith("UTE", ignoreCase = true) }
+                .take(8)
+                .joinToString { "${it.SSID}/${it.BSSID}/rssi=${it.level}" }
+        }.getOrDefault("scan-unavailable")
+        return "ssid=${info?.ssid},bssid=${info?.bssid},ip=${info?.ipAddress?.toIpv4String()},link=${info?.linkSpeed}Mbps,uteScan=[${uteScanResults.ifBlank { "none" }}]"
+    }
+
+    private suspend fun probeWifiFileService(context: Context): String = withContext(Dispatchers.IO) {
+        val targets = wifiProbeTargets(context)
+        val openPorts = mutableListOf<String>()
+        val hits = mutableListOf<String>()
+        val startedAt = System.currentTimeMillis()
+        targets.forEach { target ->
+            ProbePorts.forEach { port ->
+                if (isTcpOpen(target.network, target.host, port)) {
+                    openPorts += "${target.label}/${target.host}:$port"
+                    val paths = if (port in FtpLikeProbePorts) listOf("/") else ProbePaths
+                    paths.forEach { path ->
+                        if (hits.size >= ProbeHitLimit) return@forEach
+                        rawHttpProbe(target.network, target.label, target.host, port, path)?.let { hit ->
+                            hits += hit
+                        }
+                    }
+                }
+            }
+        }
+        "elapsed=${System.currentTimeMillis() - startedAt}ms,targets=${targets.joinToString { "${it.label}/${it.host}" }},open=${openPorts.joinToString().ifBlank { "none" }},hits=${hits.joinToString(separator = " | ").ifBlank { "none" }}"
+    }
+
+    private fun wifiProbeTargets(context: Context): List<WifiProbeTarget> {
+        val targets = mutableListOf<WifiProbeTarget>()
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+            ?: return DefaultProbeHosts.map { WifiProbeTarget("default", null, it) }
+        val activeNetwork = connectivity.activeNetwork
+        val networks = buildList {
+            activeNetwork?.let(::add)
+            addAll(connectivity.allNetworks)
+        }.distinct()
+        networks.forEach { network ->
+            val capabilities = connectivity.getNetworkCapabilities(network)
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) return@forEach
+            val linkProperties = connectivity.getLinkProperties(network) ?: return@forEach
+            val label = if (network == activeNetwork) "active:$network" else "network:$network"
+            linkProperties.routes.mapNotNull { it.gateway as? Inet4Address }.forEach { address ->
+                targets += WifiProbeTarget(label, network, address.hostAddress.orEmpty())
+            }
+            linkProperties.linkAddresses.mapNotNull { linkAddress ->
+                (linkAddress.address as? Inet4Address)?.hostAddress?.let { address ->
+                    likelySubnetGateways(address, linkAddress.prefixLength)
+                }
+            }.flatten().forEach { targets += WifiProbeTarget(label, network, it) }
+        }
+        targets += DefaultProbeHosts.map { WifiProbeTarget("default", null, it) }
+        val seen = mutableSetOf<String>()
+        return targets
+            .filter { it.host.isValidProbeHost() }
+            .filter { seen.add("${it.label}/${it.host}") }
+            .take(ProbeHostLimit)
+    }
+
+    private fun likelySubnetGateways(address: String, prefixLength: Int): List<String> {
+        val parts = address.split('.').mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4) return emptyList()
+        val baseThird = if (prefixLength <= 23) parts[2] and 0xfe else parts[2]
+        return listOf(
+            "${parts[0]}.${parts[1]}.$baseThird.1",
+            "${parts[0]}.${parts[1]}.$baseThird.254",
+            "${parts[0]}.${parts[1]}.${baseThird + 1}.1",
+            "${parts[0]}.${parts[1]}.${baseThird + 1}.254",
+            "${parts[0]}.${parts[1]}.${parts[2]}.1",
+            "${parts[0]}.${parts[1]}.${parts[2]}.254"
+        ).distinct()
+    }
+
+    private fun isTcpOpen(network: Network?, host: String, port: Int): Boolean =
+        runCatching {
+            newProbeSocket(network).use { socket ->
+                socket.connect(InetSocketAddress(host, port), TcpProbeTimeoutMillis.toInt())
+            }
+        }.isSuccess
+
+    private fun rawHttpProbe(network: Network?, label: String, host: String, port: Int, path: String): String? =
+        runCatching {
+            newProbeSocket(network).use { socket ->
+                socket.connect(InetSocketAddress(host, port), TcpProbeTimeoutMillis.toInt())
+                socket.soTimeout = HttpProbeReadTimeoutMillis.toInt()
+                val request = "GET $path HTTP/1.1\r\nHost: $host\r\nUser-Agent: PatrolSmokeProbe\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+                socket.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
+                socket.getOutputStream().flush()
+                val buffer = ByteArray(HttpProbePreviewBytes)
+                val read = socket.getInputStream().read(buffer)
+                if (read <= 0) return@runCatching null
+                val preview = String(buffer, 0, read, Charsets.ISO_8859_1)
+                    .replace(Regex("\\s+"), " ")
+                    .take(160)
+                val status = Regex("HTTP/\\S+\\s+(\\d+)").find(preview)?.groupValues?.getOrNull(1) ?: "raw"
+                "$label http://$host:$port$path status=$status preview=$preview"
+            }
+        }.getOrNull()
+
+    private fun newProbeSocket(network: Network?): Socket =
+        network?.socketFactory?.createSocket() ?: Socket()
+
+    private fun Int.toIpv4String(): String =
+        listOf(this and 0xff, this shr 8 and 0xff, this shr 16 and 0xff, this shr 24 and 0xff)
+            .joinToString(separator = ".") { (it and 0xff).toString() }
+
+    private data class WifiProbeTarget(
+        val label: String,
+        val network: Network?,
+        val host: String
+    )
+
+    private fun String.isValidProbeHost(): Boolean =
+        isNotBlank() && this != "0.0.0.0" && !endsWith(".0") && !endsWith(".255")
+
     private suspend fun runHeadsetDiagnostics(report: SmokeReport, bridge: UteSdkBridge, runBt3Probe: Boolean) {
+        runStep(report, "SMART_DEVICE_INFO") {
+            bridge.connection.smartGetDeviceInfo().toSmokeSummary()
+        }
+        runStep(report, "DEVICE_INFO") {
+            bridge.connection.getDeviceInfo(DeviceInfoRequest().apply {
+                address = true
+                deviceBtModel = true
+                deviceVersionType = true
+            }).toSmokeSummary()
+        }
         runStep(report, "HEADSET_INFO") {
             bridge.connection.getHeadsetInfo().data?.let {
                 "soundMode=${it.soundMode},brightness=${it.brightnessLevel}"
@@ -313,31 +896,99 @@ private object SmokeTestRunner {
         report: SmokeReport,
         coordinator: PatrolCoordinator,
         bridge: UteSdkBridge,
-        initial: DeviceStatus
+        initial: DeviceStatus,
+        commandHoldMillis: Long
     ) {
         var device = initial
         runStep(report, "TAKE_PHOTO") { coordinator.takePhoto(device).also { device = it } }
         runStep(report, "START_VIDEO") { coordinator.setRecording(device, true).also { device = it } }
-        delay(CommandHoldMillis)
+        delay(commandHoldMillis)
         runStep(report, "STOP_VIDEO") { coordinator.setRecording(device, false).also { device = it } }
         if (initial.type == com.patrollink.domain.DeviceType.Headset) {
             runStep(report, "START_HEADSET_AUDIO") { coordinator.setDeviceTalk(device, true).also { device = it } }
-            delay(CommandHoldMillis)
+            delay(commandHoldMillis)
             runStep(report, "STOP_HEADSET_AUDIO") { coordinator.setDeviceTalk(device, false).also { device = it } }
         }
     }
 
-    private suspend fun runHeadsetAiRecorderCommands(report: SmokeReport, bridge: UteSdkBridge) {
-        if (!DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)) {
+    private suspend fun runDirectMediaCommandMatrix(report: SmokeReport, bridge: UteSdkBridge, runAudio: Boolean) {
+        collectInterestingNotifies(report, bridge, "MEDIA_COMMAND_MATRIX_NOTIFIES", CommandNotifyProbeMillis) {
+            runStep(report, "MATRIX_ENABLE_NOTIFY") {
+                bridge.client.openOrCloseNotify(true)
+                "enabled=true"
+            }
+            runStep(report, "MATRIX_GLASSES_INFO_BEFORE") { bridge.connection.getGlassesInfo().data.toGlassesInfoSummary() }
+            runStep(report, "MATRIX_GLASSES_STATE_BEFORE") { bridge.connection.getGlassesStateInfo().data.toSmokeDataSummary() }
+            runStep(report, "MATRIX_SET_STANDBY") {
+                bridge.connection.setGlassesState(GlassesState.STANDBY_MODE).toSmokeSummary()
+            }
+            runStep(report, "MATRIX_SET_RECORD_DIRECTION") {
+                bridge.connection.setGlassesRecordingDirection(GlassesRecordDirection.VERTICAL_SCREEN).toSmokeSummary()
+            }
+            runStep(report, "MATRIX_SET_RECORD_DURATION") {
+                bridge.connection.setGlassesRecordingDuration(MatrixRecordingDurationSeconds).toSmokeSummary()
+            }
+            runStep(report, "MATRIX_SET_VIDEO_PARAMETERS") {
+                bridge.connection.setVideoParameters(VideoParametersInfo(MatrixVideoWidth, MatrixVideoHeight, MatrixVideoFrameRate)).toSmokeSummary()
+            }
+            delay(MatrixCommandSettleMillis)
+            runStep(report, "MATRIX_PHOTO_DIRECT") {
+                bridge.connection.triggerGlassesPhotoCapture(null).toSmokeSummary()
+            }
+            delay(MatrixPostCommandPollMillis)
+            runStep(report, "MATRIX_GLASSES_INFO_AFTER_PHOTO") { bridge.connection.getGlassesInfo().data.toGlassesInfoSummary() }
+            runStep(report, "MATRIX_GLASSES_STATE_AFTER_PHOTO") { bridge.connection.getGlassesStateInfo().data.toSmokeDataSummary() }
+            runStep(report, "MATRIX_VIDEO_START_DIRECT") {
+                bridge.connection.toggleGlassesVideoRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START).toSmokeSummary()
+            }
+            delay(MatrixVideoHoldMillis)
+            runStep(report, "MATRIX_GLASSES_STATE_DURING_VIDEO") { bridge.connection.getGlassesStateInfo().data.toSmokeDataSummary() }
+            runStep(report, "MATRIX_VIDEO_STOP_DIRECT") {
+                bridge.connection.toggleGlassesVideoRecording(GlassesHeadsetRecordingState.RECORDING_STATE_STOP).toSmokeSummary()
+            }
+            delay(MatrixPostCommandPollMillis)
+            runStep(report, "MATRIX_GLASSES_INFO_AFTER_VIDEO") { bridge.connection.getGlassesInfo().data.toGlassesInfoSummary() }
+            if (runAudio) {
+                runStep(report, "MATRIX_AUDIO_START_DIRECT") {
+                    bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START).toSmokeSummary()
+                }
+                delay(MatrixAudioHoldMillis)
+                runStep(report, "MATRIX_GLASSES_STATE_DURING_AUDIO") { bridge.connection.getGlassesStateInfo().data.toSmokeDataSummary() }
+                runStep(report, "MATRIX_AUDIO_STOP_DIRECT") {
+                    bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_STOP).toSmokeSummary()
+                }
+                delay(MatrixPostCommandPollMillis)
+                runStep(report, "MATRIX_GLASSES_INFO_AFTER_AUDIO") { bridge.connection.getGlassesInfo().data.toGlassesInfoSummary() }
+            } else {
+                report.step("MATRIX_AUDIO_DIRECT", "skipped; pass --ez mediaCommandMatrixAudio true to probe audio commands")
+            }
+            runStep(report, "MATRIX_RETRY_IMAGE_UPLOAD") {
+                bridge.connection.retryImageUpload().toSmokeSummary()
+            }
+            delay(MatrixPostCommandPollMillis)
+            runStep(report, "MATRIX_GLASSES_INFO_AFTER_RETRY") { bridge.connection.getGlassesInfo().data.toGlassesInfoSummary() }
+        }
+    }
+
+    private suspend fun runHeadsetAiRecorderCommands(
+        report: SmokeReport,
+        bridge: UteSdkBridge,
+        options: SmokeHeadsetAiRecorderOptions
+    ) {
+        val supported = DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
+        if (!options.shouldRun(supported)) {
             report.step("SKIP_AI_RECORDER_AUDIO", "当前设备 SDK 未声明 AI 录音能力，跳过 appStartAudioRecord/appStopAudioRecord")
             return
+        }
+        if (!supported) {
+            report.step("FORCE_AI_RECORDER_AUDIO", "设备 SDK 未声明 AI 录音能力，按 smoke 参数强制探测接口真实返回")
         }
         runStep(report, "START_AI_RECORDER_AUDIO") {
             bridge.client.openOrCloseNotify(true)
             val response = bridge.connection.appStartAudioRecord()
             val info = response.data
             val result = info?.result ?: -1
-            check(result.isStartAudioAccepted()) {
+            check(response.isSuccess && result.isStartAudioAccepted()) {
                 "success=${response.isSuccess},error=${response.errorCode},result=$result ${AudioRecordResult.getDescription(result)}"
             }
             "success=${response.isSuccess},error=${response.errorCode},session=${info.sessionId},result=${AudioRecordResult.getDescription(result)},scene=${info.scene},start=${info.start}"
@@ -346,12 +997,8 @@ private object SmokeTestRunner {
         runStep(report, "STOP_AI_RECORDER_AUDIO") {
             val response = bridge.connection.appStopAudioRecord()
             val info = response.data
-            check(response.isSuccess || info != null) { "success=${response.isSuccess},error=${response.errorCode},data=null" }
-            if (info == null) {
-                "success=${response.isSuccess},error=${response.errorCode},data=null"
-            } else {
-                "success=${response.isSuccess},error=${response.errorCode},session=${info.sessionId},stopSrc=${info.stopSrc},saved=${info.fileExist == AudioRecordStopInfo.SAVED},fileSize=${info.fileSize}"
-            }
+            check(response.isSuccess && info != null) { "success=${response.isSuccess},error=${response.errorCode},data=${info?.javaClass?.simpleName ?: "null"}" }
+            "success=${response.isSuccess},error=${response.errorCode},session=${info.sessionId},stopSrc=${info.stopSrc},saved=${info.fileExist == AudioRecordStopInfo.SAVED},fileSize=${info.fileSize}"
         }
         runStep(report, "AI_RECORDER_FILES_AFTER") { headsetFileListSummary(bridge) }
     }
@@ -433,6 +1080,36 @@ private object SmokeTestRunner {
                 .thenByDescending { it.signalBars }
         ).firstOrNull()
 
+    private fun List<ScannedDevice>.selectedSmokeDevice(targetDeviceId: String, targetDeviceName: String): ScannedDevice? {
+        if (targetDeviceId.isNotBlank()) {
+            firstOrNull { it.id.equals(targetDeviceId, ignoreCase = true) }?.let { return it }
+            return forcedTargetDevice(targetDeviceId, targetDeviceName)
+        }
+        if (targetDeviceName.isNotBlank()) {
+            firstOrNull { it.name.contains(targetDeviceName, ignoreCase = true) }?.let { return it }
+        }
+        return preferredControlDevice()
+    }
+
+    private fun forcedTargetDevice(targetDeviceId: String, targetDeviceName: String): ScannedDevice {
+        val name = targetDeviceName.ifBlank { "Target-$targetDeviceId" }
+        val normalized = name.uppercase(Locale.US)
+        val type = if ("GLASS" in normalized || "眼镜" in name || "GLORY" in normalized || normalized.startsWith("SMI-")) {
+            com.patrollink.domain.DeviceType.Glasses
+        } else {
+            com.patrollink.domain.DeviceType.Headset
+        }
+        return ScannedDevice(
+            id = targetDeviceId,
+            name = name,
+            signalBars = 3,
+            serviceUuid = "ute-ble-control-forced",
+            bonded = true,
+            macAddress = targetDeviceId,
+            type = type
+        )
+    }
+
     private fun ScannedDevice.isUteControlCandidate(): Boolean =
         serviceUuid != "system-bluetooth-audio-connected" && serviceUuid != "system-bluetooth-audio-bonded"
 
@@ -477,12 +1154,39 @@ private object SmokeTestRunner {
     private fun Response<*>.toSmokeSummary(): String =
         "success=$isSuccess,error=$errorCode,data=${data.toSmokeDataSummary()}"
 
+    private fun MediaFile.toTransferSmokeSummary(): String =
+        "id=$id,local=$local,kind=$kind,status=$transferStatus,target=$lastTransferTarget,progress=$progress,uri=${contentUri.orEmpty()},size=$size"
+
     private fun Any?.toSmokeDataSummary(): String = when (this) {
         null -> "null:null"
         is GlassesStateInfo -> "GlassesStateInfo:${toStateSummary()}"
         is SmartImageDataInfo -> "SmartImageDataInfo:crc=$crcSuccess,type=$imaType,size=$imaSize,file=${file?.absolutePath}"
         is SmartAudioDataInfo -> "SmartAudioDataInfo:crc=$crcSuccess,type=$audioType,size=$audioSize,file=${file?.absolutePath},bytes=${data?.size ?: 0}"
-        else -> "${javaClass.simpleName}:$this"
+        else -> toSmokeObjectSummary()
+    }
+
+    private fun Any?.toSmokeObjectSummary(): String {
+        if (this == null) return "null:null"
+        val type = javaClass.simpleName.ifBlank { javaClass.name }
+        val fields = generateSequence(javaClass) { it.superclass }
+            .takeWhile { it != Any::class.java }
+            .flatMap { it.declaredFields.asSequence() }
+            .filterNot { Modifier.isStatic(it.modifiers) }
+            .take(SmokeObjectFieldLimit)
+            .mapNotNull { field ->
+                runCatching {
+                    field.isAccessible = true
+                    "${field.name}=${field.get(this)}"
+                }.getOrNull()
+            }
+            .joinToString(separator = ",")
+        val value = fields.ifBlank { toString() }
+        return "$type:${value.take(SmokeObjectSummaryLimit)}"
+    }
+
+    private fun GlassesInfo?.toGlassesInfoSummary(): String {
+        val store = this?.glassesStoreInfo
+        return "state=${this?.state},store=photo ${store?.newTakenPictures}/${store?.totalPictures},audio ${store?.newRecordAudio}/${store?.totalRecordAudio},video ${store?.newRecordVideo}/${store?.totalRecordVideo},free=${store?.freeSpace},total=${store?.maxSpace}"
     }
 
     private fun GlassesStateInfo.toStateSummary(): String {
@@ -509,7 +1213,7 @@ private object SmokeTestRunner {
         else -> "NOTIFY"
     }
 
-    private class SmokeReport {
+    private class SmokeReport(private val context: Context) {
         private val lines = mutableListOf<String>()
 
         fun step(name: String, detail: String) = add("INFO", name, detail)
@@ -524,6 +1228,15 @@ private object SmokeTestRunner {
             val line = "$status $name $sanitized"
             lines += line
             Log.i(Tag, line)
+            writeLatest()
+        }
+
+        private fun writeLatest() {
+            runCatching {
+                val directory = context.getExternalFilesDir(null) ?: context.filesDir
+                directory.mkdirs()
+                File(directory, "smoke-test-latest.txt").writeText(lines.joinToString(separator = "\n", postfix = "\n"))
+            }
         }
 
         fun writeTo(context: Context): File {
@@ -538,14 +1251,65 @@ private object SmokeTestRunner {
     const val Tag = "PatrolSmoke"
     private const val ScanTimeoutMillis = 15_000L
     private const val CommandHoldMillis = 2_000L
+    private const val MinCommandHoldMillis = 500L
+    private const val MaxCommandHoldMillis = 60_000L
     private const val HeadsetRecordHoldMillis = 8_000L
+    private const val MatrixCommandSettleMillis = 1_000L
+    private const val MatrixPostCommandPollMillis = 3_000L
+    private const val MatrixVideoHoldMillis = 10_000L
+    private const val MatrixAudioHoldMillis = 5_000L
+    private const val MatrixRecordingDurationSeconds = 24 * 60 * 60
+    private const val MatrixVideoWidth = 240
+    private const val MatrixVideoHeight = 0
+    private const val MatrixVideoFrameRate = 16
     private const val MediaCheckTimeoutMillis = 12_000L
+    private const val WifiMediaDiagnosticsTimeoutMillis = 35_000L
+    private const val WifiMediaListSmokeTimeoutMillis = 70_000L
+    private const val WifiMediaDownloadTimeoutMillis = 90_000L
     private const val CommandNotifyProbeMillis = 45_000L
     private const val PairingNotifyProbeMillis = 8_000L
     private const val SmartAuthNotifyProbeMillis = 8_000L
+    private const val WifiNotifyProbeMillis = 30_000L
+    private const val WifiReadyWaitMillis = 20_000L
+    private const val WifiReadyPollMillis = 2_000L
+    private const val WifiProbeOnlyDefaultMillis = 90_000L
+    private const val WifiProbeOnlyMinMillis = 5_000L
+    private const val WifiProbeOnlyMaxMillis = 180_000L
+    private const val WifiProbeOnlyIntervalMillis = 2_000L
+    private const val TcpProbeTimeoutMillis = 300L
+    private const val HttpProbeReadTimeoutMillis = 600L
+    private const val HttpProbePreviewBytes = 512
+    private const val ProbeHostLimit = 12
+    private const val ProbeHitLimit = 12
+    private const val SmokeObjectFieldLimit = 16
+    private const val SmokeObjectSummaryLimit = 700
     private const val MediaNotifyProbeMillis = 12_000L
     private const val NotifyCollectorWarmupMillis = 200L
     private const val NotifyCollectorTailMillis = 2_000L
+    private const val SdkFeatureFlagsTimeoutMillis = 3_000L
+    private val DefaultProbeHosts = listOf(
+        "192.168.4.1",
+        "192.168.43.1",
+        "192.168.49.1",
+        "192.168.1.1",
+        "192.168.0.1"
+    )
+    private val ProbePorts = listOf(80, 8000, 8080, 8088, 5000, 2121, 21)
+    private val FtpLikeProbePorts = setOf(21, 2121)
+    private val ProbePaths = listOf(
+        "/",
+        "/files",
+        "/api/files",
+        "/filelist",
+        "/list",
+        "/sdcard",
+        "/media",
+        "/DCIM",
+        "/photo",
+        "/video",
+        "/audio",
+        "/record"
+    )
     private val InterestingNotifyTypes = setOf(
         NotifyType.DEVICE_PAIRED_STATE_NOTIFY,
         NotifyType.SMART_GLASSES_STATE_NOTIFY,

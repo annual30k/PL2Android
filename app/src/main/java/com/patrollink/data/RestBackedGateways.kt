@@ -27,6 +27,7 @@ import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCommand
 import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceControlGateway
+import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceEvent
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
@@ -165,6 +166,17 @@ class RestDeviceControlGateway(
 
     override suspend fun notifyMediaSyncCompleted(): Boolean =
         api.notifyMediaSyncCompleted(deviceIdProvider()).data.success
+
+    override suspend fun clearDeviceAccount(): Boolean =
+        api.clearDeviceAccount(deviceIdProvider()).data.success
+
+    override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean {
+        val targetValue = when (target) {
+            DeviceFactoryResetTarget.Glasses -> "GLASSES"
+            DeviceFactoryResetTarget.Headset -> "HEADSET"
+        }
+        return api.factoryResetDevice(deviceIdProvider(), targetValue).data.success
+    }
 }
 
 class RestVersionGateway(private val api: PatrolRestApi) : VersionGateway {

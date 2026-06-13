@@ -20,4 +20,18 @@ class OfflineSyncEngineTest {
         assertEquals(1, gateway.pending().size)
         assertEquals(BackgroundTaskType.UploadEvidence, gateway.pending().first().task.type)
     }
+
+    @Test
+    fun evidenceUploadTasksAreDedupedByFileId() = runTest {
+        val gateway = InMemoryBackgroundTaskGateway()
+        val engine = OfflineSyncEngine(gateway)
+
+        engine.enqueueEvidenceUpload("VID-1", 101)
+        engine.enqueueEvidenceUpload("VID-1", 202)
+
+        val pending = gateway.pending()
+        assertEquals(1, pending.size)
+        assertEquals("VID-1", pending.single().task.payloadId)
+        assertEquals(202, pending.single().task.createdAt)
+    }
 }

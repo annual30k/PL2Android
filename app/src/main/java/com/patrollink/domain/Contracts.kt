@@ -58,6 +58,13 @@ interface DeviceControlGateway {
     suspend fun startRealtimeAudioSync(sessionId: String): Boolean
     suspend fun stopRealtimeAudioSync(): Boolean
     suspend fun notifyMediaSyncCompleted(): Boolean
+    suspend fun clearDeviceAccount(): Boolean
+    suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean
+}
+
+enum class DeviceFactoryResetTarget {
+    Glasses,
+    Headset
 }
 
 interface SosGateway {

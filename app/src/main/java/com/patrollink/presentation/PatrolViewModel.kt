@@ -26,6 +26,7 @@ import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceControlGateway
+import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
@@ -43,6 +44,7 @@ import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.OperationMessage
 import com.patrollink.domain.OperationMessageType
+import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SecureStore
@@ -52,6 +54,7 @@ import com.patrollink.domain.StreamMode
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
+import com.patrollink.domain.UserProfile
 import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.VersionInstaller
 import com.patrollink.domain.VersionUpdatePhase
@@ -99,6 +102,7 @@ class PatrolViewModel(
     private val patrolRestApi: PatrolRestApi? = null,
     private val runtimeConfigStore: RuntimeConfigStore? = null,
     private val backendBaseUrl: String = "",
+    private val offlineSyncEngine: OfflineSyncEngine? = null,
     private val onSessionChanged: (AuthSession?) -> Unit = {},
     private val onPairingUsernameChanged: (String?) -> Unit = {}
 ) : ViewModel() {
@@ -403,7 +407,11 @@ class PatrolViewModel(
         val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备 Wi-Fi 通道未启用", OperationMessageType.Warning)
         runCatching { gateway.configureWifi(enabled, ssid, password) }
             .onSuccess { wifi -> _uiState.update { it.copy(deviceWifiState = wifi, operationMessage = operationMessage("设备 Wi-Fi 已配置", OperationMessageType.Success)) } }
-            .onFailure { _uiState.update { it.copy(operationMessage = operationMessage("设备 Wi-Fi 配置失败", OperationMessageType.Error)) } }
+            .onFailure { throwable ->
+                _uiState.update {
+                    it.copy(operationMessage = operationMessage(throwable.operatorFacingWifiError(), OperationMessageType.Error))
+                }
+            }
     }
 
     fun applyDeviceSettings(settings: DeviceAdvancedSettings) = viewModelScope.launch {
@@ -472,12 +480,23 @@ class PatrolViewModel(
 
     fun refreshPatrolArea() = viewModelScope.launch {
         runCatching { coordinator.currentPatrolArea() }
-            .onSuccess { patrolArea -> _uiState.update { it.copy(patrolArea = patrolArea) } }
+            .onSuccess { patrolArea ->
+                _uiState.update { state ->
+                    state.copy(
+                        patrolArea = patrolArea,
+                        user = state.user.withDutyArea(patrolArea.name)
+                    )
+                }
+            }
     }
 
     fun refreshCurrentUser() = viewModelScope.launch {
         runCatching { coordinator.currentUser() }
-            .onSuccess { user -> _uiState.update { it.copy(user = user) } }
+            .onSuccess { user ->
+                _uiState.update { state ->
+                    state.copy(user = user.withDutyArea(state.patrolArea.name))
+                }
+            }
     }
 
     fun updateDailyReportMissionId(missionId: String) = _uiState.update { state ->
@@ -532,23 +551,35 @@ class PatrolViewModel(
         state.copy(dailyReport = state.dailyReport.copy(selectedMediaIds = emptySet(), lastError = null))
     }
 
-    fun refreshMediaFiles() = viewModelScope.launch {
-        val phoneMedia = runCatching { coordinator.mediaFiles(local = true) }.getOrDefault(emptyList())
-        val deviceMedia = runCatching { coordinator.mediaFiles(local = false) }.getOrDefault(emptyList())
+    fun refreshMediaFiles(showFailureMessage: Boolean = false) = viewModelScope.launch {
+        val phoneResult = runCatching { coordinator.mediaFiles(local = true) }
+        val deviceResult = runCatching { coordinator.mediaFiles(local = false) }
+        val phoneMedia = phoneResult.getOrDefault(emptyList())
+        val deviceMedia = deviceResult.getOrDefault(emptyList())
         val loaded = (phoneMedia + deviceMedia).distinctBy { it.id to it.local }
-        if (loaded.isEmpty()) return@launch
         _uiState.update { state ->
             val loadedWithState = loaded.map { incoming ->
                 val current = state.mediaFiles.firstOrNull { it.id == incoming.id && it.local == incoming.local }
                 incoming.inheritCompletedCloudState(current)
             }
             val transient = state.mediaFiles.filter { current ->
-                loadedWithState.none { it.id == current.id && it.local == current.local }
+                current.transferStatus.inProgress &&
+                    loadedWithState.none { it.id == current.id && it.local == current.local }
             }
             val next = (loadedWithState + transient).distinctBy { it.id to it.local }
+            val nextSelected = state.selectedMediaFileId?.takeIf { selectedId ->
+                next.any { it.id == selectedId && it.local == state.selectedMediaLocal }
+            } ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
             state.copy(
                 mediaFiles = next,
-                selectedMediaFileId = state.selectedMediaFileId ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
+                selectedMediaFileId = nextSelected,
+                operationMessage = when {
+                    showFailureMessage && !state.selectedMediaLocal && deviceResult.isFailure ->
+                        operationMessage(deviceResult.exceptionOrNull().operatorFacingDeviceMediaError(), OperationMessageType.Error)
+                    showFailureMessage && !state.selectedMediaLocal && deviceResult.isSuccess && deviceMedia.isEmpty() ->
+                        operationMessage("设备端没有读取到媒体文件；请先拍照/录像/录音，或确认手机已连接设备热点后重试", OperationMessageType.Warning)
+                    else -> state.operationMessage
+                }
             )
         }
     }
@@ -912,7 +943,7 @@ class PatrolViewModel(
                     state.copy(
                         device = next,
                         connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
-                        operationMessage = operationMessage("拍照命令已下发，等待摄录耳机回传文件", OperationMessageType.Info)
+                        operationMessage = operationMessage("拍照命令已下发；若媒体列表仍为空，请在设备文件页通过 Wi-Fi 同步", OperationMessageType.Info)
                     )
                 }
             } finally {
@@ -986,10 +1017,100 @@ class PatrolViewModel(
 
     fun unbindCurrentDevice() = unbindDevice(_uiState.value.device.id)
 
-    fun unbindDevice(deviceId: String) = viewModelScope.launch {
-        if (deviceId.isBlank()) {
+    fun unbindDiscoveredDevice(
+        scannedId: String,
+        macAddress: String,
+        scannedName: String = "",
+        scannedType: DeviceType = DeviceType.Headset
+    ) = viewModelScope.launch {
+        val target = resolveConnectedDevice(scannedId, macAddress, scannedName, scannedType)
+        if (target == null) {
             showOperationMessage("当前没有可解绑设备", OperationMessageType.Warning)
             return@launch
+        }
+        val gateway = deviceControlGateway
+        if (gateway != null && target.canReceiveDeviceCommand()) {
+            val cleared = runCatching { gateway.clearDeviceAccount() }.getOrDefault(false)
+            if (!cleared) {
+                unbindDeviceLocally(
+                    deviceId = target.id,
+                    message = "设备端账号清除失败，已移除 PatrolLink 本地绑定；如仍无法重连，请在设备侧重置配对",
+                    messageType = OperationMessageType.Warning
+                )
+                return@launch
+            }
+            markDeviceRequiresRepairing(target, "设备账号已清除，请重新配对 PatrolLink")
+            return@launch
+        }
+        unbindDeviceLocally(target.id)
+    }
+
+    fun clearConnectedDeviceAccount() = viewModelScope.launch {
+        val device = _uiState.value.device
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备后再清除设备账号", OperationMessageType.Warning)
+            return@launch
+        }
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备账号清除通道未启用", OperationMessageType.Warning)
+        val cleared = runCatching { gateway.clearDeviceAccount() }.getOrDefault(false)
+        if (!cleared) {
+            showOperationMessage("设备账号清除失败，请确认耳机已连接控制通道", OperationMessageType.Error)
+            return@launch
+        }
+        markDeviceRequiresRepairing(device, "设备账号已清除，请重新配对 PatrolLink")
+    }
+
+    fun factoryResetConnectedDevice(target: DeviceFactoryResetTarget) = viewModelScope.launch {
+        val device = _uiState.value.device
+        if (!device.canReceiveDeviceCommand()) {
+            showOperationMessage("请先连接设备控制通道后再恢复出厂", OperationMessageType.Warning)
+            return@launch
+        }
+        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备恢复出厂通道未启用", OperationMessageType.Warning)
+        val reset = runCatching { gateway.factoryResetDevice(target) }.getOrDefault(false)
+        if (!reset) {
+            val targetName = if (target == DeviceFactoryResetTarget.Headset) "耳机" else "眼镜"
+            showOperationMessage("${targetName}恢复出厂失败，请确认设备控制通道已连接", OperationMessageType.Error)
+            return@launch
+        }
+        val targetName = if (target == DeviceFactoryResetTarget.Headset) "耳机" else "眼镜"
+        markDeviceRequiresRepairing(device, "${targetName}已恢复出厂并重启，请重新搜索并配对 PatrolLink")
+    }
+
+    private suspend fun markDeviceRequiresRepairing(device: DeviceStatus, message: String) {
+        runCatching { coordinator.unbindDevice(device.id) }
+        _uiState.update { state ->
+            val remaining = state.connectedDevices.filterNot { it.id == device.id }
+            val next = if (state.device.id == device.id) {
+                remaining.firstOrNull() ?: EmptyAppState.create().device
+            } else {
+                state.device
+            }
+            state.copy(
+                device = next,
+                connectedDevices = remaining,
+                selectedDeviceId = next.id.takeIf { it.isNotBlank() },
+                streamState = StreamRelayState.Idle,
+                deviceCapabilities = DeviceCapabilities(),
+                deviceWifiState = DeviceWifiState(),
+                realtimeAudioSyncing = false,
+                operationMessage = operationMessage(message, OperationMessageType.Warning)
+            )
+        }
+    }
+
+    fun unbindDevice(deviceId: String) = viewModelScope.launch {
+        unbindDeviceLocally(deviceId)
+    }
+
+    private suspend fun unbindDeviceLocally(
+        deviceId: String,
+        message: String? = null,
+        messageType: OperationMessageType = OperationMessageType.Success
+    ) {
+        if (deviceId.isBlank()) {
+            showOperationMessage("当前没有可解绑设备", OperationMessageType.Warning)
+            return
         }
         val target = _uiState.value.connectedDevices.firstOrNull { it.id == deviceId }
             ?: _uiState.value.device.takeIf { it.id == deviceId }
@@ -1009,8 +1130,44 @@ class PatrolViewModel(
                 deviceCapabilities = DeviceCapabilities(),
                 deviceWifiState = DeviceWifiState(),
                 realtimeAudioSyncing = false,
-                operationMessage = operationMessage("${target?.name?.ifBlank { "设备" } ?: "设备"} 已解绑", OperationMessageType.Success)
+                operationMessage = operationMessage(
+                    message ?: "${target?.name?.ifBlank { "设备" } ?: "设备"} 已解绑",
+                    messageType
+                )
             )
+        }
+    }
+
+    private fun resolveConnectedDevice(
+        scannedId: String,
+        macAddress: String,
+        scannedName: String,
+        scannedType: DeviceType
+    ): DeviceStatus? {
+        val state = _uiState.value
+        val candidates = (state.connectedDevices + state.device).distinctBy { it.id }
+        val normalizedScannedId = scannedId.normalizedDeviceKey()
+        val normalizedMac = macAddress.normalizedDeviceKey()
+        val scanned = ScannedDevice(
+            id = scannedId,
+            name = scannedName,
+            signalBars = 0,
+            serviceUuid = "",
+            bonded = false,
+            macAddress = macAddress,
+            type = scannedType
+        )
+        return candidates.firstOrNull { candidate ->
+            val candidateKey = candidate.id.normalizedDeviceKey()
+            candidate.id.equals(scannedId, ignoreCase = true) ||
+                macAddress.isNotBlank() && candidate.id.equals(macAddress, ignoreCase = true) ||
+                candidateKey.isNotBlank() && (
+                    candidateKey == normalizedScannedId ||
+                        candidateKey == normalizedMac ||
+                        normalizedScannedId.contains(candidateKey) ||
+                        normalizedMac.contains(candidateKey)
+                    ) ||
+                scannedName.isNotBlank() && candidate.representsSameAudioDevice(scanned)
         }
     }
 
@@ -1028,11 +1185,14 @@ class PatrolViewModel(
                             sdkConnected.any { it.representsSameAudioDevice(system) }
                         }
                         val mergedConnected = (state.connectedDevices.filterNot { existing ->
-                            systemPlaceholders.any { it.id == existing.id || (!existing.hasSdkControlChannel() && it.type == existing.type) }
+                            systemPlaceholders.any { it.id == existing.id || (!existing.hasSdkControlChannel() && it.type == existing.type) } ||
+                                existing.isStaleAudioConnection(systemConnected)
                         } + systemPlaceholders).distinctBy { it.id }
+                        val systemSelected = systemConnected.firstOrNull()
                         val selectedDevice = when {
+                            state.device.isStaleAudioConnection(systemConnected) && systemSelected != null -> systemSelected
                             state.device.isControllableDevice() -> state.device
-                            systemConnected.isNotEmpty() -> systemConnected.first()
+                            systemSelected != null -> systemSelected
                             else -> state.device
                         }
                         state.copy(
@@ -1243,27 +1403,139 @@ class PatrolViewModel(
     }
 
     fun downloadMedia(fileId: String) = viewModelScope.launch {
-        runCatching {
+        transferDeviceMediaToPhone(fileId)
+    }
+
+    fun syncDeviceMediaToPhone(fileIds: Set<String> = emptySet(), refreshFirst: Boolean = false) = viewModelScope.launch {
+        if (refreshFirst) {
+            _uiState.update {
+                it.copy(operationMessage = operationMessage("正在读取设备文件并同步到手机", OperationMessageType.Info))
+            }
+            val phoneResult = runCatching { coordinator.mediaFiles(local = true) }
+            val deviceResult = runCatching { coordinator.mediaFiles(local = false) }
+            if (deviceResult.isFailure) {
+                _uiState.update {
+                    it.copy(operationMessage = operationMessage(deviceResult.exceptionOrNull().operatorFacingDeviceMediaError(), OperationMessageType.Error))
+                }
+                return@launch
+            }
+            mergeLoadedMediaFiles(
+                phoneMedia = phoneResult.getOrDefault(emptyList()),
+                deviceMedia = deviceResult.getOrDefault(emptyList())
+            )
+        }
+        val currentFiles = _uiState.value.mediaFiles
+        val candidates = currentFiles
+            .filter { !it.local && !it.transferStatus.inProgress }
+            .filter { fileIds.isEmpty() || it.id in fileIds }
+        val pending = candidates.filter { deviceFile ->
+            currentFiles.none { it.id == deviceFile.id && it.local && it.contentUri.hasUsableValue() }
+        }
+        when {
+            candidates.isEmpty() -> {
+                showOperationMessage("设备端没有可同步文件，请先刷新设备媒体列表", OperationMessageType.Warning)
+                return@launch
+            }
+            pending.isEmpty() -> {
+                showOperationMessage("设备端文件已在手机端，无需重复同步", OperationMessageType.Success)
+                return@launch
+            }
+        }
+        _uiState.update {
+            it.copy(operationMessage = operationMessage("正在同步 ${pending.size} 个设备文件到手机", OperationMessageType.Info))
+        }
+        var successCount = 0
+        var failedCount = 0
+        pending.forEach { file ->
+            if (transferDeviceMediaToPhone(file.id)) {
+                successCount += 1
+            } else {
+                failedCount += 1
+            }
+        }
+        _uiState.update {
+            it.copy(
+                selectedMediaLocal = successCount.takeIf { count -> count > 0 }?.let { true } ?: it.selectedMediaLocal,
+                operationMessage = operationMessage(
+                    buildString {
+                        if (successCount > 0) {
+                            append("已同步 $successCount 个设备文件到手机，后台上传任务已加入队列")
+                        } else {
+                            append("设备文件同步失败")
+                        }
+                        if (failedCount > 0) append("，失败 $failedCount 个")
+                    },
+                    when {
+                        failedCount > 0 && successCount == 0 -> OperationMessageType.Error
+                        failedCount > 0 -> OperationMessageType.Warning
+                        else -> OperationMessageType.Success
+                    }
+                )
+            )
+        }
+    }
+
+    private fun mergeLoadedMediaFiles(phoneMedia: List<MediaFile>, deviceMedia: List<MediaFile>) {
+        val loaded = (phoneMedia + deviceMedia).distinctBy { it.id to it.local }
+        _uiState.update { state ->
+            val loadedWithState = loaded.map { incoming ->
+                val current = state.mediaFiles.firstOrNull { it.id == incoming.id && it.local == incoming.local }
+                incoming.inheritCompletedCloudState(current)
+            }
+            val transient = state.mediaFiles.filter { current ->
+                current.transferStatus.inProgress &&
+                    loadedWithState.none { it.id == current.id && it.local == current.local }
+            }
+            val next = (loadedWithState + transient).distinctBy { it.id to it.local }
+            val nextSelected = state.selectedMediaFileId?.takeIf { selectedId ->
+                next.any { it.id == selectedId && it.local == state.selectedMediaLocal }
+            } ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
+            state.copy(
+                mediaFiles = next,
+                selectedMediaFileId = nextSelected
+            )
+        }
+    }
+
+    private suspend fun transferDeviceMediaToPhone(fileId: String): Boolean {
+        return runCatching {
             var emitted = false
             coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
                 emitted = true
                 updatePhoneTransfer(fileId, updated.markTransferTarget(TransferTarget.PhoneSandbox))
-                if (updated.transferStatus == TransferStatus.Done) runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
+                if (updated.transferStatus == TransferStatus.Done) {
+                    runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
+                    enqueueEvidenceUploadIfLocal(
+                        fileId = fileId,
+                        local = true,
+                        file = updated.copy(id = fileId, local = true)
+                            .takeIf { it.contentUri.hasUsableValue() }
+                            ?: _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local }
+                    )
+                }
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
             check(emitted) { "媒体传输通道未返回进度" }
-        }.onFailure {
+        }.fold(
+            onSuccess = { true },
+            onFailure = {
             markMediaTransferFailed(fileId, local = false, target = TransferTarget.PhoneSandbox, throwable = it, action = "媒体文件下载失败")
-        }
+                false
+            }
+        )
     }
 
     fun uploadMedia(fileId: String, local: Boolean = true) = viewModelScope.launch {
+        if (!local) {
+            downloadMedia(fileId)
+            return@launch
+        }
         val current = _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local == local }
         if (current?.transferStatus == TransferStatus.Done && current.lastTransferTarget == TransferTarget.Cloud) {
             _uiState.update { it.copy(operationMessage = operationMessage("${current.name} 已上传", OperationMessageType.Success)) }
             return@launch
         }
-        runCatching {
+        val failure = runCatching {
             var emitted = false
             coordinator.transferMedia(fileId, TransferTarget.Cloud).collect { updated ->
                 emitted = true
@@ -1271,9 +1543,17 @@ class PatrolViewModel(
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
             check(emitted) { "媒体传输通道未返回进度" }
-        }.onFailure {
-            markMediaTransferFailed(fileId, local = local, target = TransferTarget.Cloud, throwable = it, action = "媒体文件上传失败")
+        }.exceptionOrNull()
+        if (failure != null) {
+            enqueueEvidenceUploadIfLocal(fileId, local, current)
+            markMediaTransferFailed(fileId, local = local, target = TransferTarget.Cloud, throwable = failure, action = "媒体文件上传失败")
         }
+    }
+
+    private suspend fun enqueueEvidenceUploadIfLocal(fileId: String, local: Boolean, file: MediaFile?) {
+        val engine = offlineSyncEngine ?: return
+        if (!local || file?.contentUri.hasUsableValue().not()) return
+        runCatching { engine.enqueueEvidenceUpload(fileId, System.currentTimeMillis()) }
     }
 
     private suspend fun ensureMediaFileForCerebellum(file: MediaFile): MediaFile? {
@@ -1722,6 +2002,26 @@ class PatrolViewModel(
 
     private fun operationMessage(text: String, type: OperationMessageType) = OperationMessage(text, type)
 
+    private fun Throwable.operatorFacingWifiError(): String =
+        message
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.toOperatorFacingWifiError()
+            ?: "设备 Wi-Fi 配置失败"
+
+    private fun String.toOperatorFacingWifiError(): String =
+        when {
+            contains("device wifi did not enable: 5", ignoreCase = true) ||
+                contains("WIFI_AP_STOP", ignoreCase = true) ->
+                "设备热点未开启，请确认设备电量和当前模式后重试；若仍失败，请在设备侧重启 Wi-Fi 或重启设备"
+            else -> this
+        }
+
+    private fun Throwable?.operatorFacingDeviceMediaError(): String {
+        val detail = this?.message?.trim()?.takeIf { it.isNotBlank() } ?: "设备热点或文件服务未响应"
+        return "设备文件读取失败：$detail；请确认手机已连接设备热点后重试"
+    }
+
     private suspend fun materializeMediaForPreview(file: MediaFile): MediaFile? {
         val existing = file.withShareableLocalUri(appContext, allowRemote = false)
         if (existing != null) return existing
@@ -1981,11 +2281,20 @@ private fun String.toFirmwareMessage(errorMessage: String): String = when {
 private fun AuthSession.hasUsableTokens(): Boolean =
     accessToken.isNotBlank() && refreshToken.isNotBlank()
 
+private fun UserProfile.withDutyArea(areaName: String): UserProfile =
+    if (areaName.isBlank() || dutyArea == areaName) this else copy(dutyArea = areaName)
+
 private fun DeviceStatus.isControllableDevice(): Boolean =
     id.isNotBlank() && online
 
 private fun DeviceStatus.hasSdkControlChannel(): Boolean =
     isControllableDevice() && !onlineDuration.startsWith("系统蓝牙")
+
+private fun DeviceStatus.isStaleAudioConnection(systemConnected: List<DeviceStatus>): Boolean =
+    isControllableDevice() &&
+        type in setOf(DeviceType.Headset, DeviceType.Glasses) &&
+        systemConnected.isNotEmpty() &&
+        systemConnected.none { it.representsSameAudioDevice(this) }
 
 private fun ScannedDevice.isSystemBluetoothAudioConnected(): Boolean =
     serviceUuid == "system-bluetooth-audio-connected" ||
@@ -2004,7 +2313,7 @@ private fun ScannedDevice.toConnectedAudioStatus(fallback: DeviceStatus): Device
         online = true,
         signalBars = signalBars.coerceIn(1, 5),
         onlineDuration = "系统蓝牙已连接",
-        type = DeviceType.Headset
+        type = type
     )
 
 private fun DeviceStatus.representsSameAudioDevice(device: ScannedDevice): Boolean =
@@ -2013,8 +2322,12 @@ private fun DeviceStatus.representsSameAudioDevice(device: ScannedDevice): Boole
 private fun DeviceStatus.representsSameAudioDevice(device: DeviceStatus): Boolean =
     id == device.id || (type == DeviceType.Headset && device.type == DeviceType.Headset && hasSimilarAudioName(name, device.name))
 
+private fun String.normalizedDeviceKey(): String =
+    uppercase().filter { it.isLetterOrDigit() }
+
 private fun resolveConnectedDeviceType(bound: DeviceStatus, scannedName: String, scannedType: DeviceType): DeviceType =
     when {
+        isKnownGlassesName(scannedName) || isKnownGlassesName(bound.name) -> DeviceType.Glasses
         isKnownAudioName(scannedName) || isKnownAudioName(bound.name) -> DeviceType.Headset
         bound.online && bound.type == DeviceType.Headset -> DeviceType.Headset
         bound.online && bound.type != scannedType -> bound.type
@@ -2024,7 +2337,7 @@ private fun resolveConnectedDeviceType(bound: DeviceStatus, scannedName: String,
 private fun hasSimilarAudioName(left: String, right: String): Boolean {
     val leftNormalized = left.uppercase()
     val rightNormalized = right.uppercase()
-    return listOf("E1-PRO", "SMI-", "FORCELINK", "HEADSET", "耳机").any { marker ->
+    return listOf("E1-PRO", "FORCELINK", "HEADSET", "耳机").any { marker ->
         marker in leftNormalized && marker in rightNormalized
     }
 }
@@ -2032,10 +2345,17 @@ private fun hasSimilarAudioName(left: String, right: String): Boolean {
 private fun isKnownAudioName(name: String): Boolean {
     val normalized = name.uppercase()
     return "E1-PRO" in normalized ||
-        "SMI-" in normalized ||
         "FORCELINK" in normalized ||
         "HEADSET" in normalized ||
         "耳机" in name
+}
+
+private fun isKnownGlassesName(name: String): Boolean {
+    val normalized = name.uppercase()
+    return "GLORY GLASS" in normalized ||
+        "GLASS" in normalized ||
+        "ABA002" in normalized ||
+        "眼镜" in name
 }
 
 

@@ -1513,3 +1513,32 @@ direct SDK 验证：
 - 文档/demo 确认：录像 start/stop 状态值没有错，但录像参数应按 SDK demo 使用 `240x0@16` 和 24 小时时长。
 - PatrolLink 已按这个修正生产录像 start 前置配置。
 - 仍待验证：在 Glass SDK 控制链路恢复到非 408 状态后，使用 SDK demo 参数是否能让设备端 `/media/list` 出现 mp4。
+
+### 2026-06-14 01:51 SDK demo 参数后续：统一 Wi-Fi/控制 warmup
+
+继续排查“是不是命令下错了”时发现：
+
+- `UteSdkDeviceGateway.videoRecordStartAttempts(...)` 已经使用 SDK demo 参数。
+- 但 `UteWifiMediaClient.applyGloryViewWifiWarmup(...)` 和 `UteSdkDeviceControlGateway.applyWifiOpenWarmup(...)` 里还残留旧的 `30s + 2112x1568@30`。
+- 这两个 warmup 会在媒体页/控制页打开设备热点时执行，可能把 Glass 录像参数重新写成和 SDK demo 不一致的值。
+
+代码修正：
+
+- `UteWifiMediaClient` warmup 参数统一为：
+  - `setGlassesRecordingDuration(24 * 60 * 60)`
+  - `setVideoParameters(240, 0, 16)`
+- `UteSdkDeviceControlGateway` warmup 参数统一为：
+  - `setGlassesRecordingDuration(24 * 60 * 60)`
+  - `setVideoParameters(240, 0, 16)`
+
+验证：
+
+- 编译和目标测试通过：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.debug.SmokeWifiPreflightOptionsTest --tests com.patrollink.data.ute.UteCommandPolicyTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+
+当前结论：
+
+- 文档/demo 仍说明 start/stop 命令值没有错。
+- 已确认并修正的错误点是：部分路径残留的录像参数和 SDK demo 不一致。
+- 还没有重跑真机 Glass 录像闭环；上一次 direct matrix 失败原因是 SDK 命令链路返回 408，不是本次参数修正的反证。

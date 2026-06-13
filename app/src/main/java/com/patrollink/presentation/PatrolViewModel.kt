@@ -269,19 +269,10 @@ class PatrolViewModel(
     }
 
     fun toggleTalk() = viewModelScope.launch {
-        val initialDevice = currentCommandDevice()
-        val device = if (initialDevice.type == DeviceType.Headset) {
-            prepareDeviceForCommand(
-                capabilityReady = { it.supportsAudioRecord },
-                unavailableMessage = "录音失败，耳机控制通道未就绪"
-            ) ?: return@launch
-        } else {
-            initialDevice
-        }
-        if (!device.canReceiveDeviceCommand()) {
-            showOperationMessage("请先连接设备", OperationMessageType.Warning)
-            return@launch
-        }
+        val device = prepareDeviceForCommand(
+            capabilityReady = { it.supportsAudioRecord },
+            unavailableMessage = "录音失败，当前设备不支持录音或控制通道未就绪"
+        ) ?: return@launch
         val enabled = !device.isTalking
         _uiState.update {
             it.copy(operationMessage = operationMessage(if (enabled) "正在下发开始录音命令" else "正在下发停止录音命令", OperationMessageType.Info))

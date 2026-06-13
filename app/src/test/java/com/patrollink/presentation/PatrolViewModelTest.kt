@@ -91,6 +91,40 @@ class PatrolViewModelTest {
     }
 
     @Test
+    fun unsupportedGlassAudioDoesNotSendRecordCommand() = runTest {
+        val gateway = RecordingGlassDeviceGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithDeviceGateway(gateway),
+            deviceControlGateway = FixedCapabilitiesControlGateway(
+                DeviceCapabilities(
+                    supportsGlasses = true,
+                    supportsWifi = true,
+                    supportsFileTransfer = true,
+                    supportsPhoto = true,
+                    supportsVideo = true,
+                    supportsAudioRecord = false
+                )
+            )
+        )
+        loginForTest(viewModel)
+        viewModel.connectDiscoveredDevice(
+            id = "78:02:B7:66:00:F7",
+            name = "Glory Glass 2-00F7",
+            mac = "78:02:B7:66:00:F7",
+            signalBars = 5,
+            type = DeviceType.Glasses
+        )
+        advanceUntilIdle()
+
+        viewModel.toggleTalk()
+        advanceUntilIdle()
+
+        assertTrue(gateway.commands.isEmpty())
+        assertEquals("录音失败，当前设备不支持录音或控制通道未就绪", viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Error, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
     fun photoCommandWithoutImmediateFilePromptsWifiMediaSync() = runTest {
         val viewModel = testViewModel()
         loginAndConnect(viewModel)
@@ -853,6 +887,24 @@ private class StaleE1ThenConnectedGlassGateway : DeviceGateway {
         testDevice(deviceId, "E1-Pro-A243", DeviceType.Headset)
 }
 
+private class RecordingGlassDeviceGateway : DeviceGateway {
+    val commands = mutableListOf<DeviceCommand>()
+
+    override fun scan(): Flow<List<ScannedDevice>> = emptyFlow()
+
+    override suspend fun bind(deviceId: String): DeviceStatus =
+        testDevice(deviceId, "Glory Glass 2-00F7", DeviceType.Glasses)
+
+    override suspend fun unbind(deviceId: String): DeviceStatus? = null
+
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus {
+        commands += command
+        return testDevice(deviceId, "Glory Glass 2-00F7", DeviceType.Glasses).copy(
+            isTalking = command == DeviceCommand.StartTalk
+        )
+    }
+}
+
 private fun testDevice(id: String, name: String, type: DeviceType) = DeviceStatus(
     id = id,
     name = name,
@@ -899,6 +951,21 @@ private class FailingWifiControlGateway(private val failure: Throwable) : Device
     override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState {
         throw failure
     }
+    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = settings
+    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
+    override suspend fun stopRealtimeAudioSync(): Boolean = false
+    override suspend fun notifyMediaSyncCompleted(): Boolean = false
+    override suspend fun clearDeviceAccount(): Boolean = false
+    override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean = false
+}
+
+private class FixedCapabilitiesControlGateway(
+    private val fixedCapabilities: DeviceCapabilities
+) : DeviceControlGateway {
+    override fun events(): Flow<DeviceEvent> = emptyFlow()
+    override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities = fixedCapabilities
+    override suspend fun readWifi(): DeviceWifiState = DeviceWifiState()
+    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState = DeviceWifiState()
     override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = settings
     override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
     override suspend fun stopRealtimeAudioSync(): Boolean = false

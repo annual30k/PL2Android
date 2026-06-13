@@ -323,21 +323,26 @@ private fun HeadsetCapabilityCard(device: DeviceStatus, capabilities: DeviceCapa
     CapabilitySummaryCard(
         title = device.name,
         type = device.type,
-        rows = listOf(
-            "摄像头" to when {
-                !capabilities.supportsPhoto && !capabilities.supportsVideo -> "等待控制通道"
-                device.isRecording -> "录像中"
-                else -> "待机"
-            },
-            "耳机录音" to when {
-                !capabilities.supportsAudioRecord -> "当前设备不支持"
-                recording || device.isTalking -> "录制中"
-                else -> "待机"
-            },
-            "在线时长" to device.onlineDuration,
-            "电量" to device.batteryText(),
-            "本机存储" to device.storageText()
-        )
+        rows = buildList {
+            add(
+                "摄像头" to when {
+                    !capabilities.supportsPhoto && !capabilities.supportsVideo -> "等待控制通道"
+                    device.isRecording -> "录像中"
+                    else -> "待机"
+                }
+            )
+            if (capabilities.supportsAudioRecord) {
+                add(
+                    "耳机录音" to when {
+                        recording || device.isTalking -> "录制中"
+                        else -> "待机"
+                    }
+                )
+            }
+            add("在线时长" to device.onlineDuration)
+            add("电量" to device.batteryText())
+            add("本机存储" to device.storageText())
+        }
     )
 }
 
@@ -350,15 +355,17 @@ private fun HeadsetActions(device: DeviceStatus, capabilities: DeviceCapabilitie
     val videoEnabled = enabled && capabilities.supportsVideo
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.weight(1f)) {
-                ActionTile(
-                    if (recording || device.isTalking) "停止录音" else "耳机录音",
-                    if (recording || device.isTalking) "stop" else "talk",
-                    active = recording || device.isTalking,
-                    danger = recording || device.isTalking,
-                    enabled = recordEnabled,
-                    onClick = viewModel::toggleTalk
-                )
+            if (capabilities.supportsAudioRecord) {
+                Box(Modifier.weight(1f)) {
+                    ActionTile(
+                        if (recording || device.isTalking) "停止录音" else "耳机录音",
+                        if (recording || device.isTalking) "stop" else "talk",
+                        active = recording || device.isTalking,
+                        danger = recording || device.isTalking,
+                        enabled = recordEnabled,
+                        onClick = viewModel::toggleTalk
+                    )
+                }
             }
             Box(Modifier.weight(1f)) { ActionTile(if (photoBusy) "拍照中" else "拍照", "camera", enabled = photoEnabled, onClick = viewModel::takePhoto) }
             Box(Modifier.weight(1f)) {

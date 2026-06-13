@@ -15,6 +15,7 @@ import android.widget.TextView
 import com.patrollink.data.RuntimeConfigStore
 import com.patrollink.data.RuntimeTokenStore
 import com.patrollink.data.ServiceFactory
+import com.patrollink.data.local.WorkManagerBackgroundTaskGateway
 import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.data.ute.UteWifiMediaClient
 import com.patrollink.domain.DeviceStatus
@@ -23,6 +24,7 @@ import com.patrollink.domain.FirmwareDeviceMetadata
 import com.patrollink.domain.FirmwareGateway
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
+import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.TransferStatus
@@ -88,19 +90,31 @@ class SmokeTestReceiver : BroadcastReceiver() {
 }
 
 class SmokeTestActivity : Activity() {
+    private lateinit var status: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val status = TextView(this).apply {
+        status = TextView(this).apply {
             text = "Patrol smoke test running..."
             gravity = Gravity.CENTER
             textSize = 18f
         }
         setContentView(status)
+        runSmoke(Intent(intent))
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        runSmoke(Intent(intent))
+    }
+
+    private fun runSmoke(launchIntent: Intent) {
         if (!SmokeTestRunGate.tryStart()) {
             status.text = "Patrol smoke test already running or just finished"
             return
         }
-        val launchIntent = Intent(intent)
+        status.text = "Patrol smoke test running..."
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val file = SmokeTestRunner.run(applicationContext, launchIntent)
@@ -588,7 +602,7 @@ private object SmokeTestRunner {
                 } ?: "timeout"
             }
             runWifiMediaClientDownloadFirst(report, context, wifiMediaClient, wifiFiles, wifiMediaSyncOptions)
-            runWifiMediaDownloadFirst(report, coordinator, wifiMediaSyncOptions)
+            runWifiMediaDownloadFirst(report, context, coordinator, wifiMediaSyncOptions)
         }
     }
 
@@ -620,6 +634,7 @@ private object SmokeTestRunner {
 
     private suspend fun runWifiMediaDownloadFirst(
         report: SmokeReport,
+        context: Context,
         coordinator: PatrolCoordinator,
         options: SmokeWifiMediaSyncOptions
     ) {
@@ -653,6 +668,22 @@ private object SmokeTestRunner {
                     .filter { it.id == first.id || it.name == first.name || it.contentUri?.contains(first.name.substringBeforeLast('.')) == true }
                     .map { "${it.id}:${it.kind}:${it.size}:uri=${it.contentUri.orEmpty()}:status=${it.transferStatus}" }
             } ?: "timeout"
+        }
+        runStep(report, "UTE_BACKGROUND_UPLOAD_QUEUE_AFTER_DOWNLOAD") {
+            val local = withTimeoutOrNull(MediaCheckTimeoutMillis) {
+                coordinator.mediaFiles(local = true).firstOrNull {
+                    it.id == first.id && !it.contentUri.isNullOrBlank()
+                }
+            } ?: error("downloaded local media not indexed for upload queue: ${first.id}")
+            val taskGateway = WorkManagerBackgroundTaskGateway(context)
+            val receipt = OfflineSyncEngine(taskGateway).enqueueEvidenceUpload(first.id, System.currentTimeMillis())
+            val pending = taskGateway.pending()
+                .filter { it.task.id == receipt.task.id || it.task.payloadId == first.id }
+                .joinToString(separator = " | ") {
+                    "${it.task.id}:${it.task.type}:payload=${it.task.payloadId}:queued=${it.queued}"
+                }
+            check(pending.isNotBlank()) { "queued upload task not found: ${receipt.task.id}" }
+            "local=${local.id}:${local.kind}:${local.size}:uri=${local.contentUri.orEmpty()},receipt=${receipt.task.id},pending=$pending"
         }
     }
 
@@ -1265,7 +1296,7 @@ private object SmokeTestRunner {
     private const val MediaCheckTimeoutMillis = 12_000L
     private const val WifiMediaDiagnosticsTimeoutMillis = 35_000L
     private const val WifiMediaListSmokeTimeoutMillis = 70_000L
-    private const val WifiMediaDownloadTimeoutMillis = 90_000L
+    private const val WifiMediaDownloadTimeoutMillis = 5 * 60_000L
     private const val CommandNotifyProbeMillis = 45_000L
     private const val PairingNotifyProbeMillis = 8_000L
     private const val SmartAuthNotifyProbeMillis = 8_000L

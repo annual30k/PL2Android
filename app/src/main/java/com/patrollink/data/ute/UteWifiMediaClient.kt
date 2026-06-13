@@ -198,7 +198,8 @@ class UteWifiMediaClient(
         session: DeviceWifiSession
     ): File {
         val target = remote.localTarget(targetDirectory).also { it.parentFile?.mkdirs() }
-        val client = session.httpClient()
+        val temp = File(target.parentFile ?: targetDirectory, "${target.name}.part")
+        val client = session.downloadHttpClient()
         var lastFailure: String? = null
         remote.downloadUrls.distinct().forEach { url ->
             val response = runCatching {
@@ -216,12 +217,39 @@ class UteWifiMediaClient(
                     lastFailure = "$url -> empty body"
                     return@use
                 }
-                target.outputStream().use { output ->
-                    body.byteStream().copyTo(output)
+                runCatching { temp.delete() }
+                val copied = runCatching {
+                    temp.outputStream().use { output ->
+                        body.byteStream().copyTo(output)
+                    }
+                    temp.length()
+                }.getOrElse { throwable ->
+                    runCatching { temp.delete() }
+                    lastFailure = "$url -> ${throwable.message}"
+                    return@use
                 }
+                val expectedSize = remote.sizeBytes ?: body.contentLength().takeIf { length -> length > 0L }
+                val sizeError = validateDownloadedFileSize(copied, expectedSize)
+                if (sizeError != null) {
+                    runCatching { temp.delete() }
+                    lastFailure = "$url -> $sizeError"
+                    return@use
+                }
+                if (target.exists() && !target.delete()) {
+                    runCatching { temp.delete() }
+                    lastFailure = "$url -> unable to replace existing file"
+                    return@use
+                }
+                if (!temp.renameTo(target)) {
+                    runCatching { temp.delete() }
+                    lastFailure = "$url -> unable to finalize download"
+                    return@use
+                }
+                Log.i(Tag, "downloaded wifi media ${remote.name} bytes=$copied url=$url target=${target.absolutePath}")
                 return target
             }
         }
+        runCatching { temp.delete() }
         error("wifi media download failed: ${lastFailure ?: remote.url}")
     }
 
@@ -370,6 +398,17 @@ class UteWifiMediaClient(
         return builder.build()
     }
 
+    private fun DeviceWifiSession.downloadHttpClient(): OkHttpClient {
+        val builder = OkHttpClient.Builder()
+            .connectTimeout(HttpDownloadConnectTimeoutMillis, TimeUnit.MILLISECONDS)
+            .readTimeout(HttpDownloadReadTimeoutMillis, TimeUnit.MILLISECONDS)
+            .writeTimeout(HttpDownloadWriteTimeoutMillis, TimeUnit.MILLISECONDS)
+            .callTimeout(HttpDownloadCallTimeoutMillis, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(false)
+        network?.socketFactory?.let { builder.socketFactory(it) }
+        return builder.build()
+    }
+
     private fun DeviceWifiSession.probeUrls(): Sequence<String> =
         candidateHosts().asSequence()
             .take(ProbeHostLimit)
@@ -423,6 +462,10 @@ class UteWifiMediaClient(
         const val HttpConnectTimeoutMillis = 450L
         const val HttpReadTimeoutMillis = 900L
         const val HttpCallTimeoutMillis = 1_200L
+        const val HttpDownloadConnectTimeoutMillis = 5_000L
+        const val HttpDownloadReadTimeoutMillis = 30_000L
+        const val HttpDownloadWriteTimeoutMillis = 30_000L
+        const val HttpDownloadCallTimeoutMillis = 5 * 60 * 1_000L
         const val MaxDiscoveredFiles = 200
         const val ProbeHostLimit = 4
         const val DiagnosticProbeRequestLimit = 48
@@ -450,3 +493,9 @@ internal fun shouldTryPhoneConnectedWifiFallback(state: Int): Boolean =
 
 internal fun shouldPreferPhoneConnectedWifiBeforeSdkOpen(currentPhoneWifiOnly: Boolean): Boolean =
     !currentPhoneWifiOnly
+
+internal fun validateDownloadedFileSize(actualBytes: Long, expectedBytes: Long?): String? {
+    if (expectedBytes == null || expectedBytes <= 0L) return null
+    if (actualBytes == expectedBytes) return null
+    return "download size mismatch actual=$actualBytes expected=$expectedBytes"
+}

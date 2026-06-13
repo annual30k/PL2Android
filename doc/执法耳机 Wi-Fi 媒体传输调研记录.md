@@ -1542,3 +1542,268 @@ direct SDK 验证：
 - 文档/demo 仍说明 start/stop 命令值没有错。
 - 已确认并修正的错误点是：部分路径残留的录像参数和 SDK demo 不一致。
 - 还没有重跑真机 Glass 录像闭环；上一次 direct matrix 失败原因是 SDK 命令链路返回 408，不是本次参数修正的反证。
+
+### 2026-06-14 02:04 Glass 真机复测：录像命令链已通，设备端已有 video
+
+真机当前已安装包仍为 `2026-06-14 01:46:47`，即包含主录像 demo 参数和 direct matrix，但尚未安装 01:51 之后的 warmup 统一包。由于 MIUI 禁止 ADB 静默安装，新包已推送到手机：
+
+- `/sdcard/Download/PatrolLink-20260614-sdk-demo-warmup-activity-new-intent-debug.apk`
+
+本轮只测 `Glory Glass 2-00F7 / 78:02:B7:66:00:F7`，不测试 E1。
+
+direct matrix 结果：
+
+- 报告：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/smoke-test-20260614-real-glass-direct-video-files-present.txt`
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/logcat-20260614-real-glass-direct-video-files-present.txt`
+- 关键结果：
+  - `MATRIX_SET_RECORD_DIRECTION success=true,error=100000`
+  - `MATRIX_SET_RECORD_DURATION success=true,error=100000`
+  - `MATRIX_SET_VIDEO_PARAMETERS success=true,error=100000`
+  - `MATRIX_PHOTO_DIRECT success=true,error=100000`
+  - `MATRIX_VIDEO_START_DIRECT success=true,error=100000`
+  - `MATRIX_VIDEO_STOP_DIRECT success=true,error=100000`
+  - `MATRIX_GLASSES_INFO_AFTER_VIDEO ... video 0/2 ...`
+- 结论：
+  - 上一轮 408 是当时 SDK 控制链未恢复，不是 SDK demo 参数错误。
+  - Glass 当前可以通过 SDK demo 参数产生 video 文件，设备端已有视频计数。
+
+Wi-Fi video 下载尝试：
+
+- 报告：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/smoke-test-20260614-real-glass-wifi-video-broadcast-truncated-activity-rerun.txt`
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/logcat-20260614-real-glass-wifi-video-broadcast-truncated-activity-rerun.txt`
+- `BroadcastReceiver` 方式启动的 Wi-Fi 下载正确读取到参数：
+  - `WIFI_MEDIA_OPTIONS downloadFirst=true,downloadKind=Video`
+  - `DEVICE_CAPABILITIES supportsGlasses=true,supportsWifi=true,supportsPhoto=true,supportsVideo=true`
+  - `ENABLE_WIFI ... enabled=true,connected=true,ssid=UTE_00F7`
+  - `WAIT_WIFI_READY ready=true`
+- 但该长流程在 Android broadcast 等待超时后被截断，未跑到 `UTE_WIFI_MEDIA_LIST` / `UTE_WIFI_MEDIA_DOWNLOAD_FIRST`。
+- 截断时 Android 仍连接普通路由 `英英杀人女魔头5G`，未切到 `UTE_00F7`。
+
+代码修正：
+
+- `SmokeTestActivity` 增加 `onNewIntent(...)`，后续同一个 Activity 实例可以接收新的 smoke extras 并重新执行。
+- 之后长 Wi-Fi 下载验证应使用 `SmokeTestActivity`，不要使用 `SmokeTestReceiver`。
+
+验证：
+
+- 编译和目标测试通过：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.debug.SmokeWifiPreflightOptionsTest --tests com.patrollink.data.ute.UteCommandPolicyTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-sdk-demo-warmup-activity-new-intent-debug.apk`
+- 模拟器已安装新包：
+  - `lastUpdateTime=2026-06-14 02:04:44`
+
+当前结论：
+
+- Glass 的拍照、录像开始、录像停止命令链已闭环，且设备端确实有 video 文件。
+- 剩余关键闭环是：真机安装新包后，用 Activity 方式跑 Wi-Fi video 下载；如果 MIUI 仍不自动切到 `UTE_00F7`，需要用户手动连接手机到 `UTE_00F7` 后用 `wifiMediaOnly=true` 下载。
+
+### 2026-06-14 02:19 文档复核：命令未下错，视频下载半截问题已修复并真机闭环
+
+用户要求再次查看 KDocs/PDF 文档确认“是不是命令下错了”。本轮复核来源：
+
+- KDocs 当前浏览器页：`https://www.kdocs.cn/l/clTtBk8yvHED`
+- 本地同版本 PDF：`/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/UteWatchSDK_Android炬芯_V1.3.5/UteWatchSDK_Android炬芯_使用说明文档_V1.3.5.pdf`
+- 同版本 demo：`UteWatchSdkDemohx/.../smartglasses/SmartGlassesActivity.java`
+
+文档结论：
+
+- Wi-Fi 命令没有少下第二条隐藏启动命令：
+  - 获取 Wi-Fi：`smartGetDeviceWiFiInfo()`
+  - 打开/关闭 Wi-Fi：`smartSetDeviceWiFiSwitch(boolean enable)`
+  - 单独查询状态：`smartGetDeviceWiFiStateInfo()`
+  - 状态 `IFI_AP_READY=0x7`、`IFI_AP_CONNECT=0x8` 是设备后续通知/轮询结果。
+- 眼镜录像命令链没有下错：
+  - `setGlassesRecordingDirection(VERTICAL_SCREEN)`
+  - `setGlassesRecordingDuration(24 * 60 * 60)`
+  - `setVideoParameters(240, 0, 16)`
+  - `toggleGlassesVideoRecording(RECORDING_STATE_START)`
+  - 停止录像：`toggleGlassesVideoRecording(RECORDING_STATE_STOP)`
+- 拍照命令没有下错：`triggerGlassesPhotoCapture(SmartGpsInfo?)`。
+- 当前 Glass 能力读取仍显示不支持录音：`supportsAudioRecord=false`。眼镜端录音不能按已闭环能力计入；E1 本轮按用户要求不再测试。
+
+发现的真实问题：
+
+- 不是 BLE 命令下错，而是 Wi-Fi 视频下载用的是探测用短超时：
+  - `connect=450ms`
+  - `read=900ms`
+  - `call=1200ms`
+- 这会导致 15.1 MB mp4 只写入约 3.4 MB 半截文件，但旧代码直接写正式目标文件，没有 `.part` 和大小校验。
+
+代码修正：
+
+- `UteWifiMediaClient.downloadRemoteFile(...)`：
+  - 列表/诊断继续使用短超时；
+  - 大文件下载改为下载专用 client：`connect=5s`、`read=30s`、`write=30s`、`call=5min`；
+  - 先写同目录 `.part`；
+  - 使用设备 `/media/list` 返回的 size 或 HTTP `Content-Length` 校验字节数；
+  - 校验通过后再 rename 到正式文件；
+  - 失败时删除 `.part`，避免媒体页出现半截视频。
+- debug smoke 的视频下载等待窗口从 `90s` 调整为 `5min`。
+
+验证：
+
+- 编译和单测通过：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.data.ute.UteWifiMediaClientTest --tests com.patrollink.debug.SmokeWifiPreflightOptionsTest --tests com.patrollink.data.ute.UteCommandPolicyTest --console=plain`
+  - `./gradlew :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-wifi-video-complete-download-debug.apk`
+- 真机和模拟器均已安装：
+  - 真机 `lastUpdateTime=2026-06-14 02:17:12`
+  - 模拟器 `lastUpdateTime=2026-06-14 02:16:21`
+
+真机 Glass Wi-Fi video 闭环：
+
+- 目标：`Glory Glass 2-00F7 / 78:02:B7:66:00:F7`，未测试 E1。
+- 报告：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/smoke-test-20260614-real-glass-wifi-video-download-complete.txt`
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/logcat-20260614-real-glass-wifi-video-download-complete.txt`
+- 关键结果：
+  - `SELECT_DEVICE Glory Glass 2-00F7 78:02:B7:66:00:F7 type=Glasses`
+  - `BIND_DEVICE_ONLINE ... type=Glasses,online=true`
+  - `READ_WIFI state=8,ssid=UTE_00F7`
+  - `WIFI_ANDROID_NETWORK ssid="UTE_00F7", ip=192.168.222.101`
+  - `UTE_WIFI_MEDIA_DIAGNOSTICS` 命中 `http://192.168.222.1:8000/media/list`
+  - `UTE_WIFI_MEDIA_LIST` 识别到 3 个 video 文件。
+  - `UTE_WIFI_DIRECT_DOWNLOAD_FIRST ... 20260614013929770.mp4:15788258`
+  - `UTE_WIFI_MEDIA_DOWNLOAD_FIRST ... status=Done,target=PhoneSandbox ... uri=file:///data/user/0/com.patrollink/files/patrol_media/ute/20260614013929770.mp4,size=15.1 MB`
+  - 真机沙盒实际文件：`/data/user/0/com.patrollink/files/patrol_media/ute/20260614013929770.mp4`，大小 `15,788,258` 字节。
+
+后台上传队列说明：
+
+- 本次 smoke 直接走底层 `coordinator.transferMedia(..., PhoneSandbox)`，不经过媒体页 ViewModel，所以 Room `offline_tasks` 没新增任务是预期现象。
+- 媒体页按钮路径由 `PatrolViewModel.syncDeviceMediaToPhone(refreshFirst=true)` 执行；对应单测已通过，确认设备文件下载成功后会调用 `enqueueEvidenceUploadIfLocal(...)` 加入 `UploadEvidence` 后台任务队列。
+
+当前结论：
+
+- 按文档复核，拍照、录像、Wi-Fi 开启命令没有下错。
+- 录像参数和 Glory View demo 已统一。
+- Glass 的视频文件通过设备热点下载到 PatrolLink 手机端媒体文件已真机闭环。
+- Glass 当前仍不支持录音；录音文件闭环需要后续 E1 可测时再验证。
+
+### 2026-06-14 02:25 真机补证：视频同步后后台上传任务已入队
+
+上一轮 smoke 证明了 Glass 视频能完整下载到 App 沙盒，但该 smoke 直接走底层 `coordinator.transferMedia(..., PhoneSandbox)`，没有经过媒体页 ViewModel，所以没有直接证明后台上传队列。
+
+本轮补充 debug smoke 验证步骤：
+
+- 新增 `UTE_BACKGROUND_UPLOAD_QUEUE_AFTER_DOWNLOAD`：
+  - 先确认 `coordinator.mediaFiles(local=true)` 已经能找到同 id 的本地视频和 `contentUri`；
+  - 再调用正式后台任务路径 `OfflineSyncEngine(WorkManagerBackgroundTaskGateway).enqueueEvidenceUpload(...)`；
+  - 最后读取 pending 队列，确认 `UploadEvidence` 任务存在。
+
+验证：
+
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-wifi-video-upload-queue-debug.apk`
+- 安装时间：
+  - 真机 `lastUpdateTime=2026-06-14 02:23:22`
+  - 模拟器 `lastUpdateTime=2026-06-14 02:23:17`
+- 模拟器已启动最新 PatrolLink：
+  - PID `31976`
+  - 当前焦点 `com.patrollink/com.patrollink.MainActivity`
+- 目标仍为 Glass，不测试 E1：
+  - `Glory Glass 2-00F7 / 78:02:B7:66:00:F7`
+
+报告：
+
+- `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/smoke-test-20260614-real-glass-wifi-video-upload-queue.txt`
+- `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports/logcat-20260614-real-glass-wifi-video-upload-queue.txt`
+
+关键结果：
+
+- `SELECT_DEVICE Glory Glass 2-00F7 78:02:B7:66:00:F7 type=Glasses`
+- `READ_WIFI state=8,ssid=UTE_00F7`
+- `WIFI_ANDROID_NETWORK ssid="UTE_00F7", ip=192.168.222.101`
+- `UTE_WIFI_MEDIA_LIST` 识别到 3 个 video 文件。
+- `UTE_WIFI_DIRECT_DOWNLOAD_FIRST ... 20260614013929770.mp4:15788258`
+- `UTE_WIFI_MEDIA_DOWNLOAD_FIRST ... status=Done,target=PhoneSandbox ... uri=file:///data/user/0/com.patrollink/files/patrol_media/ute/20260614013929770.mp4,size=15.1 MB`
+- `UTE_BACKGROUND_UPLOAD_QUEUE_AFTER_DOWNLOAD ... receipt=upload-evidence-ute-wifi-0b39037a5ba6cff9,pending=upload-evidence-ute-wifi-0b39037a5ba6cff9:UploadEvidence:payload=ute-wifi-0b39037a5ba6cff9:queued=true`
+
+Room 数据库复核：
+
+- `offline_tasks`：
+  - `id=upload-evidence-ute-wifi-0b39037a5ba6cff9`
+  - `type=UploadEvidence`
+  - `payloadId=ute-wifi-0b39037a5ba6cff9`
+  - `queued=1`
+  - `retryCount=0`
+- `media_index`：
+  - `PHONE:ute-wifi-0b39037a5ba6cff9`
+  - `kind=Video`
+  - `size=15.1 MB`
+  - `localPath=file:///data/user/0/com.patrollink/files/patrol_media/ute/20260614013929770.mp4`
+
+当前结论：
+
+- Glass 视频从设备热点传到 PatrolLink 媒体文件，再进入后台 `UploadEvidence` 队列，已在真机闭环。
+- 媒体页 ViewModel 路径已有单测覆盖：`syncDeviceMediaToPhone(refreshFirst=true)` 下载成功后会调用 `enqueueEvidenceUploadIfLocal(...)`。
+- 剩余未闭环项仍是录音文件：Glass 当前不支持录音，E1 本轮按用户要求不测试。
+
+### 2026-06-14 02:30 设备页隐藏无能力录音按钮
+
+用户明确要求：没有录音能力时，设备页不要显示录音按钮。
+
+代码修正：
+
+- `DeviceScreen.HeadsetActions(...)`：
+  - 只有 `capabilities.supportsAudioRecord == true` 时才显示“耳机录音/停止录音”按钮。
+  - 不支持录音时不显示占位按钮，动作区只保留拍照、执法录像等可用能力。
+- `PatrolViewModel.toggleTalk()`：
+  - ViewModel 层也统一走 `prepareDeviceForCommand(capabilityReady = supportsAudioRecord)`。
+  - 即使绕过 UI 直接调用，也不会给不支持录音的 Glass 下发 `StartTalk/StopTalk`。
+
+验证：
+
+- 单测新增并通过：
+  - `unsupportedGlassAudioDoesNotSendRecordCommand`
+  - 覆盖 `Glory Glass 2-00F7` 能力 `supportsAudioRecord=false` 时，`toggleTalk()` 不调用 `DeviceGateway.sendCommand()`。
+- 编译和测试：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-hide-unsupported-audio-debug.apk`
+- 安装时间：
+  - 真机 `lastUpdateTime=2026-06-14 02:30:17`
+  - 模拟器 `lastUpdateTime=2026-06-14 02:30:14`
+- 真机 UI 树检查：
+  - 当前设备页为 `Glory Glass 2-00F7`。
+  - UI 树未出现 `耳机录音` 或 `停止录音` 文本。
+
+当前结论：
+
+- 对不支持录音的 Glass，设备页不再显示录音按钮。
+- 代码层也防止误下发录音命令。
+
+### 2026-06-14 02:35 设备页完全隐藏无能力录音项
+
+在 02:30 版本基础上继续收紧：
+
+- `DeviceScreen.HeadsetCapabilityCard(...)`：
+  - 当 `capabilities.supportsAudioRecord == false` 时，不再显示“耳机录音：当前设备不支持”状态行。
+  - Glass 设备页只展示其支持的能力和基础状态。
+
+验证：
+
+- 编译和测试：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-hide-unsupported-audio-row-debug.apk`
+- 安装时间：
+  - 模拟器 `lastUpdateTime=2026-06-14 02:35:09`
+  - 真机 `lastUpdateTime=2026-06-14 02:35:11`
+- 真机 UI 树检查：
+  - `Glory Glass 2-00F7`: 2
+  - `E1`: 0
+  - `耳机录音`: 0
+  - `停止录音`: 0
+  - `当前设备不支持`: 0
+
+当前结论：
+
+- 对不支持录音的 Glass，设备页不再显示录音按钮，也不再显示录音能力状态行。

@@ -17,9 +17,19 @@ class UteWifiProbeCatalogTest {
 
     @Test
     fun includesCommonDeviceApGatewaysBeforeLanFallbacks() {
+        assertTrue("192.168.222.1" in UteWifiProbeCatalog.DefaultHosts)
         assertTrue(UteWifiProbeCatalog.DefaultHosts.indexOf("192.168.4.1") < UteWifiProbeCatalog.DefaultHosts.indexOf("192.168.1.1"))
+        assertTrue(UteWifiProbeCatalog.DefaultHosts.indexOf("192.168.222.1") < UteWifiProbeCatalog.DefaultHosts.indexOf("192.168.1.1"))
         assertTrue("192.168.43.1" in UteWifiProbeCatalog.DefaultHosts)
         assertTrue("192.168.49.1" in UteWifiProbeCatalog.DefaultHosts)
+    }
+
+    @Test
+    fun separatesDeviceApHostsFromLanRouterFallbacks() {
+        assertTrue("192.168.4.1" in UteWifiProbeCatalog.DeviceApFallbackHosts)
+        assertTrue("192.168.222.1" in UteWifiProbeCatalog.DeviceApFallbackHosts)
+        assertTrue("192.168.1.1" !in UteWifiProbeCatalog.DeviceApFallbackHosts)
+        assertTrue("192.168.1.1" in UteWifiProbeCatalog.LanGatewayFallbackHosts)
     }
 
     @Test

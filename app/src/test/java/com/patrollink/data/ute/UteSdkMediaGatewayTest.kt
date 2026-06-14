@@ -27,4 +27,38 @@ class UteSdkMediaGatewayTest {
         assertNull(wifiDeviceFileNameForDelete("ute-wifi-abcd", null))
         assertNull(wifiDeviceFileNameForDelete("ute-wifi-abcd", ""))
     }
+
+    @Test
+    fun webUiAssetPredicateCoversAiGlassPlaceholderImage() {
+        assertEquals(true, "pictures_ute.jpg".isLikelyWebUiAssetPath())
+        assertEquals(false, "20260613144750407.jpg".isLikelyWebUiAssetPath())
+    }
+
+    @Test
+    fun wifiMediaListFailurePropagatesBeforeBackendFallbackWhenNoSdkFilesExist() {
+        assertEquals(
+            true,
+            shouldPropagateWifiMediaListFailure(
+                hasWifiMediaClient = true,
+                wifiFilesFailure = IllegalStateException("设备账号不一致"),
+                sdkFilesEmpty = true
+            )
+        )
+        assertEquals(
+            false,
+            shouldPropagateWifiMediaListFailure(
+                hasWifiMediaClient = true,
+                wifiFilesFailure = IllegalStateException("设备账号不一致"),
+                sdkFilesEmpty = false
+            )
+        )
+        assertEquals(
+            false,
+            shouldPropagateWifiMediaListFailure(
+                hasWifiMediaClient = false,
+                wifiFilesFailure = IllegalStateException("设备账号不一致"),
+                sdkFilesEmpty = true
+            )
+        )
+    }
 }

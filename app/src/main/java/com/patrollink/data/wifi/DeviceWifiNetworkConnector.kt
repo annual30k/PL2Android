@@ -36,6 +36,7 @@ class DeviceWifiNetworkConnector(
         require(ssid.isNotBlank()) { "device wifi ssid is blank" }
         currentSession(ssid)?.let { return@withContext it }
         val bssid = scanForDeviceWifi(ssid)
+        connectWithSavedNetwork(ssid, timeoutMillis)?.let { return@withContext it }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             runCatching { connectWithSpecifier(ssid, password, VisibleFirstTimeoutMillis, hiddenSsid = false, bssid = bssid) }
                 .getOrElse { visibleError ->
@@ -53,6 +54,51 @@ class DeviceWifiNetworkConnector(
 
     suspend fun currentSession(ssid: String): DeviceWifiSession? = withContext(Dispatchers.IO) {
         currentWifiSession(ssid)
+    }
+
+    @SuppressLint("MissingPermission")
+    suspend fun currentWifiSsid(): String? = withContext(Dispatchers.IO) {
+        wifiManager?.connectionInfo?.ssid
+            ?.unquoteWifiValue()
+            ?.takeUnless { it.isBlank() || it == "<unknown ssid>" }
+    }
+
+    @Suppress("DEPRECATION")
+    @SuppressLint("MissingPermission")
+    private suspend fun connectWithSavedNetwork(
+        ssid: String,
+        timeoutMillis: Long
+    ): DeviceWifiSession? {
+        val wifi = wifiManager ?: return null
+        val quotedSsid = ssid.quoteWifiValue()
+        val networkId = runCatching {
+            wifi.configuredNetworks
+                ?.firstOrNull { it.SSID == quotedSsid }
+                ?.networkId
+        }.getOrNull() ?: return null
+        Log.i(Tag, "connecting saved device wifi ssid=$ssid networkId=$networkId")
+        val enabled = runCatching { wifi.enableNetwork(networkId, true) }
+            .onFailure { Log.w(Tag, "enable saved device wifi failed for $ssid: ${it.message}") }
+            .getOrElse { return null }
+        if (!enabled) {
+            Log.w(Tag, "enable saved device wifi returned false for $ssid networkId=$networkId")
+            return null
+        }
+        runCatching { wifi.reconnect() }
+            .onFailure { Log.w(Tag, "reconnect saved device wifi failed for $ssid: ${it.message}") }
+        val connected = withTimeoutOrNull(timeoutMillis) {
+            var session: DeviceWifiSession? = null
+            while (session == null) {
+                session = currentWifiSession(ssid)
+                if (session != null) break
+                delay(SavedNetworkPollMillis)
+            }
+            session
+        }
+        if (connected == null) {
+            Log.w(Tag, "saved device wifi connect timed out ssid=$ssid networkId=$networkId")
+        }
+        return connected
     }
 
     @SuppressLint("MissingPermission")
@@ -257,6 +303,7 @@ class DeviceWifiNetworkConnector(
         const val VisibleFirstTimeoutMillis = 15_000L
         const val RequestCallbackGraceMillis = 1_000L
         const val LegacyPollMillis = 500L
+        const val SavedNetworkPollMillis = 500L
         const val PreScanSettleMillis = 4_000L
         const val SuggestionPollMillis = 1_000L
         const val Tag = "DeviceWifiConnector"

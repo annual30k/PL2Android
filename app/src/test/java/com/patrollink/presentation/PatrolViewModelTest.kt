@@ -1,8 +1,11 @@
 package com.patrollink.presentation
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import com.patrollink.data.MockPatrolCoordinatorFactory
 import com.patrollink.data.MockVersionGateway
@@ -273,7 +276,7 @@ class PatrolViewModelTest {
         assertEquals(listOf(devicePhoto.id), gateway.downloadedIds)
         assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == devicePhoto.id && it.local && it.contentUri != null })
         assertEquals(listOf(devicePhoto.id), taskGateway.pending().map { it.task.payloadId })
-        assertEquals("已同步 1 个设备文件到手机，后台上传任务已加入队列", viewModel.uiState.value.operationMessage?.text)
+        assertEquals("已同步 1 个设备文件到手机本地媒体文件，设备热点保持连接", viewModel.uiState.value.operationMessage?.text)
     }
 
     @Test
@@ -315,6 +318,318 @@ class PatrolViewModelTest {
     }
 
     @Test
+    fun syncDeviceMediaToPhoneKeepsSelectedFileWhenRefreshChangesDeviceFileId() = runTest {
+        val staleDevicePhoto = MediaFile(
+            id = "ute-wifi-stale-url-id",
+            name = "眼镜照片_20260614011639379.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "3 MB",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val refreshedDevicePhoto = staleDevicePhoto.copy(id = "ute-wifi-refreshed-url-id")
+        val gateway = BatchDownloadingMediaGateway(
+            remote = listOf(staleDevicePhoto),
+            local = emptyList(),
+            downloadedFiles = mapOf(
+                refreshedDevicePhoto.id to temp.newFile("20260614011639379.jpg").apply {
+                    writeBytes(byteArrayOf(1, 2, 3, 4))
+                }
+            )
+        )
+        val taskGateway = InMemoryBackgroundTaskGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(gateway),
+            offlineSyncEngine = OfflineSyncEngine(taskGateway)
+        )
+        loginForTest(viewModel)
+
+        gateway.remote = listOf(refreshedDevicePhoto)
+        viewModel.syncDeviceMediaToPhone(setOf(staleDevicePhoto.id), refreshFirst = true)
+        advanceUntilIdle()
+
+        assertEquals(listOf(refreshedDevicePhoto.id), gateway.downloadedIds)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == refreshedDevicePhoto.id && it.local && it.contentUri != null })
+        assertEquals(listOf(refreshedDevicePhoto.id), taskGateway.pending().map { it.task.payloadId })
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneLetsMediaGatewayOwnWifiWhileRefreshingDeviceFiles() = runTest {
+        val events = mutableListOf<String>()
+        val deviceVideo = MediaFile(
+            id = "ute-wifi-video-ready-1",
+            name = "GX010099.MP4",
+            kind = com.patrollink.domain.MediaKind.Video,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = OrderRecordingMediaGateway(
+            events = events,
+            remote = listOf(deviceVideo),
+            downloadedFiles = mapOf(
+                deviceVideo.id to temp.newFile("GX010099.MP4").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            )
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            deviceControlGateway = TrackingWifiControlGateway(events)
+        )
+        loginForTest(viewModel)
+        events.clear()
+
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        advanceUntilIdle()
+
+        assertTrue("expected media gateway to list device files, events=$events", events.contains("listDevice"))
+        assertFalse("expected ViewModel not to duplicate device wifi open, events=$events", events.contains("configureWifi:true"))
+        assertEquals(listOf(deviceVideo.id), mediaGateway.downloadedIds)
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneLetsMediaGatewayOwnWifiWhileTransferringExistingDeviceFiles() = runTest {
+        val events = mutableListOf<String>()
+        val devicePhoto = MediaFile(
+            id = "ute-wifi-photo-existing-1",
+            name = "IMG_EXISTING.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = OrderRecordingMediaGateway(
+            events = events,
+            remote = listOf(devicePhoto),
+            downloadedFiles = mapOf(
+                devicePhoto.id to temp.newFile("IMG_EXISTING.jpg").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            )
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            deviceControlGateway = TrackingWifiControlGateway(events)
+        )
+        loginForTest(viewModel)
+        events.clear()
+
+        viewModel.syncDeviceMediaToPhone()
+        advanceUntilIdle()
+
+        assertTrue("expected transfer through media gateway, events=$events", events.contains("transfer:${devicePhoto.id}"))
+        assertFalse("expected ViewModel not to duplicate device wifi open, events=$events", events.contains("configureWifi:true"))
+    }
+
+    @Test
+    fun downloadMediaLetsMediaGatewayOwnWifiForDeviceWifiFile() = runTest {
+        val events = mutableListOf<String>()
+        val devicePhoto = MediaFile(
+            id = "ute-wifi-photo-single-1",
+            name = "IMG_SINGLE.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = OrderRecordingMediaGateway(
+            events = events,
+            remote = listOf(devicePhoto),
+            downloadedFiles = mapOf(
+                devicePhoto.id to temp.newFile("IMG_SINGLE.jpg").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            )
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            deviceControlGateway = TrackingWifiControlGateway(events)
+        )
+        loginForTest(viewModel)
+        events.clear()
+
+        viewModel.downloadMedia(devicePhoto.id)
+        advanceUntilIdle()
+
+        assertTrue("expected transfer through media gateway, events=$events", events.contains("transfer:${devicePhoto.id}"))
+        assertFalse("expected ViewModel not to duplicate device wifi open, events=$events", events.contains("configureWifi:true"))
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneKeepsDeviceWifiOpenAfterTransferFinishes() = runTest {
+        val events = mutableListOf<String>()
+        val devicePhoto = MediaFile(
+            id = "ute-wifi-photo-close-1",
+            name = "IMG_CLOSE.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = OrderRecordingMediaGateway(
+            events = events,
+            remote = listOf(devicePhoto),
+            downloadedFiles = mapOf(
+                devicePhoto.id to temp.newFile("IMG_CLOSE.jpg").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+            )
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            deviceControlGateway = TrackingWifiControlGateway(events)
+        )
+        loginForTest(viewModel)
+        events.clear()
+
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        advanceUntilIdle()
+
+        assertTrue("expected transfer to finish, events=$events", events.contains("transfer:${devicePhoto.id}"))
+        assertFalse("expected device wifi to stay open after transfer, events=$events", events.contains("configureWifi:false"))
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneNotifiesDeviceOnlyAfterWholeBatchFinishes() = runTest {
+        val events = mutableListOf<String>()
+        val first = MediaFile(
+            id = "ute-wifi-photo-batch-1",
+            name = "IMG_BATCH_1.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val second = first.copy(
+            id = "ute-wifi-photo-batch-2",
+            name = "IMG_BATCH_2.jpg"
+        )
+        val mediaGateway = OrderRecordingMediaGateway(
+            events = events,
+            remote = listOf(first, second),
+            downloadedFiles = mapOf(
+                first.id to temp.newFile("IMG_BATCH_1.jpg").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) },
+                second.id to temp.newFile("IMG_BATCH_2.jpg").apply { writeBytes(byteArrayOf(5, 6, 7, 8)) }
+            )
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            deviceControlGateway = TrackingWifiControlGateway(events)
+        )
+        loginForTest(viewModel)
+        events.clear()
+
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        advanceUntilIdle()
+
+        assertEquals(
+            "expected one device sync-complete notification after all batch transfers, events=$events",
+            listOf("notifyMediaSyncCompleted"),
+            events.filter { it == "notifyMediaSyncCompleted" }
+        )
+        assertTrue(
+            "expected final notify after second transfer, events=$events",
+            events.indexOf("transfer:${second.id}") < events.indexOf("notifyMediaSyncCompleted")
+        )
+        assertFalse("expected device wifi to stay open after batch sync, events=$events", events.contains("configureWifi:false"))
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneRetriesFailedDeviceDownloadWithoutClosingDeviceWifi() = runTest {
+        val events = mutableListOf<String>()
+        val devicePhoto = MediaFile(
+            id = "ute-wifi-photo-retry-1",
+            name = "IMG_RETRY.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = FlakyDownloadingMediaGateway(
+            events = events,
+            remote = devicePhoto,
+            localFile = temp.newFile("IMG_RETRY.jpg").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            deviceControlGateway = TrackingWifiControlGateway(events)
+        )
+        loginForTest(viewModel)
+        events.clear()
+
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        advanceUntilIdle()
+
+        assertEquals(2, mediaGateway.transferAttempts)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == devicePhoto.id && it.local && it.contentUri != null })
+        assertEquals("已同步 1 个设备文件到手机本地媒体文件，设备热点保持连接", viewModel.uiState.value.operationMessage?.text)
+        assertFalse("expected retry to keep device hotspot open, events=$events", events.contains("configureWifi:false"))
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneIgnoresDuplicateTapWhileTransferIsActive() = runTest {
+        val devicePhoto = MediaFile(
+            id = "ute-wifi-photo-duplicate-1",
+            name = "IMG_DUP.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val release = CompletableDeferred<Unit>()
+        val mediaGateway = BlockingDownloadingMediaGateway(remote = devicePhoto, release = release)
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(mediaGateway),
+            deviceControlGateway = TrackingWifiControlGateway(mutableListOf())
+        )
+        loginForTest(viewModel)
+
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        runCurrent()
+
+        assertTrue(viewModel.uiState.value.deviceMediaSync.active)
+        assertEquals(devicePhoto.id, viewModel.uiState.value.deviceMediaSync.fileId)
+        assertEquals(devicePhoto.name, viewModel.uiState.value.deviceMediaSync.fileName)
+        assertEquals(1, viewModel.uiState.value.deviceMediaSync.totalCount)
+
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        runCurrent()
+
+        assertEquals(1, mediaGateway.transferAttempts)
+        assertEquals("正在同步设备文件，请稍候", viewModel.uiState.value.operationMessage?.text)
+
+        release.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.deviceMediaSync.active)
+    }
+
+    @Test
     fun refreshMediaFilesRemovesStaleDeviceFilesWhenDeviceReportsEmpty() = runTest {
         val remote = MediaFile(
             id = "ute-wifi-stale-video",
@@ -338,6 +653,97 @@ class PatrolViewModelTest {
         advanceUntilIdle()
 
         assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == remote.id && !it.local })
+    }
+
+    @Test
+    fun refreshMediaFilesMarksDeviceFilesAlreadyPresentInPhoneSandbox() = runTest {
+        val deviceFile = MediaFile(
+            id = "ute-wifi-existing-phone-1",
+            name = "IMG_EXISTING.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "1 MB",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val localFile = deviceFile.copy(
+            local = true,
+            contentUri = "file:///data/user/0/com.patrollink/files/patrol_media/ute/IMG_EXISTING.jpg"
+        )
+        val mediaGateway = MutableListingMediaGateway(remote = listOf(deviceFile), local = listOf(localFile))
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
+        loginForTest(viewModel)
+
+        val deviceCopy = viewModel.uiState.value.mediaFiles.single { it.id == deviceFile.id && !it.local }
+        val phoneCopy = viewModel.uiState.value.mediaFiles.single { it.id == deviceFile.id && it.local }
+        assertEquals(TransferStatus.Done, deviceCopy.transferStatus)
+        assertEquals(TransferTarget.PhoneSandbox, deviceCopy.lastTransferTarget)
+        assertEquals(localFile.contentUri, phoneCopy.contentUri)
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneSkipsSameNamedLocalSandboxCopyWithDifferentId() = runTest {
+        val deviceFile = MediaFile(
+            id = "ute-wifi-existing-phone-2",
+            name = "眼镜照片_20260613152349823.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "1 MB",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val localFile = deviceFile.copy(
+            id = "ute-photo-20260613152349823",
+            local = true,
+            contentUri = "file:///data/user/0/com.patrollink/files/patrol_media/ute/20260613152349823.jpg"
+        )
+        val mediaGateway = MutableListingMediaGateway(remote = listOf(deviceFile), local = listOf(localFile))
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
+        loginForTest(viewModel)
+
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        advanceUntilIdle()
+
+        val deviceCopy = viewModel.uiState.value.mediaFiles.single { it.id == deviceFile.id && !it.local }
+        assertEquals(TransferStatus.Done, deviceCopy.transferStatus)
+        assertEquals(TransferTarget.PhoneSandbox, deviceCopy.lastTransferTarget)
+        assertEquals("设备端文件已在手机端，无需重复同步", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun syncDeviceMediaToPhoneRefreshFailureRemovesStaleDeviceFiles() = runTest {
+        val remote = MediaFile(
+            id = "ute-wifi-stale-sync-photo",
+            name = "stale-photo.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "1 MB",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f
+        )
+        val mediaGateway = MutableListingMediaGateway(remote = listOf(remote))
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
+        loginForTest(viewModel)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == remote.id && !it.local })
+
+        mediaGateway.remoteFailure = IllegalStateException("device wifi switch rejected: error=100000,data=false")
+        viewModel.syncDeviceMediaToPhone(refreshFirst = true)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == remote.id && !it.local })
+        assertEquals(
+            "设备文件读取失败：device wifi switch rejected: error=100000,data=false；请确认手机已连接设备热点后重试",
+            viewModel.uiState.value.operationMessage?.text
+        )
     }
 
     @Test
@@ -384,7 +790,7 @@ class PatrolViewModelTest {
             local = true,
             transferStatus = TransferStatus.Idle,
             progress = 0f,
-            contentUri = localFile.toURI().toString()
+            contentUri = localFile.absolutePath
         )
         val taskGateway = InMemoryBackgroundTaskGateway()
         val viewModel = testViewModel(
@@ -399,6 +805,139 @@ class PatrolViewModelTest {
         val queued = taskGateway.pending().single().task
         assertEquals(BackgroundTaskType.UploadEvidence, queued.type)
         assertEquals(media.id, queued.payloadId)
+        assertTrue(viewModel.uiState.value.mediaFiles.single { it.id == media.id && it.local }.contentUri?.isNotBlank() == true)
+    }
+
+    @Test
+    fun failedCloudUploadKeepsLocalPreviewPlayable() = runTest {
+        val localFile = temp.newFile("failed-upload-preview.jpg").apply { writeBytes(byteArrayOf(7, 8, 9)) }
+        val media = MediaFile(
+            id = "ute-wifi-failed-upload-preview",
+            name = "failed-upload-preview.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "3 B",
+            duration = null,
+            verified = true,
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = localFile.absolutePath
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(FailingCloudMediaGateway(media))
+        )
+        loginForTest(viewModel)
+
+        viewModel.uploadMedia(media.id, local = true)
+        advanceUntilIdle()
+        viewModel.openMediaPreview(media.id, local = true)
+        advanceUntilIdle()
+
+        assertEquals(media.id, viewModel.uiState.value.previewMediaFile?.id)
+        assertTrue(viewModel.uiState.value.previewMediaFile?.contentUri?.isNotBlank() == true)
+    }
+
+    @Test
+    fun successfulCloudUploadClosesPreviewAndShowsSuccessMessage() = runTest {
+        val localFile = temp.newFile("cloud-upload.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val media = MediaFile(
+            id = "ute-wifi-cloud-upload",
+            name = "cloud-upload.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "3 B",
+            duration = null,
+            verified = true,
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = localFile.toURI().toString()
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(SuccessfulCloudMediaGateway(media))
+        )
+        loginForTest(viewModel)
+        viewModel.openMediaPreview(media.id, local = true)
+        advanceUntilIdle()
+
+        viewModel.uploadMedia(media.id, local = true)
+        advanceUntilIdle()
+
+        assertEquals(null, viewModel.uiState.value.previewMediaFile)
+        assertEquals("cloud-upload.jpg 已上传云端", viewModel.uiState.value.operationMessage?.text)
+        val uploaded = viewModel.uiState.value.mediaFiles.single { it.id == media.id && it.local }
+        assertEquals(TransferStatus.Done, uploaded.transferStatus)
+        assertEquals(TransferTarget.Cloud, uploaded.lastTransferTarget)
+        assertEquals(localFile.toURI().toString(), uploaded.contentUri)
+    }
+
+    @Test
+    fun consecutivePhoneMediaCloudUploadsBothComplete() = runTest {
+        val firstFile = temp.newFile("cloud-upload-1.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val secondFile = temp.newFile("cloud-upload-2.jpg").apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        val first = MediaFile(
+            id = "ute-wifi-cloud-upload-1",
+            name = "cloud-upload-1.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "3 B",
+            duration = null,
+            verified = true,
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = firstFile.toURI().toString()
+        )
+        val second = first.copy(
+            id = "ute-wifi-cloud-upload-2",
+            name = "cloud-upload-2.jpg",
+            contentUri = secondFile.toURI().toString()
+        )
+        val gateway = MultiSuccessfulCloudMediaGateway(listOf(first, second))
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(gateway))
+        loginForTest(viewModel)
+
+        viewModel.uploadMedia(first.id, local = true)
+        advanceUntilIdle()
+        viewModel.uploadMedia(second.id, local = true)
+        advanceUntilIdle()
+
+        assertEquals(listOf(first.id, second.id), gateway.uploadedIds)
+        val uploaded = viewModel.uiState.value.mediaFiles.filter { it.local && it.lastTransferTarget == TransferTarget.Cloud }
+        assertTrue(uploaded.any { it.id == first.id && it.transferStatus == TransferStatus.Done })
+        assertTrue(uploaded.any { it.id == second.id && it.transferStatus == TransferStatus.Done })
+        assertEquals("cloud-upload-2.jpg 已上传云端", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun refreshMediaFilesExposesLoadingStateBeforeLocalMediaArrives() = runTest {
+        val localFile = temp.newFile("local-delayed.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val media = MediaFile(
+            id = "ute-photo-local-delayed",
+            name = "local-delayed.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "3 B",
+            duration = null,
+            verified = true,
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = localFile.toURI().toString()
+        )
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(DelayedLocalListingMediaGateway(media))
+        )
+        loginForTest(viewModel)
+
+        viewModel.refreshMediaFiles()
+        runCurrent()
+
+        assertTrue(viewModel.uiState.value.mediaLoading)
+        advanceUntilIdle()
+        assertFalse(viewModel.uiState.value.mediaLoading)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == media.id && it.local })
     }
 
     @Test
@@ -735,6 +1274,47 @@ private class FailingCloudMediaGateway(private val localMedia: MediaFile) : Medi
     override suspend fun verifySha256(fileId: String): Boolean = false
 }
 
+private class SuccessfulCloudMediaGateway(private val localMedia: MediaFile) : MediaGateway {
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) listOf(localMedia) else emptyList()
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        emit(localMedia.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f, lastTransferTarget = target))
+        emit(localMedia.copy(transferStatus = TransferStatus.Done, progress = 1f, lastTransferTarget = target))
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class MultiSuccessfulCloudMediaGateway(private val localMedia: List<MediaFile>) : MediaGateway {
+    val uploadedIds = mutableListOf<String>()
+
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) localMedia else emptyList()
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        val media = localMedia.first { it.id == fileId }
+        uploadedIds += fileId
+        emit(media.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f, lastTransferTarget = target))
+        emit(media.copy(transferStatus = TransferStatus.Done, progress = 1f, lastTransferTarget = target))
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class DelayedLocalListingMediaGateway(private val localMedia: MediaFile) : MediaGateway {
+    override suspend fun listFiles(local: Boolean): List<MediaFile> {
+        if (local) delay(1_000)
+        return if (local) listOf(localMedia) else emptyList()
+    }
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = emptyFlow()
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
 private class DownloadingMediaGateway(
     private val remote: MediaFile,
     private val localFile: java.io.File
@@ -780,6 +1360,102 @@ private class BatchDownloadingMediaGateway(
         emit(media.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f))
         emit(
             media.copy(
+                local = true,
+                verified = true,
+                transferStatus = TransferStatus.Done,
+                progress = 1f,
+                contentUri = localFile.toURI().toString(),
+                lastTransferTarget = target
+            )
+        )
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class OrderRecordingMediaGateway(
+    private val events: MutableList<String>,
+    private val remote: List<MediaFile>,
+    private val downloadedFiles: Map<String, java.io.File>
+) : MediaGateway {
+    val downloadedIds = mutableListOf<String>()
+
+    override suspend fun listFiles(local: Boolean): List<MediaFile> {
+        events += if (local) "listPhone" else "listDevice"
+        return if (local) emptyList() else remote
+    }
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        events += "transfer:$fileId"
+        val media = remote.first { it.id == fileId }
+        val localFile = downloadedFiles.getValue(fileId)
+        downloadedIds += fileId
+        emit(media.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f))
+        emit(
+            media.copy(
+                local = true,
+                verified = true,
+                transferStatus = TransferStatus.Done,
+                progress = 1f,
+                contentUri = localFile.toURI().toString(),
+                lastTransferTarget = target
+            )
+        )
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class BlockingDownloadingMediaGateway(
+    private val remote: MediaFile,
+    private val release: CompletableDeferred<Unit>
+) : MediaGateway {
+    var transferAttempts = 0
+
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) emptyList() else listOf(remote)
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        transferAttempts += 1
+        emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f))
+        release.await()
+        emit(
+            remote.copy(
+                local = true,
+                verified = true,
+                transferStatus = TransferStatus.Done,
+                progress = 1f,
+                contentUri = java.io.File("/tmp/$fileId.jpg").toURI().toString(),
+                lastTransferTarget = target
+            )
+        )
+    }
+
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class FlakyDownloadingMediaGateway(
+    private val events: MutableList<String>,
+    private val remote: MediaFile,
+    private val localFile: java.io.File
+) : MediaGateway {
+    var transferAttempts = 0
+
+    override suspend fun listFiles(local: Boolean): List<MediaFile> =
+        if (local) emptyList() else listOf(remote)
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = flow {
+        transferAttempts += 1
+        events += "transfer:$fileId:$transferAttempts"
+        emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = 0.25f))
+        if (transferAttempts == 1) {
+            error("wifi media download failed: http://192.168.222.1:8000/media/${remote.name} -> timeout")
+        }
+        emit(
+            remote.copy(
                 local = true,
                 verified = true,
                 transferStatus = TransferStatus.Done,
@@ -925,10 +1601,11 @@ private fun testDevice(id: String, name: String, type: DeviceType) = DeviceStatu
 
 private class MutableListingMediaGateway(
     var remote: List<MediaFile> = emptyList(),
-    var local: List<MediaFile> = emptyList()
+    var local: List<MediaFile> = emptyList(),
+    var remoteFailure: Throwable? = null
 ) : MediaGateway {
     override suspend fun listFiles(local: Boolean): List<MediaFile> =
-        if (local) this.local else remote
+        if (local) this.local else remoteFailure?.let { throw it } ?: remote
 
     override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = emptyFlow()
     override suspend fun delete(fileId: String, local: Boolean): Boolean = false
@@ -955,6 +1632,27 @@ private class FailingWifiControlGateway(private val failure: Throwable) : Device
     override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
     override suspend fun stopRealtimeAudioSync(): Boolean = false
     override suspend fun notifyMediaSyncCompleted(): Boolean = false
+    override suspend fun clearDeviceAccount(): Boolean = false
+    override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean = false
+}
+
+private class TrackingWifiControlGateway(
+    private val events: MutableList<String>
+) : DeviceControlGateway {
+    override fun events(): Flow<DeviceEvent> = emptyFlow()
+    override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities = DeviceCapabilities(supportsWifi = true, supportsFileTransfer = true)
+    override suspend fun readWifi(): DeviceWifiState = DeviceWifiState(enabled = false, ssid = "UTE_00F7")
+    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState {
+        events += "configureWifi:$enabled"
+        return DeviceWifiState(enabled = enabled, ssid = ssid.ifBlank { "UTE_00F7" }, passwordConfigured = true, connected = enabled)
+    }
+    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = settings
+    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
+    override suspend fun stopRealtimeAudioSync(): Boolean = false
+    override suspend fun notifyMediaSyncCompleted(): Boolean {
+        events += "notifyMediaSyncCompleted"
+        return true
+    }
     override suspend fun clearDeviceAccount(): Boolean = false
     override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget): Boolean = false
 }

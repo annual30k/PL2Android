@@ -53,6 +53,45 @@ class UteWifiMediaParserTest {
     }
 
     @Test
+    fun ignoresRouterOrWebUiImageAssets() {
+        val files = UteWifiMediaParser.parseRemoteFiles(
+            body = """
+                <html>
+                  <img src="/assets/logo.png">
+                  <img src="/static/icon_device.jpg">
+                  <a href="/res/background.jpeg">bg</a>
+                  <a href="/DCIM/100MEDIA/IMG_20260614_163000.jpg">photo</a>
+                </html>
+            """.trimIndent(),
+            sourceUrl = "http://192.168.1.1/"
+        )
+
+        assertEquals(1, files.size)
+        assertEquals("IMG_20260614_163000.jpg", files[0].name)
+        assertEquals("http://192.168.1.1/DCIM/100MEDIA/IMG_20260614_163000.jpg", files[0].url)
+    }
+
+    @Test
+    fun ignoresAiGlassWebUiImagesReturnedInJsonMediaList() {
+        val files = UteWifiMediaParser.parseRemoteFiles(
+            body = """
+                {
+                  "data": {
+                    "files": [
+                      {"name": "pictures_ute.jpg", "size": 24596, "type": "jpg"},
+                      {"name": "20260613144750407.jpg", "size": 1593149, "type": "jpg"}
+                    ]
+                  }
+                }
+            """.trimIndent(),
+            sourceUrl = "http://192.168.222.1:8000/media/list"
+        )
+
+        assertEquals(1, files.size)
+        assertEquals("20260613144750407.jpg", files[0].name)
+    }
+
+    @Test
     fun parsesGloryStyleMediaListWithSnakeCaseAndFileUrl() {
         val files = UteWifiMediaParser.parseRemoteFiles(
             body = """

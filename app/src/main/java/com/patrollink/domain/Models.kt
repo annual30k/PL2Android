@@ -85,6 +85,16 @@ data class MediaFile(
     val lastTransferTarget: TransferTarget? = null
 )
 
+data class DeviceMediaSyncUiState(
+    val active: Boolean = false,
+    val fileId: String? = null,
+    val fileName: String = "",
+    val status: TransferStatus = TransferStatus.Idle,
+    val progress: Float = 0f,
+    val completedCount: Int = 0,
+    val totalCount: Int = 0
+)
+
 data class IntercomSession(
     val sessionId: String,
     val deviceId: String,
@@ -167,6 +177,7 @@ data class AppUiState(
     val selectedMediaLocal: Boolean = true,
     val selectedMediaFileId: String? = null,
     val previewMediaFile: MediaFile? = null,
+    val mediaLoading: Boolean = false,
     val streamState: StreamRelayState = StreamRelayState.Idle,
     val photoCaptureInProgress: Boolean = false,
     val sosActive: Boolean = false,
@@ -177,6 +188,7 @@ data class AppUiState(
     val dailyReport: DailyReportUiState = DailyReportUiState(),
     val cerebellumSettings: CerebellumSettingsUiState = CerebellumSettingsUiState(),
     val operationMessage: OperationMessage? = null,
+    val deviceMediaSync: DeviceMediaSyncUiState = DeviceMediaSyncUiState(),
     val deviceCapabilities: DeviceCapabilities = DeviceCapabilities(),
     val deviceWifiState: DeviceWifiState = DeviceWifiState(),
     val deviceSettings: DeviceAdvancedSettings = DeviceAdvancedSettings(),

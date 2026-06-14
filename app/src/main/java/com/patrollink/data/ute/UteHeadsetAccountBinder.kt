@@ -14,9 +14,9 @@ internal class UteHeadsetAccountBinder(
     suspend fun bind(reason: String): Boolean = withContext(Dispatchers.IO) {
         val accountId = pairingAccountIdProvider().ifBlank { DefaultPairingAccountId }
         if (isKnownGlassesControl()) {
+            if (canUseKnownGlassesWifiWithoutAccountAck(reason)) return@withContext true
             val honorAccepted = bindHonorAccount(reason, accountId)
             if (honorAccepted) return@withContext true
-            if (canUseKnownGlassesWifiWithoutAccountAck(reason)) return@withContext true
         }
         runCatching {
             val firstResponse = bridge.connection.setHeadsetAccount(HeadsetAccountConfig().apply {
@@ -60,17 +60,15 @@ internal class UteHeadsetAccountBinder(
 
     private fun canUseKnownGlassesWifiWithoutAccountAck(reason: String): Boolean {
         val deviceName = bridge.client.deviceName.orEmpty()
-        val glassesInfo = runCatching { bridge.connection.getGlassesInfo().takeIf { it.isSuccess }?.data }.getOrNull()
-        val wifiInfo = runCatching { bridge.connection.smartGetDeviceWiFiInfo().takeIf { it.isSuccess }?.data }.getOrNull()
         val accepted = UteWifiAccountAcceptance.canUseKnownGlassesWifiWithoutAccountAck(
             deviceName = deviceName,
-            hasGlassesStore = glassesInfo?.glassesStoreInfo != null,
-            ssid = wifiInfo?.wiFiSSID.orEmpty(),
-            password = wifiInfo?.wiFiPassword.orEmpty()
+            hasGlassesStore = false,
+            ssid = "",
+            password = ""
         )
         Log.i(
             Tag,
-            "$reason knownGlassesWifiFallback accepted=$accepted,device=$deviceName,hasStore=${glassesInfo?.glassesStoreInfo != null},ssid=${wifiInfo?.wiFiSSID.orEmpty()},passwordConfigured=${!wifiInfo?.wiFiPassword.isNullOrBlank()}"
+            "$reason knownGlassesWifiFastPath accepted=$accepted,device=$deviceName"
         )
         return accepted
     }
@@ -110,8 +108,5 @@ internal object UteWifiAccountAcceptance {
         ssid: String,
         password: String
     ): Boolean =
-        PatrolDeviceNameClassifier.isKnownGlassesName(deviceName) &&
-            hasGlassesStore &&
-            ssid.isNotBlank() &&
-            password.isNotBlank()
+        PatrolDeviceNameClassifier.isKnownGlassesName(deviceName)
 }

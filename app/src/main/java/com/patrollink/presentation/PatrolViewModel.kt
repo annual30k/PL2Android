@@ -2,6 +2,7 @@ package com.patrollink.presentation
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -26,7 +27,10 @@ import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceControlGateway
+import com.patrollink.domain.DeviceEvent
+import com.patrollink.domain.DeviceEventLevel
 import com.patrollink.domain.DeviceFactoryResetTarget
+import com.patrollink.domain.DeviceMediaSyncUiState
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
@@ -72,9 +76,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 data class MediaContentRequest(
     val value: String,
@@ -84,6 +91,11 @@ data class MediaContentRequest(
 private const val ControlReadyPollAttempts = 8
 private const val ControlReadyPollMillis = 750L
 private const val PhotoCaptureTapDebounceMillis = 1_500L
+private const val DeviceWifiMediaIdPrefix = "ute-wifi-"
+private const val DeviceMediaTransferMaxAttempts = 2
+private const val DeviceMediaRetryDelayMillis = 1_500L
+private const val DeviceWifiRestartSettleMillis = 1_500L
+private const val DeviceMediaTransferTimeoutMillis = 30_000L
 
 class PatrolViewModel(
     private val appContext: Context? = null,
@@ -115,6 +127,8 @@ class PatrolViewModel(
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
     private var scannedDevicesJob: Job? = null
     private var photoCaptureJob: Job? = null
+    private var deviceMediaSyncJob: Job? = null
+    private val deviceMediaTransferJobs = mutableMapOf<String, Job>()
     private var lastPhotoCaptureRequestAt: Long = 0L
     private val autoBindingDeviceIds = mutableSetOf<String>()
 
@@ -342,7 +356,7 @@ class PatrolViewModel(
         }
         deviceControlGateway?.let { gateway ->
             runCatching {
-                val (checkedDevice, capabilities) = ensureDeviceControlCapabilities(device, gateway, showMessage = true)
+                val (checkedDevice, capabilities) = ensureDeviceControlCapabilities(device, gateway, showMessage = false)
                 val wifi = if (capabilities.supportsWifi) gateway.readWifi() else DeviceWifiState()
                 _uiState.update {
                     it.copy(
@@ -543,6 +557,7 @@ class PatrolViewModel(
     }
 
     fun refreshMediaFiles(showFailureMessage: Boolean = false) = viewModelScope.launch {
+        _uiState.update { it.copy(mediaLoading = true) }
         val phoneResult = runCatching { coordinator.mediaFiles(local = true) }
         val deviceResult = runCatching { coordinator.mediaFiles(local = false) }
         val phoneMedia = phoneResult.getOrDefault(emptyList())
@@ -557,13 +572,16 @@ class PatrolViewModel(
                 current.transferStatus.inProgress &&
                     loadedWithState.none { it.id == current.id && it.local == current.local }
             }
-            val next = (loadedWithState + transient).distinctBy { it.id to it.local }
+            val next = (loadedWithState + transient)
+                .distinctBy { it.id to it.local }
+                .markDeviceFilesPresentInPhoneSandbox()
             val nextSelected = state.selectedMediaFileId?.takeIf { selectedId ->
                 next.any { it.id == selectedId && it.local == state.selectedMediaLocal }
             } ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
             state.copy(
                 mediaFiles = next,
                 selectedMediaFileId = nextSelected,
+                mediaLoading = false,
                 operationMessage = when {
                     showFailureMessage && !state.selectedMediaLocal && deviceResult.isFailure ->
                         operationMessage(deviceResult.exceptionOrNull().operatorFacingDeviceMediaError(), OperationMessageType.Error)
@@ -1393,76 +1411,248 @@ class PatrolViewModel(
         }
     }
 
-    fun downloadMedia(fileId: String) = viewModelScope.launch {
-        transferDeviceMediaToPhone(fileId)
+    fun downloadMedia(fileId: String) {
+        viewModelScope.launch {
+            deviceMediaTransferJobs.remove(fileId)?.takeIf { it.isActive }?.cancelAndJoin()
+            val job = launch {
+                val deviceWifiFile = shouldPrepareDeviceWifiForMediaDownload(fileId)
+                if (deviceWifiFile) {
+                    showOperationMessage("正在连接设备热点并同步到手机", OperationMessageType.Info)
+                    _uiState.update { state ->
+                        val file = state.mediaFiles.firstOrNull { it.id == fileId && !it.local }
+                        state.copy(
+                            deviceMediaSync = DeviceMediaSyncUiState(
+                                active = true,
+                                fileId = fileId,
+                                fileName = file?.name ?: "设备文件",
+                                status = TransferStatus.Uploading,
+                                progress = 0.03f,
+                                completedCount = 0,
+                                totalCount = 1
+                            )
+                        )
+                    }
+                }
+                val success = transferDeviceMediaToPhone(fileId)
+                if (success) refreshPhoneMediaAfterDeviceSync()
+                if (deviceWifiFile) {
+                    finishDeviceMediaSync(successCount = if (success) 1 else 0, failedCount = if (success) 0 else 1)
+                }
+            }
+            deviceMediaTransferJobs[fileId] = job
+            job.invokeOnCompletion {
+                if (deviceMediaTransferJobs[fileId] == job) {
+                    deviceMediaTransferJobs.remove(fileId)
+                }
+            }
+        }
     }
 
-    fun syncDeviceMediaToPhone(fileIds: Set<String> = emptySet(), refreshFirst: Boolean = false) = viewModelScope.launch {
-        if (refreshFirst) {
+    fun syncDeviceMediaToPhone(fileIds: Set<String> = emptySet(), refreshFirst: Boolean = false) {
+        if (deviceMediaSyncJob?.isActive == true) {
+            showOperationMessage("正在同步设备文件，请稍候", OperationMessageType.Info)
+            return
+        }
+        deviceMediaSyncJob = viewModelScope.launch {
+            val requestedDeviceFilesBeforeRefresh = selectedDeviceMediaRequests(fileIds)
+            val requestedIdentityKeys = requestedDeviceFilesBeforeRefresh
+                .flatMap { it.mediaIdentityKeys() }
+                .toSet()
             _uiState.update {
-                it.copy(operationMessage = operationMessage("正在读取设备文件并同步到手机", OperationMessageType.Info))
-            }
-            val phoneResult = runCatching { coordinator.mediaFiles(local = true) }
-            val deviceResult = runCatching { coordinator.mediaFiles(local = false) }
-            if (deviceResult.isFailure) {
-                _uiState.update {
-                    it.copy(operationMessage = operationMessage(deviceResult.exceptionOrNull().operatorFacingDeviceMediaError(), OperationMessageType.Error))
-                }
-                return@launch
-            }
-            mergeLoadedMediaFiles(
-                phoneMedia = phoneResult.getOrDefault(emptyList()),
-                deviceMedia = deviceResult.getOrDefault(emptyList())
-            )
-        }
-        val currentFiles = _uiState.value.mediaFiles
-        val candidates = currentFiles
-            .filter { !it.local && !it.transferStatus.inProgress }
-            .filter { fileIds.isEmpty() || it.id in fileIds }
-        val pending = candidates.filter { deviceFile ->
-            currentFiles.none { it.id == deviceFile.id && it.local && it.contentUri.hasUsableValue() }
-        }
-        when {
-            candidates.isEmpty() -> {
-                showOperationMessage("设备端没有可同步文件，请先刷新设备媒体列表", OperationMessageType.Warning)
-                return@launch
-            }
-            pending.isEmpty() -> {
-                showOperationMessage("设备端文件已在手机端，无需重复同步", OperationMessageType.Success)
-                return@launch
-            }
-        }
-        _uiState.update {
-            it.copy(operationMessage = operationMessage("正在同步 ${pending.size} 个设备文件到手机", OperationMessageType.Info))
-        }
-        var successCount = 0
-        var failedCount = 0
-        pending.forEach { file ->
-            if (transferDeviceMediaToPhone(file.id)) {
-                successCount += 1
-            } else {
-                failedCount += 1
-            }
-        }
-        _uiState.update {
-            it.copy(
-                selectedMediaLocal = successCount.takeIf { count -> count > 0 }?.let { true } ?: it.selectedMediaLocal,
-                operationMessage = operationMessage(
-                    buildString {
-                        if (successCount > 0) {
-                            append("已同步 $successCount 个设备文件到手机，后台上传任务已加入队列")
-                        } else {
-                            append("设备文件同步失败")
-                        }
-                        if (failedCount > 0) append("，失败 $failedCount 个")
-                    },
-                    when {
-                        failedCount > 0 && successCount == 0 -> OperationMessageType.Error
-                        failedCount > 0 -> OperationMessageType.Warning
-                        else -> OperationMessageType.Success
-                    }
+                it.copy(
+                    deviceMediaSync = DeviceMediaSyncUiState(
+                        active = true,
+                        fileName = "正在读取设备文件",
+                        status = TransferStatus.Uploading,
+                        progress = 0.03f
+                    )
                 )
+            }
+            if (refreshFirst) {
+                _uiState.update {
+                    it.copy(
+                        mediaLoading = true,
+                        operationMessage = operationMessage("正在打开设备热点并读取设备文件", OperationMessageType.Info)
+                    )
+                }
+                val phoneResult = runCatching { coordinator.mediaFiles(local = true) }
+                val deviceResult = runCatching { coordinator.mediaFiles(local = false) }
+                if (deviceResult.isFailure) {
+                    mergeLoadedMediaFiles(
+                        phoneMedia = phoneResult.getOrDefault(emptyList()),
+                        deviceMedia = emptyList()
+                    )
+                    _uiState.update {
+                        it.copy(
+                            mediaLoading = false,
+                            deviceMediaSync = DeviceMediaSyncUiState(
+                                active = false,
+                                fileName = "设备文件读取失败",
+                                status = TransferStatus.Failed
+                            ),
+                            operationMessage = operationMessage(deviceResult.exceptionOrNull().operatorFacingDeviceMediaError(), OperationMessageType.Error)
+                        )
+                    }
+                    return@launch
+                }
+                mergeLoadedMediaFiles(
+                    phoneMedia = phoneResult.getOrDefault(emptyList()),
+                    deviceMedia = deviceResult.getOrDefault(emptyList())
+                )
+                _uiState.update { it.copy(mediaLoading = false) }
+                if (deviceResult.getOrDefault(emptyList()).isEmpty()) {
+                    cancelDeviceMediaTransfers()
+                    showOperationMessage("设备端没有可同步文件，请先拍照/录像后刷新设备媒体列表", OperationMessageType.Warning)
+                    return@launch
+                }
+            }
+            val currentFiles = _uiState.value.mediaFiles
+            val candidates = currentFiles
+                .filter { !it.local && !it.transferStatus.inProgress }
+                .filter { fileIds.isEmpty() || it.id in fileIds || it.matchesAnyIdentityKey(requestedIdentityKeys) }
+            val phoneCopies = currentFiles.filter { it.local && it.contentUri.hasUsableValue() }
+            val pending = candidates.filterNot { deviceFile ->
+                phoneCopies.any { phoneFile -> phoneFile.matchesPhoneSandboxCopyOf(deviceFile) }
+            }
+            when {
+                candidates.isEmpty() -> {
+                    clearDeviceMediaSync()
+                    showOperationMessage("设备端没有可同步文件，请先刷新设备媒体列表", OperationMessageType.Warning)
+                    return@launch
+                }
+                pending.isEmpty() -> {
+                    finishDeviceMediaSync(successCount = 0, failedCount = 0)
+                    showOperationMessage("设备端文件已在手机端，无需重复同步", OperationMessageType.Success)
+                    return@launch
+                }
+            }
+            _uiState.update {
+                it.copy(operationMessage = operationMessage("正在同步 ${pending.size} 个设备文件到手机", OperationMessageType.Info))
+            }
+            markDeviceMediaTransferPreparing(pending)
+            var successCount = 0
+            var failedCount = 0
+            pending.forEachIndexed { index, file ->
+                beginDeviceMediaSyncFile(file, completedCount = index, totalCount = pending.size)
+                if (transferDeviceMediaToPhone(file.id, notifyDeviceWhenDone = false, showFailureMessage = false)) {
+                    successCount += 1
+                } else {
+                    failedCount += 1
+                }
+            }
+            if (successCount > 0) {
+                runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
+                refreshPhoneMediaAfterDeviceSync()
+            }
+            _uiState.update {
+                it.copy(
+                    selectedMediaLocal = successCount.takeIf { count -> count > 0 }?.let { true } ?: it.selectedMediaLocal,
+                    deviceMediaSync = it.deviceMediaSync.copy(
+                        active = false,
+                        status = if (failedCount > 0 && successCount == 0) TransferStatus.Failed else TransferStatus.Done,
+                        progress = if (successCount > 0) 1f else it.deviceMediaSync.progress,
+                        completedCount = successCount,
+                        totalCount = pending.size
+                    ),
+                    operationMessage = operationMessage(
+                        buildString {
+                            if (successCount > 0) {
+                                append("已同步 $successCount 个设备文件到手机本地媒体文件，设备热点保持连接")
+                            } else {
+                                append("设备文件同步失败")
+                            }
+                            if (failedCount > 0) append("，失败 $failedCount 个")
+                        },
+                        when {
+                            failedCount > 0 && successCount == 0 -> OperationMessageType.Error
+                            failedCount > 0 -> OperationMessageType.Warning
+                            else -> OperationMessageType.Success
+                        }
+                    )
+                )
+            }
+        }
+    }
+
+    private fun shouldPrepareDeviceWifiForMediaDownload(fileId: String): Boolean =
+        fileId.startsWith(DeviceWifiMediaIdPrefix)
+
+    private fun selectedDeviceMediaRequests(fileIds: Set<String>): List<MediaFile> {
+        if (fileIds.isEmpty()) return emptyList()
+        return _uiState.value.mediaFiles.filter { !it.local && it.id in fileIds }
+    }
+
+    private fun markDeviceMediaTransferPreparing(files: List<MediaFile>) {
+        if (files.isEmpty()) return
+        val ids = files.map { it.id }.toSet()
+        val firstId = files.first().id
+        val first = files.first()
+        _uiState.update { state ->
+            state.copy(
+                selectedMediaLocal = false,
+                selectedMediaFileId = firstId,
+                deviceMediaSync = DeviceMediaSyncUiState(
+                    active = true,
+                    fileId = firstId,
+                    fileName = first.name,
+                    status = TransferStatus.Uploading,
+                    progress = 0.05f,
+                    completedCount = 0,
+                    totalCount = files.size
+                ),
+                mediaFiles = state.mediaFiles.map { file ->
+                    if (!file.local && file.id in ids) {
+                        file.copy(
+                            transferStatus = TransferStatus.Uploading,
+                            progress = file.progress.coerceAtLeast(0.05f),
+                            lastTransferTarget = TransferTarget.PhoneSandbox
+                        )
+                    } else {
+                        file
+                    }
+                }
             )
+        }
+    }
+
+    private suspend fun openDeviceWifiForMediaSync(forceRestart: Boolean = false): Boolean {
+        val gateway = deviceControlGateway ?: return true
+        return runCatching {
+            val current = gateway.readWifi()
+            if (forceRestart) {
+                val ssid = current.ssid.ifBlank { _uiState.value.deviceWifiState.ssid }
+                runCatching { gateway.configureWifi(enabled = false, ssid = ssid, password = "") }
+                delay(DeviceWifiRestartSettleMillis)
+                gateway.configureWifi(enabled = true, ssid = ssid, password = "")
+            } else if (current.enabled && current.connected) {
+                current
+            } else {
+                gateway.configureWifi(enabled = true, ssid = current.ssid, password = "")
+            }
+        }.fold(
+            onSuccess = { wifi ->
+                _uiState.update { it.copy(deviceWifiState = wifi) }
+                true
+            },
+            onFailure = { throwable ->
+                _uiState.update {
+                    it.copy(operationMessage = operationMessage(throwable.operatorFacingWifiError(), OperationMessageType.Error))
+                }
+                false
+            }
+        )
+    }
+
+    private suspend fun closeDeviceWifiAfterMediaSync() {
+        val gateway = deviceControlGateway ?: return
+        runCatching {
+            gateway.configureWifi(
+                enabled = false,
+                ssid = _uiState.value.deviceWifiState.ssid,
+                password = ""
+            )
+        }.onSuccess { wifi ->
+            _uiState.update { it.copy(deviceWifiState = wifi) }
         }
     }
 
@@ -1477,7 +1667,9 @@ class PatrolViewModel(
                 current.transferStatus.inProgress &&
                     loadedWithState.none { it.id == current.id && it.local == current.local }
             }
-            val next = (loadedWithState + transient).distinctBy { it.id to it.local }
+            val next = (loadedWithState + transient)
+                .distinctBy { it.id to it.local }
+                .markDeviceFilesPresentInPhoneSandbox()
             val nextSelected = state.selectedMediaFileId?.takeIf { selectedId ->
                 next.any { it.id == selectedId && it.local == state.selectedMediaLocal }
             } ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
@@ -1488,32 +1680,115 @@ class PatrolViewModel(
         }
     }
 
-    private suspend fun transferDeviceMediaToPhone(fileId: String): Boolean {
-        return runCatching {
-            var emitted = false
-            coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
-                emitted = true
-                updatePhoneTransfer(fileId, updated.markTransferTarget(TransferTarget.PhoneSandbox))
-                if (updated.transferStatus == TransferStatus.Done) {
-                    runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
-                    enqueueEvidenceUploadIfLocal(
-                        fileId = fileId,
-                        local = true,
-                        file = updated.copy(id = fileId, local = true)
-                            .takeIf { it.contentUri.hasUsableValue() }
-                            ?: _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local }
-                    )
+    private fun cancelDeviceMediaTransfers() {
+        deviceMediaTransferJobs.values.forEach { it.cancel() }
+        deviceMediaTransferJobs.clear()
+        _uiState.update { state ->
+            val nextFiles = state.mediaFiles.filterNot { !it.local && it.id.startsWith(DeviceWifiMediaIdPrefix) }
+            state.copy(
+                mediaFiles = nextFiles,
+                deviceMediaSync = DeviceMediaSyncUiState(),
+                selectedMediaFileId = state.selectedMediaFileId?.takeIf { selectedId ->
+                    nextFiles.any { it.id == selectedId && it.local == state.selectedMediaLocal }
                 }
-                if (updated.transferStatus != TransferStatus.Done) delay(420)
+            )
+        }
+    }
+
+    private fun removeStaleDeviceMedia(fileId: String) {
+        _uiState.update { state ->
+            state.copy(
+                mediaFiles = state.mediaFiles.filterNot { it.id == fileId && !it.local },
+                selectedMediaFileId = state.selectedMediaFileId?.takeUnless { it == fileId && !state.selectedMediaLocal }
+            )
+        }
+    }
+
+    private suspend fun transferDeviceMediaToPhone(
+        fileId: String,
+        notifyDeviceWhenDone: Boolean = true,
+        showFailureMessage: Boolean = true
+    ): Boolean {
+        val maxAttempts = if (shouldPrepareDeviceWifiForMediaDownload(fileId)) DeviceMediaTransferMaxAttempts else 1
+        var lastFailure: Throwable? = null
+        repeat(maxAttempts) { index ->
+            val attempt = index + 1
+            val failure = runCatching {
+                withTimeout(DeviceMediaTransferTimeoutMillis) {
+                    transferDeviceMediaToPhoneOnce(fileId, notifyDeviceWhenDone)
+                }
+            }.exceptionOrNull()
+            if (failure == null) return true
+            lastFailure = failure
+            if (failure.isWifiMediaFileMissing()) {
+                removeStaleDeviceMedia(fileId)
+                markMediaTransferFailed(
+                    fileId = fileId,
+                    local = false,
+                    target = TransferTarget.PhoneSandbox,
+                    throwable = failure.toOperatorFacingMediaTransferFailure(),
+                    action = "媒体文件下载失败",
+                    showMessage = showFailureMessage
+                )
+                return false
             }
-            check(emitted) { "媒体传输通道未返回进度" }
-        }.fold(
-            onSuccess = { true },
-            onFailure = {
-            markMediaTransferFailed(fileId, local = false, target = TransferTarget.PhoneSandbox, throwable = it, action = "媒体文件下载失败")
-                false
+            if (attempt < maxAttempts) {
+                if (showFailureMessage) _uiState.update {
+                    it.copy(operationMessage = operationMessage("设备文件下载失败，正在保持设备热点并重试 $attempt/$maxAttempts", OperationMessageType.Warning))
+                }
+                delay(DeviceMediaRetryDelayMillis)
             }
+        }
+        markMediaTransferFailed(
+            fileId = fileId,
+            local = false,
+            target = TransferTarget.PhoneSandbox,
+            throwable = lastFailure.toOperatorFacingMediaTransferFailure(),
+            action = "媒体文件下载失败",
+            showMessage = showFailureMessage
         )
+        return false
+    }
+
+    private fun Throwable?.toOperatorFacingMediaTransferFailure(): Throwable =
+        when (this) {
+            null -> IllegalStateException("媒体传输通道未返回进度")
+            is TimeoutCancellationException -> IllegalStateException("设备热点下载超时，请确认手机已连接设备热点后重试")
+            else -> if (isWifiMediaFileMissing()) {
+                IllegalStateException("设备端文件已不存在，请刷新设备媒体列表后重试")
+            } else {
+                this
+            }
+        }
+
+    private fun Throwable?.isWifiMediaFileMissing(): Boolean =
+        this?.message.orEmpty().contains("wifi media file not found", ignoreCase = true)
+
+    private suspend fun transferDeviceMediaToPhoneOnce(
+        fileId: String,
+        notifyDeviceWhenDone: Boolean
+    ) {
+        var emitted = false
+        coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox).collect { updated ->
+            emitted = true
+            val phoneSyncUpdate = updated.markTransferTarget(TransferTarget.PhoneSandbox)
+            updatePhoneTransfer(fileId, phoneSyncUpdate)
+            updateDeviceMediaSync(fileId, phoneSyncUpdate)
+            if (updated.transferStatus == TransferStatus.Done) {
+                if (notifyDeviceWhenDone) {
+                    runCatching { deviceControlGateway?.notifyMediaSyncCompleted() }
+                }
+                enqueueEvidenceUploadIfLocal(
+                    fileId = fileId,
+                    local = true,
+                    file = updated.copy(id = fileId, local = true)
+                        .takeIf { it.contentUri.hasUsableValue() }
+                        ?: _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local }
+                )
+            }
+            if (updated.transferStatus != TransferStatus.Done) delay(420)
+        }
+        check(emitted) { "媒体传输通道未返回进度" }
     }
 
     fun uploadMedia(fileId: String, local: Boolean = true) = viewModelScope.launch {
@@ -1528,16 +1803,27 @@ class PatrolViewModel(
         }
         val failure = runCatching {
             var emitted = false
+            var completed: MediaFile? = null
             coordinator.transferMedia(fileId, TransferTarget.Cloud).collect { updated ->
                 emitted = true
-                updateTransferredMedia(fileId, local, updated.copy(local = local).markTransferTarget(TransferTarget.Cloud))
+                val next = updated.copy(local = local).markTransferTarget(TransferTarget.Cloud)
+                updateTransferredMedia(fileId, local, next)
+                if (next.transferStatus == TransferStatus.Done) completed = next
                 if (updated.transferStatus != TransferStatus.Done) delay(420)
             }
             check(emitted) { "媒体传输通道未返回进度" }
+            completed ?: error("媒体上传未返回完成状态")
         }.exceptionOrNull()
         if (failure != null) {
             enqueueEvidenceUploadIfLocal(fileId, local, current)
             markMediaTransferFailed(fileId, local = local, target = TransferTarget.Cloud, throwable = failure, action = "媒体文件上传失败")
+        } else {
+            _uiState.update { state ->
+                state.copy(
+                    previewMediaFile = state.previewMediaFile?.takeUnless { it.id == fileId && it.local == local },
+                    operationMessage = operationMessage("${current?.name ?: "媒体文件"} 已上传云端", OperationMessageType.Success)
+                )
+            }
         }
     }
 
@@ -1575,7 +1861,8 @@ class PatrolViewModel(
         local: Boolean,
         target: TransferTarget,
         throwable: Throwable,
-        action: String
+        action: String,
+        showMessage: Boolean = true
     ) {
         val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
         _uiState.update { state ->
@@ -1585,20 +1872,54 @@ class PatrolViewModel(
                     it.copy(
                         transferStatus = TransferStatus.Failed,
                         progress = 0f,
+                        contentUri = it.contentUri,
                         lastTransferTarget = target
                     )
                 )
             } ?: state.mediaFiles
             state.copy(
                 mediaFiles = nextFiles,
-                operationMessage = operationMessage("$action$detail", OperationMessageType.Error)
+                deviceMediaSync = if (state.deviceMediaSync.fileId == fileId) {
+                    state.deviceMediaSync.copy(
+                        active = false,
+                        status = TransferStatus.Failed,
+                        progress = 0f
+                    )
+                } else {
+                    state.deviceMediaSync
+                },
+                operationMessage = if (showMessage) {
+                    operationMessage("$action$detail", OperationMessageType.Error)
+                } else {
+                    state.operationMessage
+                }
             )
         }
     }
 
     private fun updateTransferredMedia(fileId: String, local: Boolean, updated: MediaFile) {
         _uiState.update { state ->
-            state.copy(mediaFiles = state.mediaFiles.upsertMedia(updated.copy(id = fileId, local = local)))
+            val current = state.mediaFiles.firstOrNull { it.id == fileId && it.local == local }
+            val merged = updated.copy(
+                id = fileId,
+                local = local,
+                contentUri = updated.contentUri ?: current?.contentUri,
+                verified = updated.verified || current?.verified == true
+            )
+            state.copy(
+                mediaFiles = state.mediaFiles.upsertMedia(merged),
+                previewMediaFile = state.previewMediaFile?.let { preview ->
+                    if (preview.id == fileId && preview.local == local) {
+                        if (merged.transferStatus == TransferStatus.Done && merged.lastTransferTarget == TransferTarget.Cloud) {
+                            null
+                        } else {
+                            merged.copy(contentUri = preview.contentUri ?: merged.contentUri)
+                        }
+                    } else {
+                        preview
+                    }
+                }
+            )
         }
     }
 
@@ -1631,6 +1952,67 @@ class PatrolViewModel(
         }
     }
 
+    private fun beginDeviceMediaSyncFile(file: MediaFile, completedCount: Int, totalCount: Int) {
+        _uiState.update { state ->
+            state.copy(
+                deviceMediaSync = DeviceMediaSyncUiState(
+                    active = true,
+                    fileId = file.id,
+                    fileName = file.name,
+                    status = TransferStatus.Uploading,
+                    progress = 0.05f,
+                    completedCount = completedCount,
+                    totalCount = totalCount
+                )
+            )
+        }
+    }
+
+    private fun updateDeviceMediaSync(fileId: String, updated: MediaFile) {
+        _uiState.update { state ->
+            val current = state.deviceMediaSync
+            if (!current.active || current.fileId != fileId) {
+                state
+            } else {
+                state.copy(
+                    deviceMediaSync = current.copy(
+                        fileName = updated.name.ifBlank { current.fileName },
+                        status = updated.transferStatus,
+                        progress = updated.progress.coerceIn(0f, 1f)
+                    )
+                )
+            }
+        }
+    }
+
+    private fun finishDeviceMediaSync(successCount: Int, failedCount: Int) {
+        _uiState.update { state ->
+            state.copy(
+                deviceMediaSync = state.deviceMediaSync.copy(
+                    active = false,
+                    status = if (failedCount > 0 && successCount == 0) TransferStatus.Failed else TransferStatus.Done,
+                    progress = if (successCount > 0 || failedCount == 0) 1f else state.deviceMediaSync.progress,
+                    completedCount = successCount,
+                    totalCount = state.deviceMediaSync.totalCount.coerceAtLeast(successCount + failedCount)
+                )
+            )
+        }
+    }
+
+    private fun clearDeviceMediaSync() {
+        _uiState.update { it.copy(deviceMediaSync = DeviceMediaSyncUiState()) }
+    }
+
+    private suspend fun refreshPhoneMediaAfterDeviceSync() {
+        val phoneMedia = runCatching { coordinator.mediaFiles(local = true) }.getOrDefault(emptyList())
+        val current = _uiState.value.mediaFiles
+        val currentLocal = current.filter { it.local && it.contentUri.hasUsableValue() }
+        val mergedPhone = (phoneMedia + currentLocal).distinctBy { it.id to it.local }
+        if (mergedPhone.isEmpty()) return
+        val deviceMedia = current.filter { !it.local }
+        mergeLoadedMediaFiles(phoneMedia = mergedPhone, deviceMedia = deviceMedia)
+    }
+
     private fun List<MediaFile>.upsertMedia(file: MediaFile): List<MediaFile> {
         var replaced = false
         val updated = map {
@@ -1642,6 +2024,22 @@ class PatrolViewModel(
             }
         }
         return if (replaced) updated else listOf(file) + updated
+    }
+
+    private fun List<MediaFile>.markDeviceFilesPresentInPhoneSandbox(): List<MediaFile> {
+        val phoneCopies = filter { it.local && it.contentUri.hasUsableValue() }
+        if (phoneCopies.isEmpty()) return this
+        return map { file ->
+            if (!file.local && !file.transferStatus.inProgress && phoneCopies.any { it.matchesPhoneSandboxCopyOf(file) }) {
+                file.copy(
+                    transferStatus = TransferStatus.Done,
+                    progress = 1f,
+                    lastTransferTarget = TransferTarget.PhoneSandbox
+                )
+            } else {
+                file
+            }
+        }
     }
 
     fun verifyMedia(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = viewModelScope.launch {
@@ -1717,13 +2115,14 @@ class PatrolViewModel(
     fun openMediaPreview(fileId: String, local: Boolean = _uiState.value.selectedMediaLocal) = viewModelScope.launch {
         val target = _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local == local }
             ?: return@launch showOperationMessage("媒体文件不存在", OperationMessageType.Error)
-        val preview = materializeMediaForPreview(target)
+        val preview = runCatching { materializeMediaForPreview(target) }.getOrNull()
+            ?: target.takeIf { it.local && it.contentUri.hasUsableValue() }
         _uiState.update { state ->
             state.copy(
                 previewMediaFile = preview,
                 selectedMediaFileId = fileId,
                 operationMessage = if (preview == null) {
-                    operationMessage("媒体还没有可播放的本地文件，请先完成上传手机或检查云端下载地址", OperationMessageType.Error)
+                    operationMessage("媒体还没有可播放的本地文件，请先完成同步到手机或检查云端下载地址", OperationMessageType.Error)
                 } else {
                     state.operationMessage
                 }
@@ -1760,6 +2159,16 @@ class PatrolViewModel(
         it.copy(operationMessage = operationMessage(message, type))
     }
 
+    private fun DeviceEvent.shouldShowOperationMessage(): Boolean =
+        level != DeviceEventLevel.Info
+
+    private fun DeviceEvent.toOperationMessageType(): OperationMessageType =
+        when (level) {
+            DeviceEventLevel.Info -> OperationMessageType.Info
+            DeviceEventLevel.Warning -> OperationMessageType.Warning
+            DeviceEventLevel.Error -> OperationMessageType.Error
+        }
+
     private fun defaultMissionId(badgeNo: String): String {
         val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
         return "mission-$day-${badgeNo.ifBlank { "operator" }}"
@@ -1772,7 +2181,11 @@ class PatrolViewModel(
             _uiState.update { state ->
                 state.copy(
                     deviceEvents = (listOf(event) + state.deviceEvents).take(5),
-                    operationMessage = operationMessage(event.title, OperationMessageType.Info)
+                    operationMessage = if (event.shouldShowOperationMessage()) {
+                        operationMessage(event.title, event.toOperationMessageType())
+                    } else {
+                        state.operationMessage
+                    }
                 )
             }
         }
@@ -1991,7 +2404,10 @@ class PatrolViewModel(
         it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Idle, progress = 0f, message = null))
     }
 
-    private fun operationMessage(text: String, type: OperationMessageType) = OperationMessage(text, type)
+    private fun operationMessage(text: String, type: OperationMessageType): OperationMessage {
+        runCatching { Log.i("PatrolOperation", "${type.name}: $text") }
+        return OperationMessage(text, type)
+    }
 
     private fun Throwable.operatorFacingWifiError(): String =
         message
@@ -2081,12 +2497,11 @@ private fun String?.hasUsableValue(): Boolean = !isNullOrBlank()
 private fun MediaFile.withShareableLocalUri(context: Context?, allowRemote: Boolean = true): MediaFile? {
     val value = contentUri?.takeIf { it.isNotBlank() } ?: return null
     val uri = runCatching { Uri.parse(value) }.getOrNull()
-    val localFile = when {
-        uri?.scheme == "file" -> uri.path?.let(::File)
-        uri?.scheme == null && value.startsWith("/") -> File(value)
-        else -> null
-    }?.takeIf { it.exists() && it.isFile && it.length() > 0 }
+    val localFile = value.toExistingLocalFile()
     if (localFile == null) {
+        if (uri?.scheme == "file" || (uri?.scheme == null && value.startsWith("/"))) {
+            return this
+        }
         return this.takeIf {
             uri?.scheme == "content" || (allowRemote && (value.startsWith("http://") || value.startsWith("https://")))
         }
@@ -2098,12 +2513,20 @@ private fun MediaFile.withShareableLocalUri(context: Context?, allowRemote: Bool
 
 private fun MediaFile.localContentFile(): File? {
     val value = contentUri?.takeIf { it.isNotBlank() } ?: return null
-    val uri = runCatching { Uri.parse(value) }.getOrNull()
-    return when {
-        uri?.scheme == "file" -> uri.path?.let(::File)
-        uri?.scheme == null && value.startsWith("/") -> File(value)
+    return value.toExistingLocalFile()
+}
+
+private fun String.toExistingLocalFile(): File? {
+    val uri = runCatching { Uri.parse(this) }.getOrNull()
+    val file = when {
+        uri?.scheme == "file" -> {
+            uri.path?.takeIf { it.isNotBlank() }?.let(::File)
+                ?: runCatching { File(java.net.URI(this)) }.getOrNull()
+        }
+        uri?.scheme == null && startsWith("/") -> File(this)
         else -> null
-    }?.takeIf { it.exists() && it.isFile && it.length() > 0 }
+    }
+    return file?.takeIf { it.exists() && it.isFile && it.length() > 0 }
 }
 
 private fun MediaFile.lastModifiedFromContentUri(): Long =
@@ -2167,10 +2590,7 @@ private suspend fun localFileForCerebellumUpload(
     }
     val direct = if (value.startsWith("/") && backendBaseUrl.isBlank()) File(value) else null
     if (direct?.exists() == true && direct.isFile) return@withContext direct
-    if (uri?.scheme == "file") {
-        val path = uri.path ?: return@withContext null
-        return@withContext File(path).takeIf { it.exists() && it.isFile }
-    }
+    value.toExistingLocalFile()?.let { return@withContext it }
     val targetDir = context?.cacheDir?.let { File(it, "media_preview_cache").also { dir -> dir.mkdirs() } }
         ?: return@withContext null
     val safeName = file.name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "${file.id}.bin" }
@@ -2348,6 +2768,35 @@ private fun isKnownGlassesName(name: String): Boolean {
         "ABA002" in normalized ||
         "眼镜" in name
 }
+
+private fun MediaFile.matchesPhoneSandboxCopyOf(deviceFile: MediaFile): Boolean {
+    if (!local || !contentUri.hasUsableValue()) return false
+    if (id == deviceFile.id) return true
+    val localKeys = mediaIdentityKeys()
+    if (localKeys.isEmpty()) return false
+    return deviceFile.mediaIdentityKeys().any { it in localKeys }
+}
+
+private fun MediaFile.matchesAnyIdentityKey(keys: Set<String>): Boolean =
+    keys.isNotEmpty() && mediaIdentityKeys().any { it in keys }
+
+private fun MediaFile.mediaIdentityKeys(): Set<String> = buildSet {
+    name.normalizedMediaFileKey()?.let(::add)
+    contentUri?.normalizedMediaFileKey()?.let(::add)
+}
+
+private fun String.normalizedMediaFileKey(): String? =
+    substringBefore('?')
+        .substringAfterLast('/')
+        .removeMediaDisplayPrefix()
+        .trim()
+        .lowercase()
+        .takeIf { it.isNotBlank() }
+
+private fun String.removeMediaDisplayPrefix(): String =
+    removePrefix("眼镜照片_")
+        .removePrefix("眼镜视频_")
+        .removePrefix("设备录音_")
 
 
 private val TransferStatus.inProgress: Boolean

@@ -30,21 +30,13 @@ class UteWifiAccountAcceptanceTest {
     }
 
     @Test
-    fun rejectsKnownGlassesWithoutStoreOrWifiConfig() {
-        assertFalse(
+    fun allowsKnownGlassesEvenWhenAccountAckTimeoutAlsoBlocksInfoReads() {
+        assertTrue(
             UteWifiAccountAcceptance.canUseKnownGlassesWifiWithoutAccountAck(
                 deviceName = "Glory Glass 2-00F7",
                 hasGlassesStore = false,
-                ssid = "UTE_00F7",
-                password = "12345678"
-            )
-        )
-        assertFalse(
-            UteWifiAccountAcceptance.canUseKnownGlassesWifiWithoutAccountAck(
-                deviceName = "Glory Glass 2-00F7",
-                hasGlassesStore = true,
                 ssid = "",
-                password = "12345678"
+                password = ""
             )
         )
     }

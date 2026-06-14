@@ -203,7 +203,10 @@ class UteSdkDeviceControlGateway(
         }
         val notifyState = if (enabled) async { waitForWifiEnabledNotify() } else null
         val switchResponse = bridge.connection.smartSetDeviceWiFiSwitch(enabled)
-        check(switchResponse.isSuccess || switchResponse.data == true) { "device wifi switch failed: ${switchResponse.errorCode}" }
+        Log.i(Tag, "smartSetDeviceWiFiSwitch enabled=$enabled success=${switchResponse.isSuccess},error=${switchResponse.errorCode},data=${switchResponse.data}")
+        check(isWifiSwitchAccepted(enabled = enabled, responseSuccess = switchResponse.isSuccess, responseData = switchResponse.data)) {
+            "device wifi switch rejected: error=${switchResponse.errorCode},data=${switchResponse.data}"
+        }
         if (enabled) {
             val polledState = waitForWifiEnabledState()
             val notifiedState = notifyState?.await()
@@ -214,8 +217,9 @@ class UteSdkDeviceControlGateway(
                 polledState.isWifiEnabledState() -> polledState
                 else -> polledState
             }
-            check(selectedState.isWifiEnabledState()) { "device wifi did not enable: $selectedState" }
-            if (!selectedState.isWifiApReadyState()) {
+            if (!selectedState.isWifiEnabledState()) {
+                Log.i(Tag, "device wifi switch accepted but state stayed pending: state=$selectedState")
+            } else if (!selectedState.isWifiApReadyState()) {
                 Log.i(Tag, "device wifi accepted open but AP is not ready yet: state=$selectedState")
                 delay(WifiOpenSuccessSettleMillis)
             }
@@ -223,8 +227,21 @@ class UteSdkDeviceControlGateway(
             delay(WifiStateSettleMillis)
         }
         val next = readWifi()
-        check(!enabled || next.enabled) { "device wifi switch accepted but stayed disabled: ${next.ssid}" }
-        next
+        if (enabled && !next.enabled) {
+            val fallbackSsid = ssid.ifBlank { currentWifi?.wiFiSSID.orEmpty() }.ifBlank { next.ssid }
+            val fallbackPasswordConfigured = password.isNotBlank() ||
+                !currentWifi?.wiFiPassword.isNullOrBlank() ||
+                next.passwordConfigured
+            Log.i(Tag, "device wifi pending after accepted switch; returning optimistic state ssid=$fallbackSsid")
+            next.copy(
+                enabled = true,
+                ssid = fallbackSsid,
+                passwordConfigured = fallbackPasswordConfigured,
+                connected = false
+            )
+        } else {
+            next
+        }
     }
 
     override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = withContext(Dispatchers.IO) {
@@ -278,7 +295,9 @@ class UteSdkDeviceControlGateway(
                     "wifi warmup glasses state=${response.data?.state},store=photo=${store?.newTakenPictures}/${store?.totalPictures},audio=${store?.newRecordAudio}/${store?.totalRecordAudio},video=${store?.newRecordVideo}/${store?.totalRecordVideo}"
                 )
             }
-        runCatching { bridge.connection.notifyMediaSyncCompleted() }
+        if (shouldSendMediaSyncCompletedBeforeWifiOpen()) {
+            runCatching { bridge.connection.notifyMediaSyncCompleted() }
+        }
         runCatching { UteSmartAuthWarmup(bridge).run(GloryViewAuthWarmupMillis) }
             .onSuccess { Log.i(Tag, "wifi warmup auth $it") }
             .onFailure { Log.w(Tag, "wifi warmup auth failed: ${it.message}") }

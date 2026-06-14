@@ -11,3 +11,4 @@ local.properties
 *.apks
 *.aab
 dist/apk/
+dist/smoke-reports-phone/

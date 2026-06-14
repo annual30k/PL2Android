@@ -30,6 +30,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "REST_BASE_URL", runtimeString("PATROL_REST_BASE_URL").asBuildConfigString())
         buildConfigField("String", "WEBSOCKET_URL", runtimeString("PATROL_WEBSOCKET_URL").asBuildConfigString())
@@ -94,6 +95,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

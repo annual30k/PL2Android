@@ -183,13 +183,21 @@ data class SmokeDirectWifiSwitchOptions(
 data class SmokeWifiMediaSyncOptions(
     val downloadFirst: Boolean,
     val downloadKind: MediaKind? = null,
-    val currentPhoneWifiOnly: Boolean = false
+    val currentPhoneWifiOnly: Boolean = false,
+    val downloadLimit: Int = 1
 ) {
     fun selectDownloadCandidate(files: List<MediaFile>): MediaFile? =
         if (downloadKind != null) {
             files.firstOrNull { it.kind == downloadKind }
         } else {
             files.firstOrNull()
+        }
+
+    fun selectDownloadCandidates(files: List<MediaFile>): List<MediaFile> =
+        if (downloadKind != null) {
+            files.filter { it.kind == downloadKind }.take(downloadLimit)
+        } else {
+            files.take(downloadLimit)
         }
 }
 
@@ -211,6 +219,8 @@ private object SmokeTestRunner {
         val runCommands = intent.getBooleanExtra("commands", true)
         val enableWifi = intent.getBooleanExtra("wifi", false)
         val wifiProbeOnly = intent.getBooleanExtra("wifiProbeOnly", false)
+        val localMediaOnly = intent.getBooleanExtra("localMediaOnly", false)
+        val currentWifiMediaOnly = intent.getBooleanExtra("currentWifiMediaOnly", false)
         val wifiProbeMillis = intent.getLongExtra("wifiProbeMillis", WifiProbeOnlyDefaultMillis)
         val runAuth = intent.getBooleanExtra("auth", true)
         val skipLogin = intent.getBooleanExtra("skipLogin", false)
@@ -238,13 +248,14 @@ private object SmokeTestRunner {
         val wifiMediaSyncOptions = SmokeWifiMediaSyncOptions(
             downloadFirst = intent.getBooleanExtra("wifiDownloadFirst", false),
             downloadKind = intent.getStringExtra("wifiDownloadKind").orEmpty().toSmokeMediaKindOrNull(),
-            currentPhoneWifiOnly = intent.getBooleanExtra("wifiMediaOnly", false)
+            currentPhoneWifiOnly = intent.getBooleanExtra("wifiMediaOnly", false),
+            downloadLimit = intent.getIntExtra("wifiDownloadLimit", 1).coerceIn(1, 50)
         )
         val commandHoldMillis = intent.getLongExtra("commandHoldMillis", CommandHoldMillis)
             .coerceIn(MinCommandHoldMillis, MaxCommandHoldMillis)
         report.step(
             "WIFI_MEDIA_OPTIONS",
-            "downloadFirst=${wifiMediaSyncOptions.downloadFirst},downloadKind=${wifiMediaSyncOptions.downloadKind ?: "any"},currentPhoneWifiOnly=${wifiMediaSyncOptions.currentPhoneWifiOnly}"
+            "downloadFirst=${wifiMediaSyncOptions.downloadFirst},downloadKind=${wifiMediaSyncOptions.downloadKind ?: "any"},currentPhoneWifiOnly=${wifiMediaSyncOptions.currentPhoneWifiOnly},downloadLimit=${wifiMediaSyncOptions.downloadLimit}"
         )
         report.step("COMMAND_OPTIONS", "holdMillis=$commandHoldMillis")
         val targetDeviceId = intent.getStringExtra("targetDeviceId").orEmpty()
@@ -310,6 +321,14 @@ private object SmokeTestRunner {
             tokenStore.updatePairingUsername(pairingAccountId)
             report.step("PAIRING_ACCOUNT", pairingAccountId)
         }
+        if (localMediaOnly) {
+            runLocalMediaOnlyChecks(report, coordinator)
+            return
+        }
+        if (currentWifiMediaOnly) {
+            runCurrentWifiMediaOnlyChecks(report, context, coordinator, wifiMediaSyncOptions)
+            return
+        }
         val devices = scanDevices(report, coordinator)
         val selected = devices.selectedSmokeDevice(targetDeviceId, targetDeviceName)
         if (selected == null) {
@@ -325,6 +344,7 @@ private object SmokeTestRunner {
         }
         report.step("DEVICE_STATUS", bound.summary())
         if (!bound.online) return
+        runDeviceIdentityDiagnostics(report, bridge)
         if (runDangerousDeviceAccountActions(report, bridge, clearDeviceAccount, clearDeviceAccountConfirm, factoryResetTarget, factoryResetConfirm)) {
             return
         }
@@ -647,27 +667,61 @@ private object SmokeTestRunner {
                 coordinator.mediaFiles(local = false)
             } ?: error("device media list timeout")
         }.orEmpty()
-        val first = options.selectDownloadCandidate(deviceFiles)
-        if (first == null) {
+        val candidates = options.selectDownloadCandidates(deviceFiles)
+        if (candidates.isEmpty()) {
             report.fail("UTE_WIFI_MEDIA_DOWNLOAD_FIRST", "no device media file to download kind=${options.downloadKind ?: "any"}")
             return
         }
-        val emitted = mutableListOf<String>()
-        runStep(report, "UTE_WIFI_MEDIA_DOWNLOAD_FIRST") {
-            withTimeoutOrNull(WifiMediaDownloadTimeoutMillis) {
-                coordinator.transferMedia(first.id, TransferTarget.PhoneSandbox).collect { media ->
-                    emitted += media.toTransferSmokeSummary()
-                }
-            } ?: error("download timeout: ${first.id}")
-            check(emitted.isNotEmpty()) { "download emitted no transfer states: ${first.id}" }
-            emitted.joinToString(separator = " | ")
+        val downloadedIds = mutableListOf<String>()
+        candidates.forEachIndexed { index, candidate ->
+            val emitted = mutableListOf<String>()
+            val stepName = if (index == 0) {
+                "UTE_WIFI_MEDIA_DOWNLOAD_FIRST"
+            } else {
+                "UTE_WIFI_MEDIA_DOWNLOAD_${index + 1}"
+            }
+            runStep(report, stepName) {
+                withTimeoutOrNull(WifiMediaDownloadTimeoutMillis) {
+                    coordinator.transferMedia(candidate.id, TransferTarget.PhoneSandbox).collect { media ->
+                        emitted += media.toTransferSmokeSummary()
+                    }
+                } ?: error("download timeout: ${candidate.id}")
+                check(emitted.isNotEmpty()) { "download emitted no transfer states: ${candidate.id}" }
+                downloadedIds += candidate.id
+                emitted.joinToString(separator = " | ")
+            }
+            runStep(report, "${stepName}_LOCAL") {
+                withTimeoutOrNull(MediaCheckTimeoutMillis) {
+                    coordinator.mediaFiles(local = true)
+                        .filter {
+                            it.id == candidate.id ||
+                                it.name == candidate.name ||
+                                it.contentUri?.contains(candidate.name.substringBeforeLast('.')) == true
+                        }
+                        .map {
+                            "${it.id}:${it.kind}:${it.size}:uri=${it.contentUri.orEmpty()}:status=${it.transferStatus}"
+                        }
+                } ?: "timeout"
+            }
         }
+        runStep(report, "UTE_WIFI_MEDIA_BATCH_SUMMARY") {
+            check(downloadedIds.size == candidates.size) {
+                "downloaded ${downloadedIds.size}/${candidates.size}: ${downloadedIds.joinToString()}"
+            }
+            "downloaded=${downloadedIds.size},ids=${downloadedIds.joinToString()}"
+        }
+        val first = candidates.first()
         runStep(report, "UTE_WIFI_MEDIA_LOCAL_AFTER_DOWNLOAD") {
             withTimeoutOrNull(MediaCheckTimeoutMillis) {
                 coordinator.mediaFiles(local = true)
-                    .filter { it.id == first.id || it.name == first.name || it.contentUri?.contains(first.name.substringBeforeLast('.')) == true }
+                    .filter {
+                        it.id == first.id ||
+                            it.name == first.name ||
+                            it.contentUri?.contains(first.name.substringBeforeLast('.')) == true
+                    }
                     .map { "${it.id}:${it.kind}:${it.size}:uri=${it.contentUri.orEmpty()}:status=${it.transferStatus}" }
-            } ?: "timeout"
+            }
+                ?: "timeout"
         }
         runStep(report, "UTE_BACKGROUND_UPLOAD_QUEUE_AFTER_DOWNLOAD") {
             val local = withTimeoutOrNull(MediaCheckTimeoutMillis) {
@@ -765,6 +819,14 @@ private object SmokeTestRunner {
         }.getOrDefault("scan-unavailable")
         return "ssid=${info?.ssid},bssid=${info?.bssid},ip=${info?.ipAddress?.toIpv4String()},link=${info?.linkSpeed}Mbps,uteScan=[${uteScanResults.ifBlank { "none" }}]"
     }
+
+    @Suppress("DEPRECATION")
+    private fun currentWifiSsid(context: Context): String? =
+        context.getSystemService(WifiManager::class.java)
+            ?.connectionInfo
+            ?.ssid
+            ?.trim('"')
+            ?.takeUnless { it.isBlank() || it == "<unknown ssid>" }
 
     private suspend fun probeWifiFileService(context: Context): String = withContext(Dispatchers.IO) {
         val targets = wifiProbeTargets(context)
@@ -923,6 +985,25 @@ private object SmokeTestRunner {
         runStep(report, "HEADSET_FILES_BEFORE") { headsetFileListSummary(bridge) }
     }
 
+    private suspend fun runDeviceIdentityDiagnostics(report: SmokeReport, bridge: UteSdkBridge) {
+        runStep(report, "SMART_BATTERY_INFO") {
+            bridge.connection.smartGetBatteryInfo().toSmokeSummary()
+        }
+        runStep(report, "DEVICE_BATTERY_INFO") {
+            bridge.connection.getBatteryInfo().toSmokeSummary()
+        }
+        runStep(report, "SMART_DEVICE_INFO") {
+            bridge.connection.smartGetDeviceInfo().toSmokeSummary()
+        }
+        runStep(report, "DEVICE_INFO") {
+            bridge.connection.getDeviceInfo(DeviceInfoRequest().apply {
+                address = true
+                deviceBtModel = true
+                deviceVersionType = true
+            }).toSmokeSummary()
+        }
+    }
+
     private suspend fun runDeviceCommands(
         report: SmokeReport,
         coordinator: PatrolCoordinator,
@@ -1059,6 +1140,74 @@ private object SmokeTestRunner {
         }
     }
 
+    private suspend fun runLocalMediaOnlyChecks(report: SmokeReport, coordinator: PatrolCoordinator) {
+        val local = runStep(report, "MEDIA_LOCAL_ONLY") {
+            withTimeoutOrNull(MediaCheckTimeoutMillis) {
+                coordinator.mediaFiles(local = true)
+            } ?: error("local media list timeout")
+        }.orEmpty()
+        report.step(
+            "MEDIA_LOCAL_ONLY_COUNT",
+            "count=${local.size},files=${local.joinToString(separator = " | ") { "${it.id}:${it.kind}:${it.size}:uri=${it.contentUri.orEmpty()}" }}"
+        )
+    }
+
+    private suspend fun runCurrentWifiMediaOnlyChecks(
+        report: SmokeReport,
+        context: Context,
+        coordinator: PatrolCoordinator,
+        options: SmokeWifiMediaSyncOptions
+    ) {
+        val ssid = currentWifiSsid(context).orEmpty()
+        report.step("CURRENT_WIFI_MEDIA_SSID", ssid.ifBlank { "unknown" })
+        check(ssid.isLikelyDeviceWifiHotspotSsidForSmoke()) {
+            "phone is not connected to a device hotspot; current=$ssid"
+        }
+        runWifiNetworkProbe(report, context)
+        val deviceFiles = runStep(report, "CURRENT_WIFI_MEDIA_DEVICE_LIST") {
+            withTimeoutOrNull(WifiMediaListSmokeTimeoutMillis) {
+                coordinator.mediaFiles(local = false)
+            } ?: error("device media list timeout")
+        }.orEmpty()
+        report.step(
+            "CURRENT_WIFI_MEDIA_DEVICE_COUNT",
+            "count=${deviceFiles.size},files=${deviceFiles.joinToString(separator = " | ") { "${it.id}:${it.kind}:${it.name}:${it.size}" }}"
+        )
+        if (!options.downloadFirst) {
+            report.step("CURRENT_WIFI_MEDIA_DOWNLOAD", "skipped; pass --ez wifiDownloadFirst true")
+            return
+        }
+        val candidates = options.selectDownloadCandidates(deviceFiles)
+        check(candidates.isNotEmpty()) { "no device media file to download kind=${options.downloadKind ?: "any"}" }
+        val downloadedIds = mutableListOf<String>()
+        candidates.forEachIndexed { index, candidate ->
+            val emitted = mutableListOf<String>()
+            val stepName = "CURRENT_WIFI_MEDIA_DOWNLOAD_${index + 1}"
+            runStep(report, stepName) {
+                withTimeoutOrNull(WifiMediaDownloadTimeoutMillis) {
+                    coordinator.transferMedia(candidate.id, TransferTarget.PhoneSandbox).collect { media ->
+                        emitted += media.toTransferSmokeSummary()
+                    }
+                } ?: error("download timeout: ${candidate.id}")
+                check(emitted.isNotEmpty()) { "download emitted no transfer states: ${candidate.id}" }
+                downloadedIds += candidate.id
+                emitted.joinToString(separator = " | ")
+            }
+            runStep(report, "${stepName}_LOCAL") {
+                withTimeoutOrNull(MediaCheckTimeoutMillis) {
+                    coordinator.mediaFiles(local = true)
+                        .filter {
+                            it.id == candidate.id ||
+                                it.name == candidate.name ||
+                                it.contentUri?.contains(candidate.name.substringBeforeLast('.')) == true
+                        }
+                        .map { "${it.id}:${it.kind}:${it.size}:uri=${it.contentUri.orEmpty()}:status=${it.transferStatus}" }
+                } ?: "timeout"
+            }
+        }
+        report.step("CURRENT_WIFI_MEDIA_BATCH_SUMMARY", "downloaded=${downloadedIds.size},ids=${downloadedIds.joinToString()}")
+    }
+
     private suspend fun runFirmwareCheck(report: SmokeReport, firmwareGateway: FirmwareGateway, device: DeviceStatus) {
         runStep(report, "FIRMWARE_CHECK") {
             firmwareGateway.check(device, FirmwareDeviceMetadata(vendor = "UTE"))
@@ -1118,6 +1267,7 @@ private object SmokeTestRunner {
         }
         if (targetDeviceName.isNotBlank()) {
             firstOrNull { it.name.contains(targetDeviceName, ignoreCase = true) }?.let { return it }
+            return null
         }
         return preferredControlDevice()
     }
@@ -1296,7 +1446,7 @@ private object SmokeTestRunner {
     private const val MediaCheckTimeoutMillis = 12_000L
     private const val WifiMediaDiagnosticsTimeoutMillis = 35_000L
     private const val WifiMediaListSmokeTimeoutMillis = 70_000L
-    private const val WifiMediaDownloadTimeoutMillis = 5 * 60_000L
+    private const val WifiMediaDownloadTimeoutMillis = 60_000L
     private const val CommandNotifyProbeMillis = 45_000L
     private const val PairingNotifyProbeMillis = 8_000L
     private const val SmartAuthNotifyProbeMillis = 8_000L
@@ -1384,6 +1534,14 @@ private object SmokeTestRunner {
         "ISP_CAMERA_OFF" to GlassesState.ISP_CAMERA_NOT_TURNED_ON
     )
     private val Timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+}
+
+internal fun String.isLikelyDeviceWifiHotspotSsidForSmoke(): Boolean {
+    val normalized = uppercase(Locale.US)
+    return normalized.startsWith("UTE") ||
+        normalized.startsWith("GLORY") ||
+        normalized.startsWith("AI_GLASS") ||
+        normalized.contains("GLASS")
 }
 
 private object SmokeTestRunGate {

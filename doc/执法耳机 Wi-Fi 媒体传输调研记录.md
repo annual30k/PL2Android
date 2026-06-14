@@ -1807,3 +1807,343 @@ Room 数据库复核：
 当前结论：
 
 - 对不支持录音的 Glass，设备页不再显示录音按钮，也不再显示录音能力状态行。
+
+### 2026-06-14 12:45 媒体页“同步到手机”先打开设备热点
+
+用户反馈：蓝牙连接 Glass 后，在媒体页点击“同步到手机”，无法打开设备热点同步。
+
+根因定位：
+
+- 成功的 debug smoke 路径会先执行 `gateway.configureWifi(enabled = true, ssid = "", password = "")`，再等待 `WAIT_WIFI_READY`，之后才查设备媒体和下载。
+- 生产媒体页按钮 `syncDeviceMediaToPhone(refreshFirst = true)` 原来直接刷新设备媒体列表，把打开热点隐藏在 `UteWifiMediaClient.listFiles()` 内部。
+- 这样 UI 路径没有明确的“打开设备 Wi-Fi”阶段；如果列表查询失败或被降级为空列表，用户看到的就是同步没启动/热点没打开。
+
+代码修正：
+
+- `PatrolViewModel.syncDeviceMediaToPhone(...)`：
+  - `refreshFirst=true` 时先显示“正在打开设备 Wi-Fi 并读取设备文件”。
+  - 新增 `openDeviceWifiForMediaSync()`，在刷新设备文件前调用 `deviceControlGateway.readWifi()` 和 `configureWifi(true, ...)`。
+  - 设备 Wi-Fi 开启失败时直接显示 `operatorFacingWifiError()`，不再无提示地继续刷新空列表。
+- `UteWifiProbeCatalog.DefaultHosts`：
+  - 增加 Glory Glass 实际热点网关 `192.168.222.1` 和 `192.168.222.254`。
+  - 目的：当 Android `linkProperties` 未及时返回设备网关时，仍优先探测 Glass 的 `/media/list`，避免热点已打开但列表为空。
+
+新增回归测试：
+
+- `syncDeviceMediaToPhoneOpensDeviceWifiBeforeRefreshingDeviceFiles`
+  - 证明同步按钮路径会在读取设备端媒体列表前先 `configureWifi(true)`。
+- `UteWifiProbeCatalogTest.includesCommonDeviceApGatewaysBeforeLanFallbacks`
+  - 证明 `192.168.222.1` 在默认探测主机中，并且排在普通 LAN 路由器 fallback 前面。
+
+验证：
+
+- 测试通过：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --tests com.patrollink.data.ute.UteWifiMediaClientTest --tests com.patrollink.data.ute.UteWifiMediaParserTest --tests com.patrollink.data.ute.UteWifiProbeCatalogTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-sync-opens-device-wifi-probe222-debug.apk`
+- 安装时间：
+  - 模拟器 `lastUpdateTime=2026-06-14 12:40:20`
+  - 真机 `lastUpdateTime=2026-06-14 12:40:24`
+- 真机 fresh smoke：
+  - 目标只选 `Glory Glass 2-00F7 / 78:02:B7:66:00:F7`，未测试 E1。
+  - `PASS DEVICE_CAPABILITIES DeviceCapabilities(... supportsWifi=true, supportsFileTransfer=true, supportsPhoto=true, supportsVideo=true, supportsAudioRecord=false ...)`
+  - `PASS READ_WIFI DeviceWifiState(enabled=true, ssid=UTE_00F7, passwordConfigured=true, connected=true)`
+  - `PASS ENABLE_WIFI DeviceWifiState(enabled=true, ssid=UTE_00F7, passwordConfigured=true, connected=true)`
+  - `PASS WAIT_WIFI_READY ready=true; enabled=true,connected=true,ssid=UTE_00F7`
+  - `PASS WIFI_ANDROID_NETWORK ssid="UTE_00F7", ip=192.168.222.101`
+  - `PASS UTE_WIFI_MEDIA_DIAGNOSTICS` 命中 `http://192.168.222.1:8000/media/list`
+  - `PASS UTE_WIFI_MEDIA_LIST` 返回 16 个文件，包含：
+    - `ute-wifi-0b39037a5ba6cff9:Video:眼镜视频_20260614013929770.mp4:15.1 MB`
+    - `ute-wifi-f722ac875bbc741b:Video:眼镜视频_20260614014243992.mp4:15.1 MB`
+    - `ute-wifi-c04dc9ef1912c960:Video:眼镜视频_20260614015641880.mp4:9.3 MB`
+
+当前结论：
+
+- 媒体页“同步到手机”路径现在会先明确打开/确认设备热点，再刷新设备文件并同步。
+- Glass 热点和媒体列表在真机上已重新验证通过。
+
+### 2026-06-14 13:00 Wi-Fi 传输失败复盘与闭环修正
+
+用户反馈：点击打开热点上传照片后一直提示 Wi-Fi 传输失败。
+
+现场证据：
+
+- 失败日志多次出现同一批设备文件重复下载：
+  - `UteWifiMedia: cached wifi download path failed for ute-wifi-...`
+  - 多条 `/media/download?name=... -> null; retrying with sdk wifi prepare`
+- 真机网络曾停留在设备热点：
+  - SSID `UTE_00F7`
+  - 手机 IP `192.168.222.101`
+  - 网关 `192.168.222.1`
+- 在该热点网络下，设备媒体 HTTP 服务实际可用：
+  - `http://192.168.222.1:8000/media/list` 返回 200 和文件 JSON。
+  - `http://192.168.222.1:8000/media/20260614015638259.jpg` 返回 200，大小 `3488793`。
+  - `/20260614015638259.jpg`、`/download/...`、`/file/...`、`/media/download?name=...` 返回 404。
+
+根因判断：
+
+- 设备热点和媒体服务不是完全不可用，核心链路 `/media/<文件名>` 已验证可下载。
+- UI 同步按钮可以被重复触发，导致多个 Wi-Fi 媒体同步任务并发执行，同一设备 HTTP 服务被重复请求，表现为持续失败提示。
+- 同步结束后没有明确关闭设备 Wi-Fi，手机可能继续停留在 `UTE_00F7`，导致登录和后台上传访问不到后端 `192.168.1.3:8080`。
+
+代码修正：
+
+- `PatrolViewModel.syncDeviceMediaToPhone(...)`：
+  - 新增 `deviceMediaSyncJob` 单飞保护，同步进行中再次点击只提示“正在同步设备文件，请稍候”，不再启动第二个下载任务。
+  - `refreshFirst=true` 且已打开设备 Wi-Fi 后，在同步结束的 `finally` 中调用 `closeDeviceWifiAfterMediaSync()`。
+- `closeDeviceWifiAfterMediaSync()`：
+  - 调用 `deviceControlGateway.configureWifi(enabled = false, ...)` 关闭设备热点。
+  - 关闭成功后更新 `deviceWifiState`。
+  - 关闭失败不覆盖最终同步结果提示，避免用户误判文件下载状态。
+
+新增回归测试：
+
+- `syncDeviceMediaToPhoneIgnoresDuplicateTapWhileTransferIsActive`
+  - 证明同步任务未完成时重复点击不会产生第二次设备文件传输。
+- `syncDeviceMediaToPhoneClosesDeviceWifiAfterTransferFinishes`
+  - 证明设备文件传输完成后会下发 `configureWifi(false)`。
+
+验证：
+
+- 测试通过：
+  - `./gradlew :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest.syncDeviceMediaToPhoneClosesDeviceWifiAfterTransferFinishes --tests com.patrollink.presentation.PatrolViewModelTest.syncDeviceMediaToPhoneIgnoresDuplicateTapWhileTransferIsActive --console=plain`
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --tests com.patrollink.data.ute.UteWifiMediaClientTest --tests com.patrollink.data.ute.UteWifiMediaParserTest --tests com.patrollink.data.ute.UteWifiProbeCatalogTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-wifi-sync-single-flight-close-ap-debug.apk`
+- 安装时间：
+  - 真机 `lastUpdateTime=2026-06-14 13:02:21`
+  - 模拟器安装成功。
+- 安装后真机网络：
+  - 当前 SSID `英英杀人女魔头5G`
+  - IP `192.168.1.6`
+  - 路由 `192.168.1.0/24 dev wlan0`
+
+当前结论：
+
+- 这轮修复针对“持续 Wi-Fi 传输失败”的两个高概率触发点：重复并发同步、同步后不退出设备热点。
+- 新版本已安装到真机，可以重新在媒体页点击设备文件同步到手机验证。
+
+### 2026-06-14 13:10 传输目标口径修正：设备文件先同步到手机
+
+用户纠正：当前要做的是设备端文件通过设备热点同步到已连接设备热点的手机 App，不是直接上传后端。
+
+已复核代码路径：
+
+- 媒体页设备文件入口调用 `syncDeviceMediaToPhone(...)`。
+- 实际传输调用 `coordinator.transferMedia(fileId, TransferTarget.PhoneSandbox)`。
+- UTE Wi-Fi 文件路径会先通过设备热点下载到手机本地目录，并写入本地媒体索引。
+- 后台上传队列只应在手机本地文件已生成后处理，不能把设备端远程文件直接作为后端上传对象。
+
+代码修正：
+
+- UI/提示文案统一为“同步到手机”“同步中”“待同步手机”“已同步手机”。
+- 同步成功提示改为“已同步 N 个设备文件到手机本地媒体文件”，不再把主链路描述成上传后端。
+- 预览错误提示改为“请先完成同步到手机”。
+- UTE 录像能力提示改为“同步到手机接口”。
+
+验证：
+
+- 测试通过：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --tests com.patrollink.data.ute.UteSdkMediaGatewayTest --tests com.patrollink.data.ute.UteWifiMediaClientTest --tests com.patrollink.data.ute.UteWifiMediaParserTest --tests com.patrollink.data.ute.UteWifiProbeCatalogTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-device-to-phone-wifi-sync-debug.apk`
+- 真机安装时间：
+  - `lastUpdateTime=2026-06-14 13:10:17`
+
+### 2026-06-14 13:19 下载失败与自动切设备热点
+
+用户反馈：一直提示媒体下载失败，并确认下载时应连接设备热点。
+
+现场证据：
+
+- 真机当前 Wi-Fi 仍是普通路由：
+  - SSID `英英杀人女魔头5G`
+  - IP `192.168.1.6`
+- App 日志显示已尝试打开设备 Wi-Fi 和发起系统连接流程：
+  - `device wifi notify state=1 for ssid=UTE_00F7`
+  - `startScan for device wifi ssid=UTE_00F7 started=true`
+  - Android Wi-Fi 选择日志中仍保持 `英英杀人女魔头5G`，没有实际切到 `UTE_00F7`。
+
+结论：
+
+- 设备文件下载必须走设备热点 `UTE_00F7`。
+- Android 10+ / MIUI 不允许普通 App 无提示静默强切系统 Wi-Fi；App 可以通过 `WifiNetworkSpecifier` 请求连接设备热点，系统允许后 App 进程绑定该热点网络下载。
+- 如果系统没有授权或没有切过去，下载会失败，并需要用户在系统 Wi-Fi 弹窗或设置中选择 `UTE_00F7`。
+
+代码修正：
+
+- 单文件“同步到手机”入口 `downloadMedia(fileId)`：
+  - 对 `ute-wifi-*` 设备文件先调用 `openDeviceWifiForMediaSync()`。
+  - 下载完成或失败后调用 `closeDeviceWifiAfterMediaSync()` 关闭设备热点。
+- 已有设备列表批量同步入口 `syncDeviceMediaToPhone(...)`：
+  - 即使不是 `refreshFirst=true`，只要待同步文件包含 `ute-wifi-*`，也会先打开设备 Wi-Fi 再传输。
+- 新增回归测试：
+  - `downloadMediaOpensDeviceWifiBeforeTransferringDeviceWifiFile`
+  - `syncDeviceMediaToPhoneOpensDeviceWifiBeforeTransferringExistingDeviceFiles`
+
+验证：
+
+- 先确认两个新增测试红灯失败，再实现后转绿。
+- 回归通过：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --tests com.patrollink.data.wifi.DeviceWifiNetworkConnectorTest --tests com.patrollink.data.ute.UteSdkMediaGatewayTest --tests com.patrollink.data.ute.UteWifiMediaClientTest --tests com.patrollink.data.ute.UteWifiMediaParserTest --tests com.patrollink.data.ute.UteWifiProbeCatalogTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-device-wifi-auto-request-debug.apk`
+- 真机安装时间：
+  - `lastUpdateTime=2026-06-14 13:19:39`
+
+### 2026-06-14 13:29 缓存 Wi-Fi 凭据导致未先开热点
+
+用户反馈：点“同步到手机”后设备热点打不开。
+
+新增现场证据：
+
+- 真机当前仍在普通 Wi-Fi `英英杀人女魔头5G`。
+- App 在 13:26 请求连接 `UTE_00F7`，但扫描结果为 `matches=none`。
+- 同一时间段后续才出现 SDK Wi-Fi 指令：
+  - `smartGetDeviceWiFiInfo` 返回 `ssid=UTE_00F7,password=12345678,state=8`
+  - `smartSetDeviceWiFiSwitch(true)` 相关 BLE 指令随后才发出。
+
+根因：
+
+- `UteWifiMediaClient.download()` 里如果存在缓存的设备 Wi-Fi 凭据，会先尝试用缓存凭据连接热点。
+- 当手机并未处于 `UTE_00F7`，且设备热点当前未广播时，这个顺序会先扫描/连接失败，用户看到的是“设备热点打不开/媒体下载失败”。
+- 正确顺序应为：如果手机已经连着设备热点，可以复用；否则必须先走 SDK 开启设备热点，再请求 Android 连接。
+
+代码修正：
+
+- 新增 `shouldUseCachedWifiDownloadPath(currentPhoneWifiOnly, phoneAlreadyConnected)`。
+- 缓存 Wi-Fi 下载路径只在以下情况使用：
+  - 手机当前已经连到设备热点；
+  - 或明确要求只使用当前手机 Wi-Fi。
+- 手机未连设备热点时，不再用缓存凭据直接连接；改为进入 SDK 开热点准备流程。
+
+验证：
+
+- 新增回归测试：
+  - `cachedWifiDownloadDoesNotConnectBeforeSdkOpensApWhenPhoneIsNotOnDeviceHotspot`
+  - `cachedWifiDownloadCanReuseCurrentDeviceHotspotConnection`
+- 回归通过：
+  - `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --tests com.patrollink.presentation.PatrolViewModelTest --tests com.patrollink.data.wifi.DeviceWifiNetworkConnectorTest --tests com.patrollink.data.ute.UteSdkMediaGatewayTest --tests com.patrollink.data.ute.UteWifiMediaClientTest --tests com.patrollink.data.ute.UteWifiMediaParserTest --tests com.patrollink.data.ute.UteWifiProbeCatalogTest --console=plain`
+  - `./gradlew :app:assembleDebug --console=plain`
+- 新 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-wifi-open-before-cached-download-debug.apk`
+- 真机安装时间：
+  - `lastUpdateTime=2026-06-14 13:29:08`
+
+### 2026-06-14 13:57 Glass 当前会话无法打开 AP 的 A/B 结论
+
+用户反馈：之前可以打开设备热点，是刚刚才出现打不开。
+
+现场复测：
+
+- 当前最新版包直接开热点：
+  - `smartSetDeviceWiFiSwitch enabled=true success=true,error=100000,data=false`
+  - 设备 Wi-Fi 状态持续 `WIFI_AP_STOP(5)`。
+  - 没有收到 `SMART_WIFI_STATE_NOTIFY`。
+- 回装 13:19 已保存 APK：
+  - `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-device-wifi-auto-request-debug.apk`
+  - 同样跑 `directWifiSwitchNoAccountGuard=true`，结果仍为 `success=true,error=100000,data=false`。
+- 历史成功报告对照：
+  - `smoke-test-20260613-145728.txt`：`DIRECT_WIFI_SWITCH_ON_NO_ACCOUNT_GUARD success=true,error=100000,data=true`，随后收到 `SMART_WIFI_STATE_NOTIFY 1 -> 6 -> 7`。
+  - `smoke-test-20260614-022529.txt`：手机已连 `UTE_00F7`，IP `192.168.222.101`，`/media/list` 和视频下载成功。
+- 当前尝试先拍照/录像唤醒后再开 Wi-Fi：
+  - `TAKE_PHOTO` / `START_VIDEO` / `STOP_VIDEO` API 调用返回通过。
+  - 但 `COMMAND_NOTIFIES none`，`wifi warmup glasses state=0,store=photo=0/0,audio=0/0,video=0/0`。
+- 当前尝试清除设备账号：
+  - `clearAccountID` 返回 `408`，未成功。
+
+判断：
+
+- 当前失败不是 13:37/13:41 的 APK 改动单独造成；同一旧 APK、同一直连开关探针也复现。
+- 当前 Glass 的 BLE 连接仍可建立，但 Smart 业务链路处于异常状态：存储/媒体状态读不到真实计数，Wi-Fi switch 返回 `data=false`，状态通知缺失。
+- 当设备正常时，SDK 开热点会返回 `data=true` 并产生 `SMART_WIFI_STATE_NOTIFY 1/6/7/8`；当前没有进入这条链路。
+
+代码侧处理：
+
+- 保留 Glass 账号 ACK 408 的兜底，避免已知 Glass 因账号写入超时被过早拦截。
+- Wi-Fi 开关不再把 `success=true,data=false` 当作成功；会明确报 `device wifi switch rejected`，避免 UI 假等待 18 秒。
+- 开 AP warmup 阶段不再发送 `notifyMediaSyncCompleted()`；该通知只适合在同步完成后使用。
+
+下一步人工复测建议：
+
+1. 断开手机蓝牙中的 Glory Glass，关闭眼镜再开机，等待系统蓝牙重新连上。
+2. 先在 PatrolLink 或 smoke 中跑直连开关探针，确认 `DIRECT_WIFI_SWITCH_ON_NO_ACCOUNT_GUARD data=true`。
+3. 若仍为 `data=false`，需要在 Glory View 里尝试打开/同步一次，确认设备端 Smart 服务是否被 Glory View 唤醒；之后再回到 PatrolLink 测。
+4. 若直连开关恢复为 `data=true`，再继续验证“同步到手机”按钮的自动开热点和下载闭环。
+
+当前安装回最新版：
+
+- `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-wifi-switch-reject-diagnostics-debug.apk`
+- 真机安装时间：`lastUpdateTime=2026-06-14 13:57:31`
+
+### 2026-06-14 14:04 Glass 开热点失败与电量诊断
+
+为判断“是否因电量低拒绝开热点”，在 debug smoke 中补充了眼镜 Smart 电量和设备信息探针。
+
+最新真机报告：
+
+- `/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports-phone/latest-after-battery-diagnostics.txt`
+- 真机安装包：`/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/PatrolLink-20260614-battery-diagnostics-debug.apk`
+- 安装时间：`lastUpdateTime=2026-06-14 14:02:24`
+
+关键返回：
+
+- `SMART_BATTERY_INFO success=true,error=100000,data=BatteryInfo:...percents=19,lowBatteryAlert=false,status=0`
+- `DEVICE_BATTERY_INFO success=false,error=408,...percents=0`
+- `SMART_DEVICE_INFO success=true,error=100000,data=SmartDeviceInfo:...glassesSn=S02510YCY3600006...`
+- `DIRECT_WIFI_SWITCH_ON_NO_ACCOUNT_GUARD success=true,error=100000,data=false`
+- `DIRECT_WAIT_WIFI_READY_NO_ACCOUNT_GUARD ready=false`
+- `DIRECT_WIFI_NOTIFIES none`
+
+判断：
+
+- 这次读到的有效眼镜侧电量是 Smart 电量接口的 `percents=19`，不是手机电量。
+- SDK 没有在当前公开资料里给出“低于多少禁止开热点”的明确阈值；`lowBatteryAlert=false` 也说明 SDK 未直接标记低电报警。
+- 但从现象看，19% 电量时设备直接拒绝 `smartSetDeviceWiFiSwitch(true)`，返回 `data=false`，且没有任何 Wi-Fi 状态通知；低电量保护是当前最强可疑因素之一。
+- 需要把眼镜充到更高电量后复测同一探针。如果充电后 `data=true` 并出现 `SMART_WIFI_STATE_NOTIFY 1 -> 6 -> 7`，即可确认当前失败由设备电量/电源策略导致。
+
+### 2026-06-14 15:32 Glass 充满电后 Wi-Fi 媒体同步闭环
+
+用户反馈眼镜已充满后，按同一目标设备 `Glory Glass 2-00F7 / 78:02:B7:66:00:F7` 复测。
+
+直连开热点探针：
+
+- 报告：`/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports-phone/smoke-test-20260614-after-full-charge-direct-wifi.txt`
+- `SMART_BATTERY_INFO ... percents=99`
+- `READ_WIFI DeviceWifiState(enabled=true, ssid=UTE_00F7, passwordConfigured=true, connected=true)`
+- `DIRECT_WIFI_SWITCH_ON_NO_ACCOUNT_GUARD success=true,error=100000,data=true`
+- `DIRECT_WAIT_WIFI_READY_NO_ACCOUNT_GUARD ready=true`
+- `DIRECT_WIFI_NOTIFIES SMART_WIFI_STATE_NOTIFY ... data=1 | ... data=7`
+
+媒体同步 smoke：
+
+- 报告：`/Users/qiuqiquan/Desktop/SmartHeadsetSystem/PatrolLink/dist/smoke-reports-phone/smoke-test-20260614-after-full-charge-wifi-download-photo-final.txt`
+- `SMART_BATTERY_INFO ... percents=93`
+- 设备热点开启成功：`ENABLE_WIFI ... enabled=true,connected=true,ssid=UTE_00F7`
+- 手机侧通过 `WifiNetworkSpecifier` 连接到 `UTE_00F7`：
+  - IP：`192.168.222.100`
+  - 网关/文件服务：`192.168.222.1`
+- 文件服务探测成功：
+  - `http://192.168.222.1:8000/`
+  - `http://192.168.222.1:8000/media/list`
+- 设备端列表成功：12 张照片、3 个视频。
+- 直接下载成功：
+  - `UTE_WIFI_DIRECT_DOWNLOAD_FIRST ... 20260613144750407.jpg:1593149`
+- PatrolLink 媒体下载成功：
+  - `UTE_WIFI_MEDIA_DOWNLOAD_FIRST ... status=Done ... uri=file:///data/user/0/com.patrollink/files/patrol_media/ute/20260613144750407.jpg`
+- 手机本地媒体索引成功：
+  - `UTE_WIFI_MEDIA_LOCAL_AFTER_DOWNLOAD ... ute-wifi-2c85e87d83429f7d:Photo:1.5 MB`
+- 后台上传队列成功：
+  - `UTE_BACKGROUND_UPLOAD_QUEUE_AFTER_DOWNLOAD ... receipt=upload-evidence-ute-wifi-2c85e87d83429f7d ... queued=true`
+- 同步后手机 Wi-Fi 已回到普通路由：
+  - `mWifiInfo SSID: "英英杀人女魔头5G", IP: /192.168.1.6`
+
+结论：
+
+- 14:04 的 `percents=19 + data=false` 与 15:27/15:32 的 `percents=99/93 + data=true` 对照，基本确认之前打不开热点是设备低电量或电源策略导致。
+- 当前充满电后，设备端开 AP、手机自动切设备热点、设备文件列表、照片下载到手机沙盒、后台上传队列全部闭环通过。
+- UI 层的 `downloadMedia()` / `syncDeviceMediaToPhone()` 已在 finally 中调用 `closeDeviceWifiAfterMediaSync()`，同步完成后会发送 `configureWifi(false)` 关闭设备热点；本次 smoke 的底层 coordinator 下载路径不代表 UI 层收尾行为。

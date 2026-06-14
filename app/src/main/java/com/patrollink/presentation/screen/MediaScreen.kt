@@ -95,6 +95,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DeviceCapabilities
+import com.patrollink.domain.DeviceMediaSyncUiState
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
 import com.patrollink.domain.OperationMessageType
@@ -141,6 +142,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         } else {
             files
                 .filter { !it.transferStatus.inProgress }
+                .filterNot { it.transferStatus == TransferStatus.Done && it.lastTransferTarget == TransferTarget.PhoneSandbox }
                 .filter { deviceFile ->
                     uiState.mediaFiles.none { it.id == deviceFile.id && it.local && !it.contentUri.isNullOrBlank() }
                 }
@@ -209,6 +211,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                             filter = filter,
                             timeFilter = timeFilter,
                             phoneSelected = uiState.selectedMediaLocal,
+                            loading = uiState.mediaLoading,
                             capabilities = uiState.deviceCapabilities
                         )
                     }
@@ -255,7 +258,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                                 if (ids.isEmpty()) {
                                     viewModel.showOperationMessage("没有待同步的设备文件", OperationMessageType.Warning)
                                 } else {
-                                    viewModel.syncDeviceMediaToPhone(ids)
+                                    viewModel.syncDeviceMediaToPhone(ids, refreshFirst = true)
                                     batchSelection = emptySet()
                                     batchMode = false
                                 }
@@ -274,18 +277,23 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                 }
             }
         }
-        selected?.takeIf { it.transferStatus.inProgress && it.id != dismissedTransferFileId }?.let { file ->
+        val selectedTransfer = selected?.takeIf { it.transferStatus.inProgress && it.id != dismissedTransferFileId }
+        val deviceSync = uiState.deviceMediaSync.takeIf { it.active }
+        if (deviceSync != null || selectedTransfer != null) {
             Box(
                 Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = if (colors.dark) 0.18f else 0.10f))
-                    .clickable { dismissedTransferFileId = file.id },
+                    .clickable {
+                        selectedTransfer?.let { dismissedTransferFileId = it.id }
+                    },
                 contentAlignment = Alignment.Center
             ) {
-                FloatingTransferProgress(
-                    file = file,
-                    modifier = Modifier.clickable {}
-                )
+                if (deviceSync != null) {
+                    FloatingDeviceSyncProgress(sync = deviceSync, modifier = Modifier.clickable {})
+                } else if (selectedTransfer != null) {
+                    FloatingTransferProgress(file = selectedTransfer, modifier = Modifier.clickable {})
+                }
             }
         }
     }
@@ -306,8 +314,8 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                         viewModel.downloadMedia(file.id)
                     }
                     MediaPrimaryAction.UploadedCloud -> viewModel.showOperationMessage("${file.name} 已上传", OperationMessageType.Success)
-                    MediaPrimaryAction.UploadedPhone -> viewModel.showOperationMessage("${file.name} 已上传到手机", OperationMessageType.Success)
-                    MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${file.name} ${transferLabel(file.transferStatus)}，请稍候", OperationMessageType.Warning)
+                    MediaPrimaryAction.UploadedPhone -> viewModel.showOperationMessage("${file.name} 已同步到手机", OperationMessageType.Success)
+                    MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${file.name} ${mediaStatusLabel(file)}，请稍候", OperationMessageType.Warning)
                 }
             },
             onVerify = {
@@ -836,10 +844,13 @@ private fun MediaEmptyState(
     filter: MediaFilter,
     timeFilter: MediaTimeFilter,
     phoneSelected: Boolean,
+    loading: Boolean,
     capabilities: DeviceCapabilities
 ) {
     val colors = PatrolDisplay.colors
     val description = when {
+        loading && phoneSelected -> "正在读取手机沙盒中的媒体文件。"
+        loading -> "正在读取设备端媒体文件。"
         phoneSelected -> "可从设备端上传到手机，或等待现场采集生成。"
         filter == MediaFilter.Video -> "连接设备 Wi-Fi 后刷新设备文件，识别到视频即可同步到手机端。"
         filter == MediaFilter.Audio && capabilities.supportsAudioRecord ->
@@ -863,7 +874,12 @@ private fun MediaEmptyState(
             Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(30.dp))
         }
         Spacer(Modifier.height(14.dp))
-        Text("暂无${timeFilter.emptyPrefix}${filter.label}文件", color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
+        Text(
+            if (loading) "正在加载${if (phoneSelected) "手机端" else "设备端"}文件" else "暂无${timeFilter.emptyPrefix}${filter.label}文件",
+            color = colors.text,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Black
+        )
         Spacer(Modifier.height(6.dp))
         Text(
             description,
@@ -1100,6 +1116,44 @@ private fun FloatingTransferProgress(file: MediaFile, modifier: Modifier = Modif
         }
         LinearProgressIndicator(
             progress = { file.progress.safeProgress() },
+            color = TechBlue,
+            trackColor = colors.control.copy(alpha = 0.65f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(99.dp))
+        )
+    }
+}
+
+@Composable
+private fun FloatingDeviceSyncProgress(sync: DeviceMediaSyncUiState, modifier: Modifier = Modifier) {
+    val colors = PatrolDisplay.colors
+    val percent = (sync.progress.safeProgress() * 100).toInt()
+    val countText = if (sync.totalCount > 0) {
+        " · ${sync.completedCount.coerceAtMost(sync.totalCount)}/${sync.totalCount}"
+    } else {
+        ""
+    }
+    Column(
+        modifier
+            .widthIn(max = 310.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.border.copy(alpha = 0.85f), RoundedCornerShape(22.dp))
+            .padding(horizontal = 18.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(Modifier.size(48.dp).clip(CircleShape).background(TechBlue.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.PhoneAndroid, contentDescription = null, tint = TechBlue, modifier = Modifier.size(27.dp))
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(sync.fileName.ifBlank { "设备文件同步" }, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${transferLabel(sync.status)} · $percent%$countText", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+        LinearProgressIndicator(
+            progress = { sync.progress.safeProgress() },
             color = TechBlue,
             trackColor = colors.control.copy(alpha = 0.65f),
             modifier = Modifier
@@ -1498,17 +1552,29 @@ private fun storageProgress(usedGb: Float, totalGb: Float): Float =
 private fun Float.safeProgress(): Float =
     if (isFinite()) coerceIn(0f, 1f) else 0f
 
-private fun mediaStatusLabel(file: MediaFile): String = when (file.transferStatus) {
-    TransferStatus.Done -> if (file.local) "已上传" else "已上传手机"
-    TransferStatus.Idle -> if (file.local) "待上传" else "待上传手机"
-    else -> transferLabel(file.transferStatus)
-}
+private fun mediaStatusLabel(file: MediaFile): String =
+    if (file.local) {
+        when (file.transferStatus) {
+            TransferStatus.Done -> "已上传"
+            TransferStatus.Idle -> "待上传"
+            else -> transferLabel(file.transferStatus)
+        }
+    } else {
+        when (file.transferStatus) {
+            TransferStatus.Done -> "已同步手机"
+            TransferStatus.Idle -> "待同步手机"
+            TransferStatus.Uploading -> "同步中"
+            TransferStatus.Hashing -> "校验中"
+            TransferStatus.Verifying -> "确认中"
+            TransferStatus.Failed -> "同步失败"
+        }
+    }
 
 private enum class MediaPrimaryAction(val label: String, val icon: ImageVector) {
     UploadCloud("上传云端", Icons.Filled.UploadFile),
     UploadedCloud("已上传", Icons.Filled.CloudDone),
-    UploadPhone("上传手机", Icons.Filled.PhoneAndroid),
-    UploadedPhone("已传手机", Icons.Filled.PhoneAndroid),
+    UploadPhone("同步到手机", Icons.Filled.PhoneAndroid),
+    UploadedPhone("已同步手机", Icons.Filled.PhoneAndroid),
     Busy("处理中", Icons.Filled.CloudUpload)
 }
 

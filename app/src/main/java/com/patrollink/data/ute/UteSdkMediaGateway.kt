@@ -48,17 +48,30 @@ class UteSdkMediaGateway(
             val discovered = localFiles()
             mediaIndex.upsertLocalMediaSnapshot(discovered)
             return (mediaIndex?.files(local = true).orEmpty() + discovered)
+                .filterNot { it.isLikelyWebUiAssetMedia() }
+                .deduplicateLocalMediaCopies()
                 .distinctBy { it.id to it.local }
                 .ifEmpty { fallbackGateway.listFiles(local = true) }
         }
         val wifiFilesResult = withTimeoutOrNull(WifiMediaListTimeoutMillis) {
             runCatching { wifiMediaClient?.listFiles().orEmpty() }
         }
+        val wifiFilesFailure = when {
+            wifiMediaClient == null -> null
+            wifiFilesResult == null -> IllegalStateException(WifiMediaListTimeoutMessage)
+            else -> wifiFilesResult.exceptionOrNull()
+        }
         val wifiFiles = wifiFilesResult?.getOrDefault(emptyList()).orEmpty()
-        if (wifiFilesResult?.isSuccess == true) replaceCachedWifiFiles(wifiFiles)
+        if (wifiFilesResult?.isSuccess == true) {
+            replaceCachedWifiFiles(wifiFiles)
+            wifiFiles.forEach { mediaIndex?.upsert(it) }
+        }
         val pushedFiles = requestPendingSmartMediaUpload()
         val audioFiles = withTimeoutOrNull(RemoteListTimeoutMillis) { queryAudioRecordFiles() }.orEmpty()
         val sdkFiles = (wifiFiles + pushedFiles + audioFiles).distinctBy { it.id to it.local }
+        if (shouldPropagateWifiMediaListFailure(wifiMediaClient != null, wifiFilesFailure, sdkFiles.isEmpty())) {
+            throw wifiFilesFailure ?: error(WifiSyncUnavailableMessage)
+        }
         if (sdkFiles.isEmpty() && bridge.client.isConnected) return emptyList()
         return sdkFiles.ifEmpty {
             withTimeoutOrNull(FallbackListTimeoutMillis) { fallbackGateway.listFiles(local = false) }.orEmpty()
@@ -68,6 +81,24 @@ class UteSdkMediaGateway(
     override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> {
         if (fileId.startsWith(WifiPrefix) && target in setOf(TransferTarget.PhoneSandbox, TransferTarget.Cloud)) {
             return flow {
+                if (target == TransferTarget.Cloud) {
+                    localMediaFileForUpload(fileId)?.let { (local, localFile) ->
+                        emit(local.copy(transferStatus = TransferStatus.Hashing, progress = 0.12f, lastTransferTarget = TransferTarget.Cloud))
+                        val uploaded = fallbackGateway.uploadLocalFile(localFile, storageSide = "PHONE", bizType = "MEDIA", bizId = fileId)
+                        val completed = requireUteCloudUploadResult(fileId, uploaded).copy(
+                            id = fileId,
+                            local = true,
+                            verified = true,
+                            transferStatus = TransferStatus.Done,
+                            progress = 1f,
+                            contentUri = Uri.fromFile(localFile).toString(),
+                            lastTransferTarget = TransferTarget.Cloud
+                        )
+                        mediaIndex?.upsert(completed, localPath = completed.contentUri)
+                        emit(completed)
+                        return@flow
+                    }
+                }
                 val client = wifiMediaClient ?: error(WifiSyncUnavailableMessage)
                 val remote = cachedWifiFiles[fileId] ?: listFiles(local = false).firstOrNull { it.id == fileId }
                     ?: error("wifi media file not found: $fileId")
@@ -87,9 +118,6 @@ class UteSdkMediaGateway(
                 )
                 mediaIndex?.upsert(local.copy(transferStatus = TransferStatus.Idle, progress = 0f, lastTransferTarget = null), localPath = local.contentUri, sha256 = sha256, watermarkToken = token)
                 if (target == TransferTarget.PhoneSandbox) {
-                    withContext(Dispatchers.IO) {
-                        runCatching { bridge.connection.notifyMediaSyncCompleted() }
-                    }
                     emit(local)
                     return@flow
                 }
@@ -244,15 +272,22 @@ class UteSdkMediaGateway(
 
     override suspend fun delete(fileId: String, local: Boolean): Boolean {
         if (local && (fileId.startsWith(PhotoPrefix) || fileId.startsWith(VideoPrefix) || fileId.startsWith(WifiPrefix))) {
-            val file = (mediaIndex?.find(fileId, local = true)?.let { listOf(it) }.orEmpty() + localFiles())
+            val localMedia = (mediaIndex?.find(fileId, local = true)?.let { listOf(it) }.orEmpty() + localFiles())
+                .filterNot { it.isLikelyWebUiAssetMedia() }
                 .firstOrNull { it.id == fileId }
-                ?.contentUri
-                ?.let { Uri.parse(it).path }
-                ?.let(::File)
-            return file?.delete() ?: false
+            val file = localMedia?.contentUri?.toLocalMediaFile()
+            val deleted = file?.let { target ->
+                !target.exists() || target.delete()
+            } ?: (localMedia != null)
+            if (deleted) {
+                file?.deleteIntegritySidecar()
+                mediaIndex?.delete(fileId, local = true)
+            }
+            return deleted
         }
         if (!local && fileId.startsWith(WifiPrefix)) {
             val deviceFileName = wifiDeviceFileNameForDelete(fileId, cachedWifiFiles[fileId]?.name)
+                ?: wifiDeviceFileNameForDelete(fileId, mediaIndex?.find(fileId, local = false)?.name)
                 ?: wifiDeviceFileNameForDelete(fileId, listFiles(local = false).firstOrNull { it.id == fileId }?.name)
                 ?: return false
             val deleted = withContext(Dispatchers.IO) {
@@ -290,6 +325,7 @@ class UteSdkMediaGateway(
     override suspend fun verifySha256(fileId: String): Boolean {
         if (fileId.startsWith(PhotoPrefix) || fileId.startsWith(VideoPrefix) || fileId.startsWith(WifiPrefix)) {
             val localFile = (mediaIndex?.find(fileId, local = true)?.let { listOf(it) }.orEmpty() + localFiles())
+                .filterNot { it.isLikelyWebUiAssetMedia() }
                 .firstOrNull { it.id == fileId }
                 ?.contentUri
                 ?.let { Uri.parse(it).path }
@@ -389,6 +425,25 @@ class UteSdkMediaGateway(
             .map { file -> file.toLocalMediaFile() }
             .sortedByDescending { it.time.toLongOrNull() ?: 0L }
 
+    private suspend fun localMediaFileForUpload(fileId: String): Pair<MediaFile, File>? {
+        val local = (mediaIndex?.find(fileId, local = true)?.let { listOf(it) }.orEmpty() + localFiles())
+            .filterNot { it.isLikelyWebUiAssetMedia() }
+            .firstOrNull { it.id == fileId && it.contentUri?.isNotBlank() == true }
+            ?: return null
+        val file = local.contentUri
+            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            ?.let { uri ->
+                when (uri.scheme) {
+                    "file" -> uri.path?.let(::File)
+                    null -> local.contentUri?.takeIf { it.startsWith("/") }?.let(::File)
+                    else -> null
+                }
+            }
+            ?.takeIf { it.exists() && it.isFile && it.length() > 0 }
+            ?: return null
+        return local to file
+    }
+
     private fun File.toLocalMediaFile(): MediaFile {
         val sessionId = nameWithoutExtension
         val kind = toMediaKind()
@@ -408,12 +463,13 @@ class UteSdkMediaGateway(
     }
 
     private fun File.isSupportedLocalMedia(): Boolean =
-        extension.equals("opus", ignoreCase = true) ||
-            extension.equals("jpg", ignoreCase = true) ||
-            extension.equals("jpeg", ignoreCase = true) ||
-            extension.equals("png", ignoreCase = true) ||
-            extension.equals("mp4", ignoreCase = true) ||
-            extension.equals("mov", ignoreCase = true)
+        !name.isLikelyWebUiAssetPath() &&
+            (extension.equals("opus", ignoreCase = true) ||
+                extension.equals("jpg", ignoreCase = true) ||
+                extension.equals("jpeg", ignoreCase = true) ||
+                extension.equals("png", ignoreCase = true) ||
+                extension.equals("mp4", ignoreCase = true) ||
+                extension.equals("mov", ignoreCase = true))
 
     private fun File.toMediaKind(): MediaKind = when (extension.lowercase()) {
         "jpg", "jpeg", "png" -> MediaKind.Photo
@@ -431,6 +487,49 @@ class UteSdkMediaGateway(
         MediaKind.Audio -> "设备录音_$name"
         MediaKind.Photo -> "眼镜照片_$name"
         MediaKind.Video -> "眼镜视频_$name"
+    }
+
+    private fun MediaFile.isLikelyWebUiAssetMedia(): Boolean =
+        name.removeMediaDisplayPrefix().isLikelyWebUiAssetPath() ||
+            contentUri.orEmpty().substringAfterLast('/').isLikelyWebUiAssetPath()
+
+    private fun List<MediaFile>.deduplicateLocalMediaCopies(): List<MediaFile> {
+        if (isEmpty()) return this
+        return groupBy { file -> file.localMediaCopyKey() }
+            .values
+            .map { copies ->
+                copies.maxWithOrNull(
+                    compareBy<MediaFile> { it.id.startsWith(WifiPrefix) }
+                        .thenBy { it.verified }
+                        .thenBy { it.contentUri?.isNotBlank() == true }
+                ) ?: copies.first()
+            }
+            .sortedByDescending { it.time.toLongOrNull() ?: 0L }
+    }
+
+    private fun MediaFile.localMediaCopyKey(): String =
+        contentUri
+            ?.toLocalMediaFile()
+            ?.absolutePath
+            ?.lowercase()
+            ?: name.removeMediaDisplayPrefix().lowercase()
+
+    private fun String.removeMediaDisplayPrefix(): String =
+        removePrefix("眼镜照片_")
+            .removePrefix("眼镜视频_")
+            .removePrefix("设备录音_")
+
+    private fun String.toLocalMediaFile(): File? {
+        val uri = runCatching { Uri.parse(this) }.getOrNull()
+        return when {
+            uri?.scheme == "file" -> uri.path?.let(::File)
+            uri?.scheme == null && startsWith("/") -> File(this)
+            else -> null
+        }
+    }
+
+    private fun File.deleteIntegritySidecar() {
+        parentFile?.resolve("$nameWithoutExtension.integrity")?.takeIf { it.exists() }?.delete()
     }
 
     private suspend fun syncAudio(
@@ -539,11 +638,19 @@ class UteSdkMediaGateway(
         const val FallbackListTimeoutMillis = 5_000L
         const val SmartMediaRetryTimeoutMillis = 8_000L
         const val WifiMediaListTimeoutMillis = 45_000L
-        const val VideoSyncUnsupportedMessage = "当前 UTE SDK 只开放录像控制，没有开放录像文件上传手机接口；需要设备 Wi-Fi 文件服务或厂家视频同步协议"
+        const val WifiMediaListTimeoutMessage = "设备 Wi-Fi 媒体列表读取超时，请确认手机已连接设备热点"
+        const val VideoSyncUnsupportedMessage = "当前 UTE SDK 只开放录像控制，没有开放录像文件同步到手机接口；需要设备 Wi-Fi 文件服务或厂家视频同步协议"
         const val AudioSyncUnavailableMessage = "当前没有可同步的录音文件；只有设备主动回传音频或支持 AI Recorder 文件同步时，录音才能上传到手机"
         const val WifiSyncUnavailableMessage = "设备 Wi-Fi 媒体传输客户端不可用"
     }
 }
+
+internal fun shouldPropagateWifiMediaListFailure(
+    hasWifiMediaClient: Boolean,
+    wifiFilesFailure: Throwable?,
+    sdkFilesEmpty: Boolean
+): Boolean =
+    hasWifiMediaClient && wifiFilesFailure != null && sdkFilesEmpty
 
 internal fun wifiDeviceFileNameForDelete(fileId: String, mediaName: String?): String? {
     if (!fileId.startsWith("ute-wifi-")) return null

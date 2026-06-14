@@ -44,6 +44,7 @@ internal object UteWifiMediaParser {
         ) ?: return emptyList()
         val name = obj.stringValue("fileName", "file_name", "name", "filename")
             ?: path.substringAfterLast('/').ifBlank { "device-media" }
+        if (name.isLikelyWebUiAssetPath() || path.isLikelyWebUiAssetPath()) return emptyList()
         val kind = name.toMediaKind() ?: path.toMediaKind() ?: obj.stringValue("fileType", "file_type", "type", "mediaType", "media_type").toMediaKindHint() ?: return emptyList()
         val size = obj.longValue("size", "fileSize", "file_size", "length", "bytes")
         return listOf(remoteFile(path, sourceUrl, name, kind, size))
@@ -59,6 +60,7 @@ internal object UteWifiMediaParser {
         return (hrefMatches + plainMatches)
             .distinct()
             .mapNotNull { path ->
+                if (path.isLikelyWebUiAssetPath()) return@mapNotNull null
                 val name = path.substringAfterLast('/').ifBlank { return@mapNotNull null }
                 val kind = name.toMediaKind() ?: return@mapNotNull null
                 remoteFile(path, sourceUrl, name, kind, null)
@@ -150,6 +152,32 @@ internal object UteWifiMediaParser {
     }
 
     private const val WifiMediaPrefix = "ute-wifi-"
+}
+
+internal fun String.isLikelyWebUiAssetPath(): Boolean {
+    val normalized = substringBefore('?').lowercase()
+    val name = normalized.substringAfterLast('/')
+    return listOf(
+        "/assets/",
+        "/asset/",
+        "/static/",
+        "/res/",
+        "/resources/",
+        "/images/",
+        "/img/",
+        "/css/",
+        "/js/"
+    ).any { it in normalized } ||
+        name == "favicon.ico" ||
+        name.startsWith("favicon") ||
+        name.startsWith("logo") ||
+        name.startsWith("icon") ||
+        name.startsWith("sprite") ||
+        name.startsWith("background") ||
+        name.startsWith("banner") ||
+        name == "pictures_ute.jpg" ||
+        name == "pictures_ute.jpeg" ||
+        name == "pictures_ute.png"
 }
 
 internal data class UteWifiRemoteFile(

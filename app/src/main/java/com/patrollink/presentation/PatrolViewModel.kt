@@ -264,18 +264,9 @@ class PatrolViewModel(
             unavailableMessage = "录像失败，耳机控制通道未就绪"
         ) ?: return@runDeviceCommandWithOverlay
         val enabled = !device.isRecording
-        _uiState.update {
-            it.copy(operationMessage = operationMessage(if (enabled) "正在下发开始录像命令" else "正在下发停止录像命令", OperationMessageType.Info))
-        }
         runCatching { coordinator.setRecording(device, enabled) }
             .onSuccess { next ->
-                val message = when {
-                    enabled -> "录像已开始"
-                    device.type == DeviceType.Headset || device.type == DeviceType.Glasses ->
-                        "录像已停止，当前 SDK 不支持 BLE 上传视频文件"
-                    else -> "录像已停止"
-                }
-                updateCurrentDeviceWithMessage(next.copy(isRecording = enabled), message)
+                updateCurrentDevice(next.copy(isRecording = enabled))
                 addDeviceEvent(
                     title = if (enabled) "录像已开始" else "录像已停止",
                     detail = device.name,
@@ -302,9 +293,6 @@ class PatrolViewModel(
             unavailableMessage = "录音失败，当前设备不支持录音或控制通道未就绪"
         ) ?: return@runDeviceCommandWithOverlay
         val enabled = !device.isTalking
-        _uiState.update {
-            it.copy(operationMessage = operationMessage(if (enabled) "正在下发开始录音命令" else "正在下发停止录音命令", OperationMessageType.Info))
-        }
         runCatching {
             if (device.type == DeviceType.Headset) {
                 coordinator.setDeviceTalk(device, enabled)
@@ -313,15 +301,7 @@ class PatrolViewModel(
             }
         }
             .onSuccess { next ->
-                val message = if (enabled) {
-                    "录音已开始"
-                } else {
-                    "录音已停止，正在刷新媒体列表"
-                }
-                updateCurrentDeviceWithMessage(
-                    next.copy(isTalking = enabled),
-                    message
-                )
+                updateCurrentDevice(next.copy(isTalking = enabled))
                 addDeviceEvent(
                     title = if (enabled) "录音已开始" else "录音已停止",
                     detail = device.name,
@@ -405,7 +385,6 @@ class PatrolViewModel(
             showOperationMessage("请先连接设备后再执行自检", OperationMessageType.Warning)
             return@runDeviceCommandWithOverlay
         }
-        _uiState.update { it.copy(operationMessage = operationMessage("正在执行设备自检", OperationMessageType.Info)) }
         val refreshedDevice = runCatching { coordinator.bindDevice(device.id) }.getOrNull()
         if (refreshedDevice != null) updateCurrentDevice(refreshedDevice)
         val checkedDevice = refreshedDevice ?: _uiState.value.device
@@ -424,11 +403,7 @@ class PatrolViewModel(
             state.copy(
                 deviceEvents = (listOf(newDeviceEvent(eventTitle, eventDetail, DeviceEventLevel.Info)) + state.deviceEvents).take(MaxDeviceEvents),
                 deviceCapabilities = capabilities,
-                deviceWifiState = wifi,
-                operationMessage = operationMessage(
-                    "自检完成：$eventDetail",
-                    OperationMessageType.Success
-                )
+                deviceWifiState = wifi
             )
         }
         }
@@ -983,8 +958,7 @@ class PatrolViewModel(
             runDeviceCommandWithOverlay("正在等待拍照指令回复") {
             _uiState.update { state ->
                 state.copy(
-                    photoCaptureInProgress = true,
-                    operationMessage = operationMessage("正在下发拍照命令", OperationMessageType.Info)
+                    photoCaptureInProgress = true
                 )
             }
             try {
@@ -1018,8 +992,7 @@ class PatrolViewModel(
                             connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
                             mediaFiles = state.mediaFiles.upsertMedia(captured),
                             selectedMediaFileId = captured.id,
-                            selectedMediaLocal = true,
-                            operationMessage = operationMessage("现场照片已保存到手机沙盒", OperationMessageType.Success)
+                            selectedMediaLocal = true
                         )
                     }
                 } else {
@@ -1027,8 +1000,7 @@ class PatrolViewModel(
                         state.copy(
                             deviceEvents = (listOf(newDeviceEvent("拍照命令已下发", device.name, DeviceEventLevel.Info)) + state.deviceEvents).take(MaxDeviceEvents),
                             device = next,
-                            connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
-                            operationMessage = operationMessage("拍照命令已下发；若媒体列表仍为空，请在设备文件页通过 Wi-Fi 同步", OperationMessageType.Info)
+                            connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it }
                         )
                     }
                 }

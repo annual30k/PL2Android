@@ -774,7 +774,7 @@ class PatrolViewModelTest {
         assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == remote.id && !it.local })
         assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == existingLocal.id && it.local && it.contentUri == existingLocal.contentUri })
         assertEquals(
-            "设备文件读取失败：device wifi switch rejected: error=100000,data=false；请确认手机已连接设备热点后重试",
+            "设备文件读取失败：设备热点开启被拒绝或超时；请确认设备电量充足、蓝牙仍连接，并等待设备空闲后重试",
             viewModel.uiState.value.operationMessage?.text
         )
     }
@@ -791,6 +791,28 @@ class PatrolViewModelTest {
         advanceUntilIdle()
 
         assertEquals("设备文件读取失败：device wifi unavailable: UTE_00F7；请确认手机已连接设备热点后重试", viewModel.uiState.value.operationMessage?.text)
+        assertEquals(OperationMessageType.Error, viewModel.uiState.value.operationMessage?.type)
+    }
+
+    @Test
+    fun manualDeviceMediaRefreshShowsDeviceFileServiceFailureToOperator() = runTest {
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithMedia(
+                FailingDeviceListingMediaGateway(
+                    IllegalStateException("device media http service did not expose media list: http://192.168.222.1:8000/media -> Failed to connect")
+                )
+            )
+        )
+        loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+
+        viewModel.refreshMediaFiles(showFailureMessage = true)
+        advanceUntilIdle()
+
+        assertEquals(
+            "设备文件读取失败：手机已连接设备热点，但设备文件服务没有响应；请保持蓝牙连接，等待设备空闲后重新查看设备文件",
+            viewModel.uiState.value.operationMessage?.text
+        )
         assertEquals(OperationMessageType.Error, viewModel.uiState.value.operationMessage?.type)
     }
 

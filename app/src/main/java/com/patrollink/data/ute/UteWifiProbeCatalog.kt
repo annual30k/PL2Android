@@ -2,15 +2,15 @@ package com.patrollink.data.ute
 
 internal object UteWifiProbeCatalog {
     val DeviceApFallbackHosts = listOf(
+        "192.168.222.1",
+        "192.168.222.254",
         "192.168.4.1",
         "192.168.8.1",
         "192.168.10.1",
         "192.168.42.1",
         "192.168.43.1",
         "192.168.49.1",
-        "192.168.100.1",
-        "192.168.222.1",
-        "192.168.222.254"
+        "192.168.100.1"
     )
 
     val LanGatewayFallbackHosts = listOf(
@@ -32,6 +32,7 @@ internal object UteWifiProbeCatalog {
     )
 
     val Paths = listOf(
+        "/",
         "/media",
         "/media/list",
         "/photo",
@@ -41,7 +42,6 @@ internal object UteWifiProbeCatalog {
         "/DCIM",
         "/DCIM/",
         "/DCIM/100MEDIA",
-        "/",
         "/files",
         "/api/files",
         "/api/file/list",

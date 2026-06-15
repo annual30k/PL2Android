@@ -142,7 +142,9 @@ class UteWifiMediaClient(
         val session = retainedOrConnectedSession(ssid, password)
         return try {
             val bound = session.bindProcess()
-            check(bound || session.network == null) { "device wifi network lost: $ssid" }
+            if (!bound && session.network != null) {
+                Log.w(Tag, "device wifi bindProcess returned false for ssid=$ssid; continuing with network socket factory")
+            }
             block(session)
         } finally {
             Log.i(Tag, "device wifi session retained on phone side for ssid=$ssid; keeping device AP state unchanged")
@@ -218,7 +220,21 @@ class UteWifiMediaClient(
             password = password,
             configureWifiCredentials = shouldConfigureGloryViewWifiWarmup(sdkSsid)
         )
-        val readyState = openDeviceApAndWait(ssid)
+        val readyState = runCatching { openDeviceApAndWait(ssid) }
+            .recoverCatching { throwable ->
+                if (sdkSsid.isBlank() && throwable.isWifiSwitchRejected()) {
+                    Log.w(Tag, "device wifi switch rejected with blank SDK ssid; retrying after derived ssid warmup ssid=$ssid")
+                    applyGloryViewWifiWarmup(
+                        ssid = ssid,
+                        password = password,
+                        configureWifiCredentials = true
+                    )
+                    openDeviceApAndWait(ssid)
+                } else {
+                    throw throwable
+                }
+            }
+            .getOrThrow()
         if (!readyState.isWifiConnectableState()) {
             if (shouldTryPhoneConnectedWifiFallback(readyState)) {
                 connector.currentSession(ssid)?.let { session ->
@@ -320,41 +336,52 @@ class UteWifiMediaClient(
     private fun Throwable.downloadFailureSummary(): String =
         "${this::class.java.simpleName}${message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()}"
 
+    private fun Throwable.isWifiSwitchRejected(): Boolean =
+        message.orEmpty().contains("device wifi switch rejected", ignoreCase = true)
+
     private suspend fun applyGloryViewWifiWarmup(
         ssid: String,
         password: String,
         configureWifiCredentials: Boolean
     ) {
+        var warmupTimedOut = false
         withContext(Dispatchers.IO) {
             runCatching { bridge.client.openOrCloseNotify(true) }
             if (configureWifiCredentials) {
                 runCatching { bridge.connection.smartSetDeviceWiFiSSID(ssid) }
-                    .onSuccess { Log.i(Tag, "smartSetDeviceWiFiSSID success=${it.isSuccess},error=${it.errorCode}") }
+                    .onSuccess {
+                        Log.i(Tag, "smartSetDeviceWiFiSSID success=${it.isSuccess},error=${it.errorCode}")
+                        warmupTimedOut = !it.isSuccess && it.errorCode == SdkRequestTimeoutErrorCode
+                    }
                     .onFailure { Log.w(Tag, "smartSetDeviceWiFiSSID failed: ${it.message}") }
-                runCatching { bridge.connection.smartSetDeviceWiFiPassword(password) }
-                    .onSuccess { Log.i(Tag, "smartSetDeviceWiFiPassword success=${it.isSuccess},error=${it.errorCode}") }
-                    .onFailure { Log.w(Tag, "smartSetDeviceWiFiPassword failed: ${it.message}") }
-                runCatching { bridge.connection.setGlassesRecordingDirection(GlassesRecordDirection.VERTICAL_SCREEN) }
-                    .onSuccess { Log.i(Tag, "setGlassesRecordingDirection success=${it.isSuccess},error=${it.errorCode}") }
-                    .onFailure { Log.w(Tag, "setGlassesRecordingDirection failed: ${it.message}") }
-                runCatching { bridge.connection.setGlassesRecordingDuration(GloryViewRecordingDurationSeconds) }
-                    .onSuccess { Log.i(Tag, "setGlassesRecordingDuration success=${it.isSuccess},error=${it.errorCode}") }
-                    .onFailure { Log.w(Tag, "setGlassesRecordingDuration failed: ${it.message}") }
-                runCatching {
-                    bridge.connection.setVideoParameters(
-                        VideoParametersInfo(
-                            GloryViewVideoWidth,
-                            GloryViewVideoHeight,
-                            GloryViewVideoFrameRate
+                if (warmupTimedOut) {
+                    Log.w(Tag, "skip remaining wifi warmup because smartSetDeviceWiFiSSID returned timeout")
+                } else {
+                    runCatching { bridge.connection.smartSetDeviceWiFiPassword(password) }
+                        .onSuccess { Log.i(Tag, "smartSetDeviceWiFiPassword success=${it.isSuccess},error=${it.errorCode}") }
+                        .onFailure { Log.w(Tag, "smartSetDeviceWiFiPassword failed: ${it.message}") }
+                    runCatching { bridge.connection.setGlassesRecordingDirection(GlassesRecordDirection.VERTICAL_SCREEN) }
+                        .onSuccess { Log.i(Tag, "setGlassesRecordingDirection success=${it.isSuccess},error=${it.errorCode}") }
+                        .onFailure { Log.w(Tag, "setGlassesRecordingDirection failed: ${it.message}") }
+                    runCatching { bridge.connection.setGlassesRecordingDuration(GloryViewRecordingDurationSeconds) }
+                        .onSuccess { Log.i(Tag, "setGlassesRecordingDuration success=${it.isSuccess},error=${it.errorCode}") }
+                        .onFailure { Log.w(Tag, "setGlassesRecordingDuration failed: ${it.message}") }
+                    runCatching {
+                        bridge.connection.setVideoParameters(
+                            VideoParametersInfo(
+                                GloryViewVideoWidth,
+                                GloryViewVideoHeight,
+                                GloryViewVideoFrameRate
+                            )
                         )
-                    )
+                    }
+                        .onSuccess { Log.i(Tag, "setVideoParameters success=${it.isSuccess},error=${it.errorCode}") }
+                        .onFailure { Log.w(Tag, "setVideoParameters failed: ${it.message}") }
                 }
-                    .onSuccess { Log.i(Tag, "setVideoParameters success=${it.isSuccess},error=${it.errorCode}") }
-                    .onFailure { Log.w(Tag, "setVideoParameters failed: ${it.message}") }
             } else {
                 Log.i(Tag, "skip wifi credential warmup because SDK ssid was blank; ssidCandidate=$ssid")
             }
-            if (configureWifiCredentials) {
+            if (configureWifiCredentials && !warmupTimedOut) {
                 runCatching { bridge.connection.getGlassesInfo() }
                     .onSuccess { response ->
                         val store = response.data?.glassesStoreInfo
@@ -364,6 +391,8 @@ class UteWifiMediaClient(
                         )
                     }
                     .onFailure { Log.w(Tag, "getGlassesInfo failed: ${it.message}") }
+            } else if (warmupTimedOut) {
+                Log.i(Tag, "skip glasses info warmup because wifi warmup timed out")
             } else {
                 Log.i(Tag, "skip glasses info warmup because SDK ssid was blank")
             }
@@ -373,10 +402,12 @@ class UteWifiMediaClient(
                     .onFailure { Log.w(Tag, "notifyMediaSyncCompleted failed: ${it.message}") }
             }
         }
-        if (configureWifiCredentials) {
+        if (configureWifiCredentials && !warmupTimedOut) {
             runCatching { UteSmartAuthWarmup(bridge).run(GloryViewAuthWarmupMillis) }
                 .onSuccess { Log.i(Tag, "smart auth warmup $it") }
                 .onFailure { Log.w(Tag, "smart auth warmup failed: ${it.message}") }
+        } else if (warmupTimedOut) {
+            Log.i(Tag, "skip smart auth warmup because wifi warmup timed out")
         } else {
             Log.i(Tag, "skip smart auth warmup because SDK ssid was blank")
         }
@@ -473,7 +504,6 @@ class UteWifiMediaClient(
             lastFailure = result.lastFailure ?: lastFailure
             result.files.forEach { file -> discovered.putIfAbsent(file.id, file) }
             if (discovered.isNotEmpty()) return@withContext discovered.values.toList()
-            if (serviceResponded) break
             delay(HttpMediaServicePollMillis)
         } while (System.currentTimeMillis() < deadline)
         if (!serviceResponded) {
@@ -485,10 +515,13 @@ class UteWifiMediaClient(
     private fun probeMediaFiles(session: DeviceWifiSession): MediaProbeResult {
         val client = session.httpClient()
         val discovered = linkedMapOf<String, UteWifiRemoteFile>()
+        val queuedDirectories = ArrayDeque<String>()
+        val visitedUrls = linkedSetOf<String>()
         var serviceResponded = false
         var lastFailure: String? = null
-        session.probeUrls().take(FileProbeRequestLimit).forEach { url ->
-            if (discovered.size >= MaxDiscoveredFiles) return@forEach
+        fun requestAndParse(url: String) {
+            if (discovered.size >= MaxDiscoveredFiles) return
+            if (!visitedUrls.add(url)) return
             val responseBody = runCatching {
                 client.newCall(Request.Builder().url(url).build()).execute().use { response ->
                     if (!response.isSuccessful) {
@@ -502,10 +535,43 @@ class UteWifiMediaClient(
             }.getOrElse {
                 lastFailure = "$url -> ${it.message}"
                 null
-            } ?: return@forEach
-            UteWifiMediaParser.parseRemoteFiles(responseBody, url).forEach { file ->
+            } ?: return
+            val parsedFiles = UteWifiMediaParser.parseRemoteFiles(responseBody, url)
+            val directoryLinks = if (parsedFiles.isEmpty()) {
+                UteWifiMediaParser.parseDirectoryLinks(responseBody, url)
+            } else {
+                emptyList()
+            }
+            if (parsedFiles.isNotEmpty() || directoryLinks.isNotEmpty()) {
+                Log.i(
+                    Tag,
+                    "device media response url=$url bytes=${responseBody.length} files=${parsedFiles.size} dirs=${directoryLinks.size}"
+                )
+            }
+            parsedFiles.forEach { file ->
                 discovered.putIfAbsent(file.id, file)
             }
+            if (parsedFiles.isEmpty()) {
+                directoryLinks
+                    .take(DirectoryProbeLimit)
+                    .forEach { directoryUrl ->
+                        if (directoryUrl !in visitedUrls && queuedDirectories.size < DirectoryProbeLimit) {
+                            queuedDirectories += directoryUrl
+                        }
+                    }
+            }
+        }
+        session.probeUrls().take(FileProbeRequestLimit).forEach { url ->
+            requestAndParse(url)
+        }
+        while (queuedDirectories.isNotEmpty() && discovered.size < MaxDiscoveredFiles && visitedUrls.size < FileProbeRequestLimit + DirectoryProbeLimit) {
+            requestAndParse(queuedDirectories.removeFirst())
+        }
+        if (discovered.isEmpty()) {
+            Log.i(
+                Tag,
+                "device media probe completed empty visited=${visitedUrls.size},queued=${queuedDirectories.size},serviceResponded=$serviceResponded,lastFailure=${lastFailure.orEmpty()}"
+            )
         }
         return MediaProbeResult(discovered.values.toList(), serviceResponded, lastFailure)
     }
@@ -592,13 +658,15 @@ class UteWifiMediaClient(
         const val HttpDownloadReadTimeoutMillis = 30_000L
         const val HttpDownloadWriteTimeoutMillis = 30_000L
         const val HttpDownloadCallTimeoutMillis = 45_000L
-        const val HttpMediaServiceReadyTimeoutMillis = 15_000L
+        const val HttpMediaServiceReadyTimeoutMillis = 30_000L
         const val HttpMediaServicePollMillis = 1_000L
         const val MaxDiscoveredFiles = 200
         const val ProbeHostLimit = 4
         const val DiagnosticProbeRequestLimit = 48
-        const val FileProbeRequestLimit = 64
+        const val FileProbeRequestLimit = 128
+        const val DirectoryProbeLimit = 32
         const val DiagnosticHitLimit = 20
+        const val SdkRequestTimeoutErrorCode = 408
 
     }
 }

@@ -53,6 +53,34 @@ class UteWifiMediaParserTest {
     }
 
     @Test
+    fun parsesDirectoryLinksFromIndexPageForRecursiveProbe() {
+        val links = UteWifiMediaParser.parseDirectoryLinks(
+            body = """
+                <!DOCTYPE html>
+                <html>
+                  <head><title>Index of /</title></head>
+                  <body>
+                    <a href="?C=N;O=D">Name</a>
+                    <a href="../">Parent Directory</a>
+                    <a href="DCIM/">DCIM/</a>
+                    <a href="VIDEO">VIDEO</a>
+                    <a href="IMG_001.jpg">IMG_001.jpg</a>
+                  </body>
+                </html>
+            """.trimIndent(),
+            sourceUrl = "http://192.168.222.1:8000/"
+        )
+
+        assertEquals(
+            listOf(
+                "http://192.168.222.1:8000/DCIM/",
+                "http://192.168.222.1:8000/VIDEO"
+            ),
+            links
+        )
+    }
+
+    @Test
     fun ignoresRouterOrWebUiImageAssets() {
         val files = UteWifiMediaParser.parseRemoteFiles(
             body = """

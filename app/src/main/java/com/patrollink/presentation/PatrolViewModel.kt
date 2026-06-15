@@ -2490,6 +2490,16 @@ class PatrolViewModel(
 
     private fun Throwable?.operatorFacingDeviceMediaError(): String {
         val detail = this?.message?.trim()?.takeIf { it.isNotBlank() } ?: "设备热点或文件服务未响应"
+        if (detail.contains("device wifi switch rejected", ignoreCase = true) ||
+            detail.contains("smartSetDeviceWiFiSwitch", ignoreCase = true)
+        ) {
+            return "设备文件读取失败：设备热点开启被拒绝或超时；请确认设备电量充足、蓝牙仍连接，并等待设备空闲后重试"
+        }
+        if (detail.contains("device media http service unavailable", ignoreCase = true) ||
+            detail.contains("device media http service did not expose media list", ignoreCase = true)
+        ) {
+            return "设备文件读取失败：手机已连接设备热点，但设备文件服务没有响应；请保持蓝牙连接，等待设备空闲后重新查看设备文件"
+        }
         return "设备文件读取失败：$detail；请确认手机已连接设备热点后重试"
     }
 

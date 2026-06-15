@@ -18,6 +18,16 @@ internal object UteWifiMediaParser {
         return parseTextFiles(body, sourceUrl)
     }
 
+    fun parseDirectoryLinks(body: String, sourceUrl: String): List<String> =
+        Regex("""href\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(body)
+            .map { it.groupValues[1].trim() }
+            .filter { it.isLikelyDirectoryHref() }
+            .map { resolveUrl(it, sourceUrl) }
+            .filterNot { it == sourceUrl }
+            .distinct()
+            .toList()
+
     private fun parseJsonFiles(element: JsonElement, sourceUrl: String): List<UteWifiRemoteFile> {
         if (element.isJsonArray) return element.asJsonArray.flatMap { parseJsonFiles(it, sourceUrl) }
         if (!element.isJsonObject) return emptyList()
@@ -129,6 +139,19 @@ internal object UteWifiMediaParser {
             !contains('/') &&
             !contains('\\') &&
             substringBefore('?').toMediaKind() != null
+
+    private fun String.isLikelyDirectoryHref(): Boolean {
+        if (isBlank()) return false
+        if (startsWith("#") || startsWith("?")) return false
+        if (this == "/" || this == "." || this == "./" || this == ".." || this == "../") return false
+        if (startsWith("javascript:", ignoreCase = true) || startsWith("mailto:", ignoreCase = true)) return false
+        if (isLikelyWebUiAssetPath()) return false
+        val path = substringBefore('?').substringBefore('#').trimEnd('/')
+        if (path.substringAfterLast('/').isBlank()) return false
+        if (path.toMediaKind() != null) return false
+        val leaf = path.substringAfterLast('/')
+        return endsWith("/") || '.' !in leaf
+    }
 
     private fun JsonObject.stringValue(vararg keys: String): String? =
         keys.firstNotNullOfOrNull { key ->

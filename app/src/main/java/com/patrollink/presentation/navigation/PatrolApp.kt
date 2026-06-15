@@ -347,21 +347,22 @@ private fun AppMessage(message: OperationMessage, onShown: () -> Unit) {
     val displayColors = PatrolDisplay.colors
     val style = messageStyleFor(message.type, displayColors.dark)
     LaunchedEffect(message) {
-        delay(style.durationMillis)
+        val readableDuration = (2_800L + message.text.length * 45L).coerceAtMost(9_000L)
+        delay(maxOf(style.durationMillis, readableDuration))
         onShown()
     }
     Dialog(
-        onDismissRequest = {},
+        onDismissRequest = onShown,
         properties = DialogProperties(
             dismissOnBackPress = false,
-            dismissOnClickOutside = false,
+            dismissOnClickOutside = true,
             usePlatformDefaultWidth = false
         )
     ) {
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(horizontal = 32.dp),
+                .padding(horizontal = 24.dp),
             contentAlignment = Alignment.Center
         ) {
             Row(
@@ -370,6 +371,7 @@ private fun AppMessage(message: OperationMessage, onShown: () -> Unit) {
                     .clip(RoundedCornerShape(18.dp))
                     .background(style.container)
                     .border(1.dp, style.border, RoundedCornerShape(18.dp))
+                    .clickable { onShown() }
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -399,8 +401,8 @@ private fun AppMessage(message: OperationMessage, onShown: () -> Unit) {
                         fontSize = 15.sp,
                         lineHeight = 20.sp,
                         fontWeight = FontWeight.Black,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                        maxLines = 5,
+                        overflow = TextOverflow.Clip
                     )
                 }
             }

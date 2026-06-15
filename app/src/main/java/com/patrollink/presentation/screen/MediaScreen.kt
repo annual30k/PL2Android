@@ -57,13 +57,13 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -192,6 +192,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                 MediaLibraryHeader(
                     phoneSelected = uiState.selectedMediaLocal,
                     totalCount = files.size,
+                    pendingDeviceCount = pendingDeviceSyncIds.size,
                     batchMode = batchMode,
                     selectedCount = batchSelection.size,
                     onPhone = { viewModel.setMediaLocal(true) },
@@ -219,6 +220,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                     DeviceMediaSyncBar(
                         totalCount = files.size,
                         pendingCount = pendingDeviceSyncIds.size,
+                        loading = uiState.mediaLoading,
                         onWifiSettings = {
                             runCatching { context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }
                         },
@@ -321,6 +323,9 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                 }
             }
         }
+        if (!uiState.selectedMediaLocal && uiState.mediaLoading) {
+            MediaBlockingLoading(message = "正在读取设备文件")
+        }
     }
     uiState.previewMediaFile?.let { file ->
         val previewAction = file.mediaPrimaryAction(phoneSelected = uiState.selectedMediaLocal)
@@ -404,6 +409,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
 private fun MediaLibraryHeader(
     phoneSelected: Boolean,
     totalCount: Int,
+    pendingDeviceCount: Int,
     batchMode: Boolean,
     selectedCount: Int,
     onPhone: () -> Unit,
@@ -427,7 +433,11 @@ private fun MediaLibraryHeader(
                 fontWeight = FontWeight.Black
             )
             Text(
-                "${if (phoneSelected) "手机端" else "设备端"} · $totalCount 个文件",
+                if (phoneSelected) {
+                    "手机端 · $totalCount 个文件"
+                } else {
+                    "设备端 · $totalCount 个文件 · $pendingDeviceCount 个待同步"
+                },
                 color = colors.textMuted,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
@@ -613,11 +623,16 @@ private fun MediaCompactFilterBar(
 private fun DeviceMediaSyncBar(
     totalCount: Int,
     pendingCount: Int,
+    loading: Boolean,
     onWifiSettings: () -> Unit,
     onRefresh: () -> Unit,
     onSync: () -> Unit
 ) {
     val colors = PatrolDisplay.colors
+    val hasDeviceFiles = totalCount > 0
+    val primaryText = if (hasDeviceFiles) "同步到手机" else "查看设备文件"
+    val primaryIcon = if (hasDeviceFiles) Icons.Filled.PhoneAndroid else Icons.Filled.UploadFile
+    val primaryAction = if (hasDeviceFiles) onSync else onRefresh
     Row(
         Modifier
             .fillMaxWidth()
@@ -628,36 +643,49 @@ private fun DeviceMediaSyncBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("设备文件", color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Black, maxLines = 1)
-            Text(
-                "$totalCount 个文件 · $pendingCount 个待同步",
-                color = colors.textMuted,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+        Text("设备文件", color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.Black, maxLines = 1, modifier = Modifier.weight(1f))
         IconButton(
             onClick = onWifiSettings,
+            enabled = !loading,
             modifier = Modifier.size(42.dp)
         ) {
             Icon(Icons.Filled.PhoneAndroid, contentDescription = "设备 Wi-Fi", modifier = Modifier.size(20.dp), tint = colors.text)
         }
-        IconButton(
-            onClick = onRefresh,
-            modifier = Modifier.size(42.dp)
-        ) {
-            Icon(Icons.Filled.Refresh, contentDescription = "刷新设备文件", modifier = Modifier.size(20.dp), tint = colors.text)
-        }
         Button(
-            onClick = onSync,
-            modifier = Modifier.height(42.dp).widthIn(min = 112.dp)
+            onClick = primaryAction,
+            enabled = !loading,
+            modifier = Modifier.height(44.dp).widthIn(min = 142.dp)
         ) {
-            Icon(Icons.Filled.PhoneAndroid, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("同步到手机", fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1)
+            Icon(primaryIcon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(primaryText, fontSize = 13.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun MediaBlockingLoading(message: String) {
+    val colors = PatrolDisplay.colors
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = if (colors.dark) 0.32f else 0.18f))
+            .clickable(enabled = true, onClick = {}),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .widthIn(min = 220.dp, max = 300.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(colors.surface)
+                .border(1.dp, colors.border.copy(alpha = 0.78f), RoundedCornerShape(22.dp))
+                .padding(horizontal = 24.dp, vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            CircularProgressIndicator(color = TechBlue, strokeWidth = 4.dp, modifier = Modifier.size(42.dp))
+            Text(message, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.Black)
+            Text("请稍候", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

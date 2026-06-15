@@ -52,6 +52,13 @@ class UteWifiMediaClientTest {
     }
 
     @Test
+    fun aiGlassDirectoryIndexProbeIsPrioritized() {
+        assertEquals("192.168.222.1", UteWifiProbeCatalog.DeviceApFallbackHosts.first())
+        assertEquals("/", UteWifiProbeCatalog.Paths.first())
+        assertEquals(8000, UteWifiProbeCatalog.Ports.first())
+    }
+
+    @Test
     fun recognizesUteHotspotAsDeviceWifiForManualConnectionFallback() {
         assertTrue("UTE_00F7".isLikelyDeviceWifiHotspotSsid())
         assertTrue("ute_00f7".isLikelyDeviceWifiHotspotSsid())

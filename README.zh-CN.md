@@ -123,3 +123,25 @@ App 解析 `report.content/backend/model/generated_at/requires_human_confirmatio
 ```
 
 当前工作区验证结果：构建成功，JVM 单元测试全部通过。由于没有连接模拟器或真机，尚未执行安装和启动冒烟测试。
+
+## 真机安装约定
+
+项目当前常用真机为 `SKRGYH599TDQROSO`（Redmi/MIUI/HyperOS）。这台设备会拦截普通 ADB 覆盖安装，因此后续安装 debug 包到真机时默认使用 `/data/local/tmp` 加手机侧 `pm install`：
+
+```bash
+./gradlew :app:assembleDebug
+
+adb -s SKRGYH599TDQROSO push app/build/outputs/apk/debug/app-debug.apk /data/local/tmp/PatrolLink-debug.apk
+
+adb -s SKRGYH599TDQROSO shell pm install -r -t --user 0 /data/local/tmp/PatrolLink-debug.apk
+
+adb -s SKRGYH599TDQROSO shell dumpsys package com.patrollink | rg -n "lastUpdateTime|versionName|versionCode"
+```
+
+如果需要在手机文件管理器中留一份安装包，再额外推送到 Download：
+
+```bash
+adb -s SKRGYH599TDQROSO push app/build/outputs/apk/debug/app-debug.apk /sdcard/Download/PatrolLink-debug.apk
+```
+
+不要从 `/sdcard/Download` 直接执行 `pm install`，系统服务通常无法读取该 FUSE 路径，会报 `Unable to open file`。只有当 `/data/local/tmp` 的 `pm install` 也被 MIUI 返回 `INSTALL_FAILED_USER_RESTRICTED` 时，才退回到打开本地安装器并在手机上手动确认安装。

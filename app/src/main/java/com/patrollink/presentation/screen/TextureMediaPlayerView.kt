@@ -1,25 +1,20 @@
 package com.patrollink.presentation.screen
 
 import android.content.Context
-import android.graphics.Matrix
-import android.graphics.SurfaceTexture
 import android.media.AudioAttributes
-import android.media.MediaPlayer
 import android.net.Uri
 import android.view.Gravity
-import android.view.Surface
-import android.view.TextureView
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.MediaController
+import android.widget.VideoView
 
-class TextureMediaPlayerView(context: Context) : FrameLayout(context), TextureView.SurfaceTextureListener {
-    private val textureView = TextureView(context)
-    private var player: MediaPlayer? = null
-    private var surface: Surface? = null
+class TextureMediaPlayerView(context: Context) : FrameLayout(context) {
+    private val videoView = VideoView(context)
+    private val mediaController = MediaController(context)
     private var sourceUri: Uri? = null
     private var autoPlay: Boolean = true
-    private var videoWidth: Int = 0
-    private var videoHeight: Int = 0
+    private var prepared: Boolean = false
 
     var onBuffering: (() -> Unit)? = null
     var onReady: (() -> Unit)? = null
@@ -29,9 +24,10 @@ class TextureMediaPlayerView(context: Context) : FrameLayout(context), TextureVi
 
     init {
         setBackgroundColor(android.graphics.Color.BLACK)
-        textureView.surfaceTextureListener = this
+        mediaController.setAnchorView(videoView)
+        videoView.setMediaController(mediaController)
         addView(
-            textureView,
+            videoView,
             LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -42,151 +38,103 @@ class TextureMediaPlayerView(context: Context) : FrameLayout(context), TextureVi
 
     fun setMedia(uri: Uri, autoPlay: Boolean = true) {
         this.autoPlay = autoPlay
-        if (sourceUri == uri && player != null) return
+        if (sourceUri == uri && prepared) return
         sourceUri = uri
-        preparePlayerIfReady()
-    }
-
-    fun play() {
-        autoPlay = true
-        val current = player
-        if (current == null) {
-            preparePlayerIfReady()
-            return
-        }
-        runCatching {
-            val duration = current.duration
-            if (duration > 0 && current.currentPosition >= duration - 250) {
-                current.seekTo(0)
-            }
-            current.start()
-            onReady?.invoke()
-        }
-            .onFailure { onPlaybackError?.invoke("视频播放失败：${it.message ?: "播放器启动失败"}") }
-    }
-
-    fun pause() {
-        autoPlay = false
-        runCatching {
-            player?.takeIf { it.isPlaying }?.pause()
-            onPaused?.invoke()
-        }
-    }
-
-    fun release() {
-        releasePlayer()
-        surface?.release()
-        surface = null
-    }
-
-    override fun onDetachedFromWindow() {
-        release()
-        super.onDetachedFromWindow()
-    }
-
-    override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
-        surface = Surface(surfaceTexture)
-        preparePlayerIfReady()
-    }
-
-    override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
-        updateTextureTransform()
-    }
-
-    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-        releasePlayer()
-        surface?.release()
-        surface = null
-        return true
-    }
-
-    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
-
-    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
-        super.onSizeChanged(width, height, oldWidth, oldHeight)
-        updateTextureTransform()
-    }
-
-    private fun preparePlayerIfReady() {
-        val uri = sourceUri ?: return
-        val activeSurface = surface ?: return
-        releasePlayer()
-        videoWidth = 0
-        videoHeight = 0
+        prepared = false
         onBuffering?.invoke()
-        val mediaPlayer = MediaPlayer()
-        player = mediaPlayer
         runCatching {
-            mediaPlayer.setAudioAttributes(
+            videoView.stopPlayback()
+            videoView.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
                     .build()
             )
-            mediaPlayer.setDataSource(context, uri)
-            mediaPlayer.setSurface(activeSurface)
-            mediaPlayer.setOnVideoSizeChangedListener { _, width, height ->
-                videoWidth = width
-                videoHeight = height
-                updateTextureTransform()
-            }
-            mediaPlayer.setOnPreparedListener {
+            videoView.setOnPreparedListener { player ->
+                prepared = true
+                player.isLooping = false
                 onReady?.invoke()
-                if (autoPlay) {
-                    runCatching { it.start() }
-                        .onFailure { error -> onPlaybackError?.invoke("视频播放失败：${error.message ?: "播放器启动失败"}") }
+                if (this.autoPlay) {
+                    videoView.start()
+                    mediaController.show()
                 }
             }
-            mediaPlayer.setOnCompletionListener {
-                autoPlay = false
+            videoView.setOnCompletionListener {
+                this.autoPlay = false
                 onCompletion?.invoke()
+                mediaController.show()
             }
-            mediaPlayer.setOnErrorListener { _, what, extra ->
-                autoPlay = false
+            videoView.setOnErrorListener { _, what, extra ->
+                this.autoPlay = false
+                prepared = false
                 onPlaybackError?.invoke("视频播放失败：系统播放器无法解码或读取该文件（$what/$extra）")
                 true
             }
-            mediaPlayer.prepareAsync()
+            videoView.setVideoURI(uri)
+            videoView.requestFocus()
         }.onFailure {
-            releasePlayer()
-            autoPlay = false
+            prepared = false
+            this.autoPlay = false
             onPlaybackError?.invoke("视频播放失败：${it.message ?: "文件不可读"}")
         }
     }
 
-    private fun releasePlayer() {
-        val current = player ?: return
-        player = null
+    fun play() {
+        autoPlay = true
+        val uri = sourceUri
+        if (uri == null) {
+            onPlaybackError?.invoke("视频播放失败：文件地址为空")
+            return
+        }
+        if (!prepared) {
+            setMedia(uri, autoPlay = true)
+            return
+        }
         runCatching {
-            current.setOnPreparedListener(null)
-            current.setOnCompletionListener(null)
-            current.setOnErrorListener(null)
-            current.setOnVideoSizeChangedListener(null)
-            current.reset()
-            current.release()
+            val duration = videoView.duration
+            if (duration > 0 && videoView.currentPosition >= duration - 250) {
+                videoView.seekTo(0)
+            }
+            videoView.start()
+            mediaController.show()
+            onReady?.invoke()
+        }.onFailure {
+            onPlaybackError?.invoke("视频播放失败：${it.message ?: "播放器启动失败"}")
         }
     }
 
-    private fun updateTextureTransform() {
-        if (width <= 0 || height <= 0 || videoWidth <= 0 || videoHeight <= 0) {
-            textureView.setTransform(null)
-            return
+    fun pause() {
+        autoPlay = false
+        runCatching {
+            if (videoView.isPlaying) videoView.pause()
+            mediaController.show()
+            onPaused?.invoke()
         }
-        val viewRatio = width.toFloat() / height.toFloat()
-        val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
-        val scaleX: Float
-        val scaleY: Float
-        if (videoRatio > viewRatio) {
-            scaleX = 1f
-            scaleY = viewRatio / videoRatio
-        } else {
-            scaleX = videoRatio / viewRatio
-            scaleY = 1f
+    }
+
+    fun seekTo(positionMillis: Int) {
+        runCatching {
+            videoView.seekTo(positionMillis.coerceIn(0, videoView.duration.coerceAtLeast(0)))
+            mediaController.show()
         }
-        textureView.setTransform(
-            Matrix().apply {
-                setScale(scaleX, scaleY, width / 2f, height / 2f)
-            }
-        )
+    }
+
+    fun currentPositionMillis(): Int =
+        runCatching { videoView.currentPosition }.getOrDefault(0).coerceAtLeast(0)
+
+    fun durationMillis(): Int =
+        runCatching { videoView.duration }.getOrDefault(0).coerceAtLeast(0)
+
+    fun release() {
+        runCatching {
+            mediaController.hide()
+            videoView.stopPlayback()
+        }
+        prepared = false
+    }
+
+    override fun onDetachedFromWindow() {
+        release()
+        super.onDetachedFromWindow()
     }
 }

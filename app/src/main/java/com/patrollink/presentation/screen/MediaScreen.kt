@@ -1,6 +1,7 @@
 package com.patrollink.presentation.screen
 
 import android.content.Context
+import android.content.ClipData
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -67,7 +68,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -76,6 +76,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,6 +94,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import com.patrollink.domain.AppUiState
 import com.patrollink.domain.DeviceCapabilities
 import com.patrollink.domain.DeviceMediaSyncUiState
@@ -118,11 +120,14 @@ import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -328,7 +333,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         }
     }
     uiState.previewMediaFile?.let { file ->
-        val previewAction = file.mediaPrimaryAction(phoneSelected = uiState.selectedMediaLocal)
+        val previewAction = file.mediaPrimaryAction()
         MediaPreviewDialog(
             file = file,
             contentRequest = viewModel::mediaContentRequest,
@@ -336,11 +341,16 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
             primaryIcon = previewAction.icon,
             onPrimary = {
                 when (previewAction) {
-                    MediaPrimaryAction.UploadPhone -> {
+                    MediaPrimaryAction.UploadCloud -> {
+                        dismissedTransferFileId = null
+                        viewModel.uploadMedia(file.id, local = true)
+                    }
+                    MediaPrimaryAction.UploadedCloud -> viewModel.showOperationMessage("${file.name} 已上传云端", OperationMessageType.Success)
+                    MediaPrimaryAction.SyncPhone -> {
                         dismissedTransferFileId = null
                         viewModel.downloadMedia(file.id)
                     }
-                    MediaPrimaryAction.UploadedPhone -> viewModel.showOperationMessage("${file.name} 已同步到手机", OperationMessageType.Success)
+                    MediaPrimaryAction.SyncedPhone -> viewModel.showOperationMessage("${file.name} 已同步到手机", OperationMessageType.Success)
                     MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${file.name} ${mediaStatusLabel(file)}，请稍候", OperationMessageType.Warning)
                 }
             },
@@ -535,14 +545,10 @@ private fun StorageSummaryCard(title: String, usedGb: Float, totalGb: Float, onH
             }
             Text("${usedGb}GB / ${totalGb.toInt()}GB", color = colors.textMuted, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
-        LinearProgressIndicator(
-            progress = { storageProgress(usedGb, totalGb) },
-            color = TechBlue,
-            trackColor = colors.control.copy(alpha = 0.55f),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(99.dp))
+        MediaProgressTrack(
+            progress = storageProgress(usedGb, totalGb),
+            height = 8,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -831,14 +837,10 @@ private fun MediaLibraryTile(
             }
         }
         if (file.transferStatus.inProgress) {
-            LinearProgressIndicator(
-                progress = { file.progress.safeProgress() },
-                color = TechBlue,
-                trackColor = Color.White.copy(alpha = 0.28f),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(4.dp)
+            CompactTileProgress(
+                progress = file.progress.safeProgress(),
+                label = "${(file.progress.safeProgress() * 100).roundToInt()}%",
+                modifier = Modifier.align(Alignment.BottomStart).padding(5.dp)
             )
         }
     }
@@ -1020,14 +1022,10 @@ private fun MediaGridCard(
                 }
             }
             if (file.transferStatus.inProgress) {
-                LinearProgressIndicator(
-                    progress = { file.progress.safeProgress() },
-                    color = TechBlue,
-                    trackColor = Color.White.copy(alpha = 0.22f),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(5.dp)
+                CompactTileProgress(
+                    progress = file.progress.safeProgress(),
+                    label = mediaStatusLabel(file),
+                    modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)
                 )
             }
         }
@@ -1035,7 +1033,7 @@ private fun MediaGridCard(
             Text(file.name, color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    file.time,
+                    mediaDateTimeLabel(file.time),
                     color = colors.textSubtle,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
@@ -1155,9 +1153,100 @@ private fun MediaArtwork(file: MediaFile, loadThumbnail: Boolean = true, thumbna
 }
 
 @Composable
+private fun MediaTransferProgress(label: String, progress: Float, modifier: Modifier = Modifier) {
+    val colors = PatrolDisplay.colors
+    val safe = progress.safeProgress()
+    Row(
+        modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.control.copy(alpha = if (colors.dark) 0.52f else 0.72f))
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            label,
+            color = colors.text,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        MediaProgressTrack(
+            progress = safe,
+            height = 7,
+            modifier = Modifier.weight(1.25f)
+        )
+        Text(
+            "${(safe * 100).roundToInt()}%",
+            color = colors.textMuted,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun CompactTileProgress(progress: Float, label: String, modifier: Modifier = Modifier) {
+    val safe = progress.safeProgress()
+    Column(
+        modifier
+            .widthIn(min = 76.dp, max = 118.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black.copy(alpha = 0.62f))
+            .padding(horizontal = 7.dp, vertical = 5.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            label,
+            color = Color.White,
+            fontSize = 10.sp,
+            lineHeight = 12.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        MediaProgressTrack(
+            progress = safe,
+            height = 4,
+            trackColor = Color.White.copy(alpha = 0.24f),
+            fillColor = TechBlue,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun MediaProgressTrack(
+    progress: Float,
+    height: Int,
+    modifier: Modifier = Modifier,
+    trackColor: Color = PatrolDisplay.colors.control.copy(alpha = 0.62f),
+    fillColor: Color = TechBlue
+) {
+    val safe = progress.safeProgress()
+    Box(
+        modifier
+            .height(height.dp)
+            .clip(RoundedCornerShape(99.dp))
+            .background(trackColor)
+    ) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(safe)
+                .clip(RoundedCornerShape(99.dp))
+                .background(fillColor)
+        )
+    }
+}
+
+@Composable
 private fun FloatingTransferProgress(file: MediaFile, modifier: Modifier = Modifier) {
     val colors = PatrolDisplay.colors
-    val percent = (file.progress.safeProgress() * 100).toInt()
     Column(
         modifier
             .widthIn(max = 310.dp)
@@ -1173,16 +1262,12 @@ private fun FloatingTransferProgress(file: MediaFile, modifier: Modifier = Modif
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(file.name, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${mediaStatusLabel(file)} · $percent%", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(mediaStatusLabel(file), color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
-        LinearProgressIndicator(
-            progress = { file.progress.safeProgress() },
-            color = TechBlue,
-            trackColor = colors.control.copy(alpha = 0.65f),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(99.dp))
+        MediaTransferProgress(
+            label = "处理进度",
+            progress = file.progress.safeProgress(),
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -1190,7 +1275,6 @@ private fun FloatingTransferProgress(file: MediaFile, modifier: Modifier = Modif
 @Composable
 private fun FloatingDeviceSyncProgress(sync: DeviceMediaSyncUiState, modifier: Modifier = Modifier) {
     val colors = PatrolDisplay.colors
-    val percent = (sync.progress.safeProgress() * 100).toInt()
     val countText = if (sync.totalCount > 0) {
         " · ${sync.completedCount.coerceAtMost(sync.totalCount)}/${sync.totalCount}"
     } else {
@@ -1211,16 +1295,12 @@ private fun FloatingDeviceSyncProgress(sync: DeviceMediaSyncUiState, modifier: M
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(sync.fileName.ifBlank { "设备文件同步" }, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${transferLabel(sync.status)} · $percent%$countText", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("${transferLabel(sync.status)}$countText", color = colors.textMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
-        LinearProgressIndicator(
-            progress = { sync.progress.safeProgress() },
-            color = TechBlue,
-            trackColor = colors.control.copy(alpha = 0.65f),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(99.dp))
+        MediaTransferProgress(
+            label = "同步进度",
+            progress = sync.progress.safeProgress(),
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -1294,6 +1374,8 @@ private fun MediaPreviewDialog(
     onDismiss: () -> Unit
 ) {
     val colors = PatrolDisplay.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var fullScreen by remember(file.id) { mutableStateOf(false) }
     val canFullscreen = file.kind == MediaKind.Video || file.kind == MediaKind.Photo
     Dialog(
@@ -1321,7 +1403,15 @@ private fun MediaPreviewDialog(
                 Spacer(Modifier.width(12.dp))
                 if (canFullscreen) {
                     IconButton(
-                        onClick = { fullScreen = true },
+                        onClick = {
+                            scope.launch {
+                                val request = contentRequest(file)
+                                val target = request?.value ?: file.contentUri
+                                if (!openNativeMediaViewer(context, file, target)) {
+                                    fullScreen = true
+                                }
+                            }
+                        },
                         modifier = Modifier.size(44.dp)
                     ) {
                         Icon(
@@ -1345,15 +1435,14 @@ private fun MediaPreviewDialog(
                 EmbeddedMediaPreview(file = file, contentRequest = contentRequest, modifier = Modifier.fillMaxSize())
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                PreviewMetaPill("${file.time} · ${file.size}", Modifier.weight(1f))
+                PreviewMetaPill("${mediaDateTimeLabel(file.time)} · ${file.size}", Modifier.weight(1f))
                 PreviewMetaPill(mediaStatusLabel(file), Modifier.weight(0.78f))
             }
             if (file.progress > 0f && file.progress < 1f) {
-                LinearProgressIndicator(
-                    progress = { file.progress.safeProgress() },
-                    color = TechBlue,
-                    trackColor = colors.control,
-                    modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(99.dp))
+                MediaTransferProgress(
+                    label = mediaStatusLabel(file),
+                    progress = file.progress.safeProgress(),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
             MediaActionBar(
@@ -1483,7 +1572,8 @@ private fun EmbeddedMediaPreview(
 ) {
     when (file.kind) {
         MediaKind.Photo -> PhotoPreview(file = file, contentRequest = contentRequest, modifier = modifier)
-        MediaKind.Video, MediaKind.Audio -> PlayableMediaPreview(file = file, contentRequest = contentRequest, modifier = modifier)
+        MediaKind.Video -> NativeVideoPreview(file = file, contentRequest = contentRequest, modifier = modifier)
+        MediaKind.Audio -> PlayableMediaPreview(file = file, contentRequest = contentRequest, modifier = modifier)
     }
 }
 
@@ -1510,6 +1600,64 @@ private fun PhotoPreview(
         } else {
             MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
             Icon(Icons.Filled.Image, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
+        }
+    }
+}
+
+@Composable
+private fun NativeVideoPreview(
+    file: MediaFile,
+    contentRequest: suspend (MediaFile) -> MediaContentRequest?,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var thumbnail by remember(file.id, file.contentUri) { mutableStateOf<Bitmap?>(null) }
+    var opening by remember(file.id, file.contentUri) { mutableStateOf(false) }
+    LaunchedEffect(file.id, file.contentUri) {
+        val request = contentRequest(file)
+        thumbnail = withContext(Dispatchers.IO) {
+            loadVideoCoverFrame(
+                context,
+                request?.value ?: file.contentUri,
+                request?.authorization
+            )
+        }
+    }
+    Box(
+        modifier
+            .background(Color.Black)
+            .clickable {
+                if (opening) return@clickable
+                opening = true
+                scope.launch {
+                    val request = contentRequest(file)
+                    val target = request?.value ?: file.contentUri
+                    openNativeMediaViewer(context, file, target)
+                    opening = false
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        if (thumbnail != null) {
+            Image(
+                bitmap = thumbnail!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(Modifier.fillMaxSize().background(Color.Black))
+        }
+        Box(
+            Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.50f))
+                .border(1.dp, Color.White.copy(alpha = 0.66f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(44.dp))
         }
     }
 }
@@ -1556,8 +1704,12 @@ private fun PlayableMediaPreview(
                         playing = true
                         playbackError = null
                     }
-                    player.onPaused = { playing = false }
-                    player.onCompletion = { playing = false }
+                    player.onPaused = {
+                        playing = false
+                    }
+                    player.onCompletion = {
+                        playing = false
+                    }
                     player.onPlaybackError = { message ->
                         buffering = false
                         playing = false
@@ -1573,38 +1725,6 @@ private fun PlayableMediaPreview(
                 },
                 modifier = Modifier.fillMaxSize()
             )
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .clickable {
-                        playbackError = null
-                        if (playing) {
-                            playerView?.pause()
-                        } else {
-                            buffering = true
-                            playerView?.play()
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                when {
-                    playbackError != null -> {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(64.dp))
-                            Text(playbackError ?: "", color = Color.White, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    buffering -> {
-                        Text("加载中", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black)
-                    }
-                    !playing -> {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
-                    }
-                }
-            }
             if (file.kind == MediaKind.Audio) {
                 Box(
                     Modifier
@@ -1615,9 +1735,113 @@ private fun PlayableMediaPreview(
                     Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, tint = Color.White, modifier = Modifier.size(76.dp))
                 }
             }
+            when {
+                playbackError != null -> {
+                    PlaybackCenterOverlay(
+                        message = playbackError ?: "",
+                        onClick = {
+                            playbackError = null
+                            buffering = true
+                            playerView?.play()
+                        }
+                    )
+                }
+                buffering -> {
+                    PlaybackCenterOverlay(message = "加载中", onClick = {})
+                }
+                !playing -> {
+                    PlaybackCenterOverlay(
+                        message = null,
+                        onClick = {
+                            playbackError = null
+                            buffering = true
+                            playerView?.play()
+                        }
+                    )
+                }
+            }
         }
     }
 }
+
+@Composable
+private fun BoxScope.PlaybackCenterOverlay(message: String?, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .align(Alignment.Center)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.Black.copy(alpha = 0.46f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(54.dp))
+        message?.takeIf { it.isNotBlank() }?.let {
+            Text(it, color = Color.White, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun openNativeMediaViewer(context: Context, file: MediaFile, value: String?): Boolean {
+    val uri = value?.takeIf { it.isNotBlank() }?.toShareableMediaUri(context) ?: return false
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, file.viewerMimeType(value))
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (uri.scheme == "content") {
+            clipData = ClipData.newUri(context.contentResolver, file.name, uri)
+        }
+    }
+    return runCatching {
+        context.startActivity(intent)
+        true
+    }.getOrDefault(false)
+}
+
+private fun String.toShareableMediaUri(context: Context): Uri? {
+    val uri = runCatching { Uri.parse(this) }.getOrNull() ?: return null
+    val localFile = when {
+        uri.scheme == "file" -> uri.path?.takeIf { it.isNotBlank() }?.let(::File)
+        uri.scheme == null && startsWith("/") -> File(this)
+        else -> null
+    }?.takeIf { it.exists() && it.isFile }
+    return if (localFile != null) {
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", localFile)
+    } else {
+        uri
+    }
+}
+
+private fun MediaFile.viewerMimeType(value: String?): String =
+    when (kind) {
+        MediaKind.Photo -> value?.extensionMimeType() ?: "image/*"
+        MediaKind.Video -> value?.extensionMimeType() ?: "video/*"
+        MediaKind.Audio -> value?.extensionMimeType() ?: "audio/*"
+    }
+
+private fun String.extensionMimeType(): String? =
+    substringBefore('?')
+        .substringAfterLast('/', "")
+        .substringAfterLast('.', "")
+        .lowercase()
+        .let { extension ->
+            when (extension) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                "webp" -> "image/webp"
+                "bmp" -> "image/bmp"
+                "gif" -> "image/gif"
+                "mp4" -> "video/mp4"
+                "mov" -> "video/quicktime"
+                "m4v" -> "video/mp4"
+                "3gp" -> "video/3gpp"
+                "opus" -> "audio/ogg"
+                "wav" -> "audio/wav"
+                "amr" -> "audio/amr"
+                "aac" -> "audio/aac"
+                else -> null
+            }
+        }
 
 @Composable
 private fun FullscreenMediaPlayer(file: MediaFile, onExitFullscreen: () -> Unit, onDismiss: () -> Unit) {
@@ -1705,16 +1929,19 @@ private fun mediaStatusLabel(file: MediaFile): String =
     }
 
 private enum class MediaPrimaryAction(val label: String, val icon: ImageVector) {
-    UploadPhone("同步到手机", Icons.Filled.PhoneAndroid),
-    UploadedPhone("已同步手机", Icons.Filled.PhoneAndroid),
+    UploadCloud("上传云端", Icons.Filled.CloudUpload),
+    UploadedCloud("已上传", Icons.Filled.CloudDone),
+    SyncPhone("同步到手机", Icons.Filled.PhoneAndroid),
+    SyncedPhone("已同步手机", Icons.Filled.PhoneAndroid),
     Busy("处理中", Icons.Filled.CloudUpload)
 }
 
-private fun MediaFile.mediaPrimaryAction(phoneSelected: Boolean): MediaPrimaryAction = when {
+private fun MediaFile.mediaPrimaryAction(): MediaPrimaryAction = when {
     transferStatus.inProgress -> MediaPrimaryAction.Busy
-    phoneSelected -> MediaPrimaryAction.UploadedPhone
-    transferStatus == TransferStatus.Done -> MediaPrimaryAction.UploadedPhone
-    else -> MediaPrimaryAction.UploadPhone
+    local && transferStatus == TransferStatus.Done && lastTransferTarget == TransferTarget.Cloud -> MediaPrimaryAction.UploadedCloud
+    local -> MediaPrimaryAction.UploadCloud
+    transferStatus == TransferStatus.Done && lastTransferTarget == TransferTarget.PhoneSandbox -> MediaPrimaryAction.SyncedPhone
+    else -> MediaPrimaryAction.SyncPhone
 }
 
 private enum class MediaPreviewAction(val label: String, val icon: ImageVector) {
@@ -1727,6 +1954,19 @@ private fun MediaFile.previewAction(): MediaPreviewAction = when (kind) {
     MediaKind.Video -> MediaPreviewAction.Video
     MediaKind.Photo -> MediaPreviewAction.Photo
     MediaKind.Audio -> MediaPreviewAction.Audio
+}
+
+private fun mediaDateTimeLabel(value: String): String {
+    val raw = value.trim()
+    if (raw.isBlank()) return value
+    raw.toLongOrNull()?.let { epoch ->
+        val millis = if (epoch < 10_000_000_000L) epoch * 1000 else epoch
+        return Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(ChineseMediaDateTimeFormatter)
+    }
+    parseMediaInstant(raw)?.let { instant ->
+        return instant.atZone(ZoneId.systemDefault()).format(ChineseMediaDateTimeFormatter)
+    }
+    return raw
 }
 
 private enum class MediaFilter(val label: String) {
@@ -1769,6 +2009,9 @@ private fun parseMediaDate(value: String): LocalDate? {
         val millis = if (epoch < 10_000_000_000L) epoch * 1000 else epoch
         return Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate()
     }
+    parseMediaInstant(raw)?.let { instant ->
+        return instant.atZone(ZoneId.systemDefault()).toLocalDate()
+    }
     val formatters = listOf(
         DateTimeFormatter.ISO_OFFSET_DATE_TIME,
         DateTimeFormatter.ISO_LOCAL_DATE_TIME,
@@ -1792,6 +2035,33 @@ private fun parseMediaDate(value: String): LocalDate? {
     }
 }
 
+private fun parseMediaInstant(raw: String): Instant? {
+    val formatters = listOf(
+        DateTimeFormatter.ISO_OFFSET_DATE_TIME,
+        DateTimeFormatter.ISO_LOCAL_DATE_TIME,
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"),
+        DateTimeFormatter.ofPattern("EEE MMM dd HH:mm:ss zzz yyyy", Locale.US)
+    )
+    formatters.forEach { formatter ->
+        runCatching {
+            return when (formatter) {
+                DateTimeFormatter.ISO_OFFSET_DATE_TIME -> Instant.from(formatter.parse(raw))
+                else -> {
+                    val parsed = formatter.parse(raw)
+                    runCatching { ZonedDateTime.from(parsed).toInstant() }.getOrElse {
+                        java.time.LocalDateTime.from(parsed).atZone(ZoneId.systemDefault()).toInstant()
+                    }
+                }
+            }
+        }
+    }
+    return null
+}
+
+private val ChineseMediaDateTimeFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy年M月d日 HH:mm", Locale.CHINA)
+
 private fun loadMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?): Bitmap? =
     when (kind) {
         MediaKind.Photo -> loadImageBitmap(context, request?.value, request?.authorization)
@@ -1801,11 +2071,12 @@ private fun loadMediaThumbnail(context: Context, kind: MediaKind, request: Media
 
 private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?): Bitmap? {
     val value = request?.value?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return null
+    val targetSize = MediaThumbnailMaxPx
     val cacheKey = "${kind.name}:$value"
     DeviceMediaThumbnailCache[cacheKey]?.let { return it }
     return withContext(Dispatchers.IO) {
         val cachedFile = deviceMediaThumbnailCacheFile(context, cacheKey)
-        decodeFileBitmap(cachedFile.absolutePath)?.let { cached ->
+        decodeFileBitmap(cachedFile.absolutePath, targetSize)?.let { cached ->
             cachedFile.setLastModified(System.currentTimeMillis())
             DeviceMediaThumbnailCache[cacheKey] = cached
             return@withContext cached
@@ -1813,7 +2084,7 @@ private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, 
         val limiter = if (kind == MediaKind.Video) DeviceVideoThumbnailLimiter else DevicePhotoThumbnailLimiter
         limiter.withPermit {
             DeviceMediaThumbnailCache[cacheKey]?.let { return@withPermit it }
-            decodeFileBitmap(cachedFile.absolutePath)?.let { cached ->
+            decodeFileBitmap(cachedFile.absolutePath, targetSize)?.let { cached ->
                 cachedFile.setLastModified(System.currentTimeMillis())
                 DeviceMediaThumbnailCache[cacheKey] = cached
                 return@withPermit cached
@@ -1835,7 +2106,7 @@ private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, 
 private fun loadRemoteDeviceThumbnail(context: Context, kind: MediaKind, value: String, authorization: String?): Bitmap? =
     when (kind) {
         MediaKind.Photo -> loadImageBitmap(context, value, authorization)
-        MediaKind.Video -> loadVideoFrame(context, value, authorization)
+        MediaKind.Video -> loadVideoCoverFrame(context, value, authorization)
         MediaKind.Audio -> null
     }
 
@@ -1901,10 +2172,10 @@ private fun decodeContentBitmap(context: Context, uri: Uri): Bitmap? {
     return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
 }
 
-private fun decodeFileBitmap(path: String): Bitmap? {
+private fun decodeFileBitmap(path: String, maxPx: Int = MediaThumbnailMaxPx): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(path, bounds)
-    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize() }
+    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize(maxPx) }
     return BitmapFactory.decodeFile(path, options)
 }
 
@@ -1913,6 +2184,30 @@ private fun decodeByteArrayBitmap(bytes: ByteArray): Bitmap? {
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize() }
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+}
+
+private fun Bitmap.isMostlyBlackFrame(): Boolean {
+    if (width <= 0 || height <= 0) return true
+    val sampleSize = 12
+    var darkPixels = 0
+    var sampled = 0
+    val stepX = (width / sampleSize).coerceAtLeast(1)
+    val stepY = (height / sampleSize).coerceAtLeast(1)
+    var y = stepY / 2
+    while (y < height) {
+        var x = stepX / 2
+        while (x < width) {
+            val pixel = getPixel(x, y)
+            val red = android.graphics.Color.red(pixel)
+            val green = android.graphics.Color.green(pixel)
+            val blue = android.graphics.Color.blue(pixel)
+            if ((red + green + blue) / 3 < 18) darkPixels += 1
+            sampled += 1
+            x += stepX
+        }
+        y += stepY
+    }
+    return sampled > 0 && darkPixels.toFloat() / sampled.toFloat() > 0.92f
 }
 
 private fun java.io.InputStream.readBytes(limit: Long): ByteArray {
@@ -1936,17 +2231,25 @@ private fun android.util.Size.thumbnailTargetSize(): Pair<Int, Int>? {
     return (width * scale).roundToInt().coerceAtLeast(1) to (height * scale).roundToInt().coerceAtLeast(1)
 }
 
-private fun BitmapFactory.Options.thumbnailSampleSize(): Int {
+private fun BitmapFactory.Options.thumbnailSampleSize(maxPx: Int = MediaThumbnailMaxPx): Int {
     val maxDim = maxOf(outWidth, outHeight)
-    if (maxDim <= MediaThumbnailMaxPx || outWidth <= 0 || outHeight <= 0) return 1
+    if (maxDim <= maxPx || outWidth <= 0 || outHeight <= 0 || maxPx <= 0) return 1
     var sampleSize = 1
-    while (maxDim / (sampleSize * 2) >= MediaThumbnailMaxPx) {
+    while (maxDim / (sampleSize * 2) >= maxPx) {
         sampleSize *= 2
     }
     return sampleSize
 }
 
-private fun loadVideoFrame(context: Context, value: String?, authorization: String? = null): Bitmap? {
+private fun loadVideoFrame(context: Context, value: String?, authorization: String? = null): Bitmap? =
+    loadVideoCoverFrame(context, value, authorization)
+
+private fun loadVideoCoverFrame(
+    context: Context,
+    value: String?,
+    authorization: String? = null,
+    maxPx: Int = MediaThumbnailMaxPx
+): Bitmap? {
     val raw = value?.takeIf { it.isNotBlank() } ?: return null
     return runCatching {
         val retriever = MediaMetadataRetriever()
@@ -1961,18 +2264,92 @@ private fun loadVideoFrame(context: Context, value: String?, authorization: Stri
                 raw.startsWith("/") -> retriever.setDataSource(raw)
                 else -> return@runCatching null
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                retriever.getScaledFrameAtTime(
-                    0,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                    MediaThumbnailMaxPx,
-                    MediaThumbnailMaxPx
-                )
-            } else {
-                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            val candidatesUs = longArrayOf(0L, 100_000L, 300_000L, 1_000_000L)
+            var cover: Bitmap? = null
+            for (timeUs in candidatesUs) {
+                cover = retriever.extractCoverFrameAt(timeUs, maxPx)
+                    ?.takeUnless { it.isMostlyBlackFrame() }
+                if (cover != null) break
             }
+            cover
         } finally {
             retriever.release()
         }
     }.getOrNull()
+}
+
+private fun MediaMetadataRetriever.extractCoverFrameAt(timeUs: Long, maxPx: Int): Bitmap? {
+    val exact = getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+        ?.trimBlackFrameBorder()
+        ?.scaledToBounds(maxPx)
+    if (exact != null) return exact
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        getScaledFrameAtTime(
+            timeUs,
+            MediaMetadataRetriever.OPTION_CLOSEST,
+            maxPx,
+            maxPx
+        )?.trimBlackFrameBorder()
+    } else {
+        getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?.trimBlackFrameBorder()
+            ?.scaledToBounds(maxPx)
+    }
+}
+
+private fun Bitmap.trimBlackFrameBorder(): Bitmap? {
+    if (width <= 0 || height <= 0) return null
+    val rowStep = (height / 96).coerceAtLeast(1)
+    val colStep = (width / 96).coerceAtLeast(1)
+    var left = width
+    var top = height
+    var right = -1
+    var bottom = -1
+    var y = 0
+    while (y < height) {
+        var x = 0
+        while (x < width) {
+            if (!isDarkPixel(getPixel(x, y))) {
+                if (x < left) left = x
+                if (x > right) right = x
+                if (y < top) top = y
+                if (y > bottom) bottom = y
+            }
+            x += colStep
+        }
+        y += rowStep
+    }
+    if (right < left || bottom < top) return null
+
+    left = (left - colStep).coerceAtLeast(0)
+    top = (top - rowStep).coerceAtLeast(0)
+    right = (right + colStep).coerceAtMost(width - 1)
+    bottom = (bottom + rowStep).coerceAtMost(height - 1)
+
+    val cropWidth = right - left + 1
+    val cropHeight = bottom - top + 1
+    val cropAreaRatio = cropWidth.toFloat() * cropHeight.toFloat() / (width.toFloat() * height.toFloat())
+    if (cropWidth < width * 0.12f || cropHeight < height * 0.12f || cropAreaRatio < 0.03f) return null
+    if (cropWidth == width && cropHeight == height) return this
+    return Bitmap.createBitmap(this, left, top, cropWidth, cropHeight)
+}
+
+private fun isDarkPixel(pixel: Int): Boolean {
+    val red = android.graphics.Color.red(pixel)
+    val green = android.graphics.Color.green(pixel)
+    val blue = android.graphics.Color.blue(pixel)
+    return maxOf(red, green, blue) < 34 && (red + green + blue) / 3 < 24
+}
+
+private fun Bitmap.scaledToThumbnailBounds(): Bitmap {
+    return scaledToBounds(MediaThumbnailMaxPx)
+}
+
+private fun Bitmap.scaledToBounds(maxPx: Int): Bitmap {
+    val maxDim = maxOf(width, height)
+    if (maxDim <= maxPx || width <= 0 || height <= 0 || maxPx <= 0) return this
+    val scale = maxPx.toFloat() / maxDim.toFloat()
+    val targetWidth = (width * scale).roundToInt().coerceAtLeast(1)
+    val targetHeight = (height * scale).roundToInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true)
 }

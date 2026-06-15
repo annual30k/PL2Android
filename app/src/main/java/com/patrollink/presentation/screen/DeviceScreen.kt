@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -75,6 +77,7 @@ import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.ScannedDevice
+import com.patrollink.domain.StreamMode
 import com.patrollink.domain.StreamRelayState
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.ActionTile
@@ -91,6 +94,11 @@ import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.PatrolTextStyle
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @Composable
 fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: () -> Unit) {
@@ -100,42 +108,47 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
     val connectedDevices = uiState.connectedDevices.filter { it.isControllableDevice() }
     val hasConnectedDevice = device.isControllableDevice()
     val confirmClearAccount = remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(colors.page)) {
-        OfflineBanner(uiState.networkOnline)
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
-            contentPadding = PaddingValues(top = 6.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            item {
-                DeviceConsoleHeader(
-                    devices = connectedDevices,
-                    selectedId = device.id,
-                    onSelect = viewModel::selectConnectedDevice,
-                    onAddDevice = onAddDevice
-                )
-            }
-            if (hasConnectedDevice) {
-                item { CurrentDevicePanel(device) }
-                item { DevicePrimaryPanel(uiState, viewModel, device) }
+    Box(Modifier.fillMaxSize().background(colors.page)) {
+        Column(Modifier.fillMaxSize()) {
+            OfflineBanner(uiState.networkOnline)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 item {
-                    DeviceControlConsole(
-                        device = device,
-                        capabilities = uiState.deviceCapabilities,
-                        recording = uiState.realtimeAudioSyncing,
-                        photoBusy = uiState.photoCaptureInProgress,
-                        onPhoto = viewModel::takePhoto,
-                        onToggleRecord = viewModel::toggleRecord,
-                        onToggleTalk = viewModel::toggleTalk,
-                        onSelfCheck = viewModel::runDeviceSelfCheck,
-                        onMore = { confirmClearAccount.value = true }
+                    DeviceConsoleHeader(
+                        devices = connectedDevices,
+                        selectedId = device.id,
+                        onSelect = viewModel::selectConnectedDevice,
+                        onAddDevice = onAddDevice
                     )
                 }
-                item { DeviceStatusPanel(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing) }
-                item { DeviceEventsPanel(uiState.deviceEvents) }
-            } else {
-                item { EmptyDeviceConsole(onAddDevice) }
+                if (hasConnectedDevice) {
+                    item { CurrentDevicePanel(device) }
+                    item { DevicePrimaryPanel(uiState, viewModel, device) }
+                    item {
+                        DeviceControlConsole(
+                            device = device,
+                            capabilities = uiState.deviceCapabilities,
+                            recording = uiState.realtimeAudioSyncing,
+                            photoBusy = uiState.photoCaptureInProgress,
+                            onPhoto = viewModel::takePhoto,
+                            onToggleRecord = viewModel::toggleRecord,
+                            onToggleTalk = viewModel::toggleTalk,
+                            onSelfCheck = viewModel::runDeviceSelfCheck,
+                            onMore = { confirmClearAccount.value = true }
+                        )
+                    }
+                    item { DeviceStatusPanel(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing) }
+                    item { DeviceEventsPanel(uiState.deviceEvents) }
+                } else {
+                    item { EmptyDeviceConsole(onAddDevice) }
+                }
             }
+        }
+        if (uiState.deviceCommandInProgress) {
+            DeviceCommandOverlay(uiState.deviceCommandMessage)
         }
     }
     if (confirmClearAccount.value) {
@@ -154,6 +167,33 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                 viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Glasses)
             }
         )
+    }
+}
+
+@Composable
+private fun DeviceCommandOverlay(message: String) {
+    val colors = PatrolDisplay.colors
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.34f))
+            .clickable(enabled = true, onClick = {}),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .width(220.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(colors.surface)
+                .border(1.dp, colors.border, RoundedCornerShape(8.dp))
+                .padding(horizontal = 18.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CircularProgressIndicator(color = TechBlue, strokeWidth = 4.dp, modifier = Modifier.size(38.dp))
+            Text(message.ifBlank { "正在等待设备回复" }, color = colors.text, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Black)
+            Text("请勿重复操作", color = colors.textMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
@@ -221,7 +261,12 @@ private fun DeviceSwitchChip(device: DeviceStatus, selected: Boolean, onClick: (
                 .background(if (selected) Color.White.copy(alpha = 0.94f) else colors.control.copy(alpha = 0.72f)),
             contentAlignment = Alignment.Center
         ) {
-            DeviceAssetImage(type = device.type, contentDescription = null, modifier = Modifier.size(if (device.type == DeviceType.Headset) 33.dp else 30.dp))
+            val imageModifier = when (device.type) {
+                DeviceType.Headset -> Modifier.size(33.dp)
+                DeviceType.Glasses -> Modifier.size(width = 38.dp, height = 24.dp)
+                else -> Modifier.size(30.dp)
+            }
+            DeviceAssetImage(type = device.type, contentDescription = null, modifier = imageModifier)
         }
         Text(
             device.name.removePrefix("ForceLink-"),
@@ -241,7 +286,9 @@ private fun DeviceSwitchChip(device: DeviceStatus, selected: Boolean, onClick: (
 private fun DeviceAssetImage(type: DeviceType, contentDescription: String?, modifier: Modifier = Modifier) {
     val resId = when (type) {
         DeviceType.Headset -> R.drawable.device_headset_h7
-        else -> R.drawable.device_recorder_a12
+        DeviceType.Glasses -> R.drawable.device_smart_glasses
+        DeviceType.Recorder -> R.drawable.device_smart_glasses
+        else -> R.drawable.device_smart_glasses
     }
     Image(
         painter = painterResource(resId),
@@ -542,21 +589,220 @@ private fun ResetPairingDialog(
     onResetHeadset: () -> Unit,
     onResetGlasses: () -> Unit
 ) {
+    val colors = PatrolDisplay.colors
+    val pendingAction = remember { mutableStateOf<MoreConfirmAction?>(null) }
+    val action = pendingAction.value
     AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("更多设备操作") },
-        text = { Text("低频和危险操作已收起到这里。清账号会重置配对关系；恢复出厂会删除设备端数据，完成后需要重新搜索并配对。") },
+        containerColor = colors.surface,
+        tonalElevation = 0.dp,
+        onDismissRequest = {
+            if (action == null) {
+                onDismiss()
+            } else {
+                pendingAction.value = null
+            }
+        },
+        title = {
+            if (action == null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(TechBlue.copy(alpha = 0.08f))
+                        .border(1.dp, TechBlue.copy(alpha = 0.16f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(TechBlue.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.MoreHoriz, contentDescription = null, tint = TechBlue, modifier = Modifier.size(22.dp))
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("更多设备操作", color = colors.text, fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Black)
+                        Text("用于处理配对异常或设备重置", color = TechBlue, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            } else {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Danger.copy(alpha = 0.08f))
+                        .border(1.dp, Danger.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Danger.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Info, contentDescription = null, tint = Danger, modifier = Modifier.size(21.dp))
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(action.confirmTitle, color = colors.text, fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Black)
+                        Text("请再次确认后继续", color = Danger, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+        },
+        text = {
+            if (action == null) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    MoreActionRow(
+                        title = "清除配对账号",
+                        description = "解除当前账号与设备的绑定关系",
+                        icon = Icons.Filled.Router,
+                        accent = TechBlue,
+                        danger = false,
+                        onClick = { pendingAction.value = MoreConfirmAction.ClearAccount }
+                    )
+                    MoreActionRow(
+                        title = "恢复耳机出厂",
+                        description = "清除耳机端数据，完成后需要重新配对",
+                        icon = Icons.Filled.Mic,
+                        accent = Danger,
+                        danger = true,
+                        onClick = { pendingAction.value = MoreConfirmAction.ResetHeadset }
+                    )
+                    MoreActionRow(
+                        title = "恢复眼镜出厂",
+                        description = "清除眼镜端数据，完成后需要重新配对",
+                        icon = Icons.Filled.CameraAlt,
+                        accent = Danger,
+                        danger = true,
+                        onClick = { pendingAction.value = MoreConfirmAction.ResetGlasses }
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Warning.copy(alpha = 0.10f))
+                            .border(1.dp, Warning.copy(alpha = 0.24f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Text("恢复出厂会删除设备端数据，请确认设备在身边后再操作。", color = Warning, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(action.confirmMessage, color = colors.textMuted, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Danger.copy(alpha = 0.08f))
+                            .border(1.dp, Danger.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 9.dp)
+                    ) {
+                        Text(action.warningText, color = Danger, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+        },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onClearAccount) { Text("清账号", color = Danger) }
-                TextButton(onClick = onResetHeadset) { Text("恢复耳机", color = Danger) }
-                TextButton(onClick = onResetGlasses) { Text("恢复眼镜", color = Danger) }
+            if (action == null) {
+                TextButton(onClick = onDismiss) {
+                    Text("关闭", color = colors.textMuted, fontWeight = FontWeight.Black)
+                }
+            } else {
+                TextButton(
+                    onClick = {
+                        when (action) {
+                            MoreConfirmAction.ClearAccount -> onClearAccount()
+                            MoreConfirmAction.ResetHeadset -> onResetHeadset()
+                            MoreConfirmAction.ResetGlasses -> onResetGlasses()
+                        }
+                    }
+                ) {
+                    Text(action.confirmButton, color = Danger, fontWeight = FontWeight.Black)
+                }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            if (action != null) {
+                TextButton(onClick = { pendingAction.value = null }) {
+                    Text("取消", color = colors.textMuted, fontWeight = FontWeight.Black)
+                }
+            }
         }
     )
+}
+
+private enum class MoreConfirmAction(
+    val confirmTitle: String,
+    val confirmMessage: String,
+    val warningText: String,
+    val confirmButton: String
+) {
+    ClearAccount(
+        confirmTitle = "确认清除配对账号？",
+        confirmMessage = "清除后当前设备会解除账号绑定，后续需要重新搜索并完成配对。",
+        warningText = "该操作会影响当前连接关系，请确认不是误触。",
+        confirmButton = "确认清除"
+    ),
+    ResetHeadset(
+        confirmTitle = "确认恢复耳机出厂？",
+        confirmMessage = "恢复出厂会清除耳机端配置和数据，完成后需要重新配对。",
+        warningText = "这是高风险操作，请确认耳机在身边且确实需要重置。",
+        confirmButton = "确认恢复"
+    ),
+    ResetGlasses(
+        confirmTitle = "确认恢复眼镜出厂？",
+        confirmMessage = "恢复出厂会清除眼镜端配置和数据，完成后需要重新配对。",
+        warningText = "这是高风险操作，请确认眼镜在身边且确实需要重置。",
+        confirmButton = "确认恢复"
+    )
+}
+
+@Composable
+private fun MoreActionRow(
+    title: String,
+    description: String,
+    icon: ImageVector,
+    accent: Color,
+    danger: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    val rowBackground = if (danger) Danger.copy(alpha = 0.055f) else TechBlue.copy(alpha = 0.045f)
+    val rowBorder = if (danger) Danger.copy(alpha = 0.26f) else TechBlue.copy(alpha = 0.18f)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(rowBackground)
+            .border(1.dp, rowBorder, RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(accent.copy(alpha = if (danger) 0.12f else 0.10f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = colors.text, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(description, color = colors.textMuted, fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = accent.copy(alpha = 0.82f), modifier = Modifier.size(22.dp))
+    }
 }
 
 @Composable
@@ -644,38 +890,187 @@ private fun ConnectedDeviceChip(device: DeviceStatus, selected: Boolean, onClick
 @Composable
 private fun RecorderLiveFeed(uiState: AppUiState, viewModel: PatrolViewModel, device: DeviceStatus) {
     val enabled = device.isControllableDevice()
-    Box(
-        Modifier
+    val fullScreen = remember(device.id) { mutableStateOf(false) }
+    val onToggleStream = {
+        if (uiState.streamState == StreamRelayState.Relaying) {
+            viewModel.stopStream()
+        } else {
+            viewModel.startStream(StreamMode.LowLatency)
+        }
+        Unit
+    }
+    StreamPlayerSurface(
+        uiState = uiState,
+        device = device,
+        enabled = enabled,
+        onToggleStream = onToggleStream,
+        onFullscreen = { fullScreen.value = true },
+        modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(2.1f)
+    )
+    if (fullScreen.value) {
+        StreamPlayerFullScreen(
+            uiState = uiState,
+            device = device,
+            enabled = enabled,
+            onToggleStream = onToggleStream,
+            onDismiss = { fullScreen.value = false }
+        )
+    }
+}
+
+@Composable
+private fun StreamPlayerSurface(
+    uiState: AppUiState,
+    device: DeviceStatus,
+    enabled: Boolean,
+    onToggleStream: () -> Unit,
+    onFullscreen: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isRelaying = uiState.streamState == StreamRelayState.Relaying
+    val isConnecting = uiState.streamState == StreamRelayState.Connecting
+    Box(
+        modifier
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
             .border(1.dp, Color(0xFF0F172A), RoundedCornerShape(8.dp))
-            .then(
-                if (enabled) {
-                    Modifier.clickable {
-                        if (uiState.streamState == StreamRelayState.Relaying) viewModel.stopStream() else viewModel.startLowLatencyStream()
-                    }
-                } else {
-                    Modifier
-                }
-            )
     ) {
-        Image(
-            painter = painterResource(R.drawable.device_live_feed_preview),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(Color(0xFF020617), Color(0xFF0B1220))))
         )
-        if (uiState.streamState == StreamRelayState.Connecting || uiState.streamState == StreamRelayState.Failed) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.42f)))
+        Column(
+            Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                Modifier
+                    .size(84.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(TechBlue.copy(alpha = if (isRelaying) 0.18f else 0.09f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Videocam,
+                    contentDescription = null,
+                    tint = if (isRelaying) TechBlue else Color.White.copy(alpha = 0.42f),
+                    modifier = Modifier.size(38.dp)
+                )
+            }
             Text(
-                streamHint(uiState.streamState),
+                if (enabled) streamHint(uiState.streamState) else "设备未连接",
                 color = Color.White,
                 fontSize = 14.sp,
+                lineHeight = 18.sp,
                 fontWeight = FontWeight.Black,
-                modifier = Modifier.align(Alignment.Center)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+            Text(
+                device.name,
+                color = Color.White.copy(alpha = 0.56f),
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Row(
+            Modifier.align(Alignment.TopStart).padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(Modifier.size(7.dp).clip(RoundedCornerShape(99.dp)).background(if (isRelaying) Danger else Warning))
+            Text(streamTag(uiState.streamState, device.isRecording), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        }
+        Box(
+            Modifier.align(Alignment.BottomStart).padding(10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            StreamControlButton(
+                icon = if (isRelaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                label = when {
+                    isConnecting -> "连接中"
+                    isRelaying -> "停止"
+                    else -> "播放"
+                },
+                enabled = enabled && !isConnecting,
+                active = isRelaying,
+                onClick = onToggleStream
+            )
+        }
+        Box(
+            Modifier.align(Alignment.BottomEnd).padding(10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            StreamControlButton(
+                icon = Icons.Filled.Fullscreen,
+                label = "全屏",
+                enabled = enabled,
+                active = false,
+                onClick = onFullscreen
+            )
+        }
+    }
+}
+
+@Composable
+private fun StreamControlButton(icon: ImageVector, label: String, enabled: Boolean, active: Boolean, onClick: () -> Unit) {
+    val clickModifier = if (enabled) Modifier.clickable(onClick = onClick) else Modifier
+    Row(
+        Modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .background(
+                when {
+                    active -> Danger
+                    enabled -> Color.White.copy(alpha = 0.14f)
+                    else -> Color.White.copy(alpha = 0.07f)
+                }
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(7.dp))
+            .then(clickModifier)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Icon(icon, contentDescription = label, tint = Color.White.copy(alpha = if (enabled) 1f else 0.38f), modifier = Modifier.size(16.dp))
+        Text(label, color = Color.White.copy(alpha = if (enabled) 1f else 0.38f), fontSize = 12.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
+private fun StreamPlayerFullScreen(
+    uiState: AppUiState,
+    device: DeviceStatus,
+    enabled: Boolean,
+    onToggleStream: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black).padding(10.dp)) {
+            StreamPlayerSurface(
+                uiState = uiState,
+                device = device,
+                enabled = enabled,
+                onToggleStream = onToggleStream,
+                onFullscreen = onDismiss,
+                modifier = Modifier.fillMaxSize()
+            )
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+            ) {
+                Text("关闭", color = Color.White, fontWeight = FontWeight.Black)
+            }
         }
     }
 }
@@ -853,20 +1248,15 @@ private fun GlassesActions(device: DeviceStatus, photoBusy: Boolean, viewModel: 
 @Composable
 private fun DeviceEventsPanel(events: List<DeviceEvent>) {
     val colors = PatrolDisplay.colors
-    val rows = if (events.isEmpty()) {
-        listOf(
-            PrototypeEventRow("设备自检通过", "20:18", Icons.Filled.CheckCircle, Success),
-            PrototypeEventRow("媒体同步完成", "20:12", Icons.Filled.Sync, Success)
+    val selectedEvent = remember { mutableStateOf<DeviceEvent?>(null) }
+    val rows = events.map { event ->
+        PrototypeEventRow(
+            title = event.title,
+            time = event.timestamp.toEventTimeText(),
+            icon = if (event.level == DeviceEventLevel.Info) Icons.Filled.CheckCircle else Icons.Filled.Info,
+            color = event.level.accent(),
+            event = event
         )
-    } else {
-        events.take(2).mapIndexed { index, event ->
-            PrototypeEventRow(
-                title = event.title,
-                time = event.detail.takeIf { it.length in 1..6 } ?: if (index == 0) "20:18" else "20:12",
-                icon = if (event.level == DeviceEventLevel.Info) Icons.Filled.CheckCircle else Icons.Filled.Info,
-                color = event.level.accent()
-            )
-        }
     }
     Column(
         Modifier
@@ -885,14 +1275,39 @@ private fun DeviceEventsPanel(events: List<DeviceEvent>) {
             fontWeight = FontWeight.Black,
             modifier = Modifier.padding(horizontal = 14.dp)
         )
-        Column {
-            rows.forEachIndexed { index, row ->
-                DeviceEventListRow(row)
-                if (index != rows.lastIndex) {
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border.copy(alpha = 0.55f)))
+        if (rows.isEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Filled.Info, contentDescription = null, tint = colors.textSubtle, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(12.dp))
+                Text("暂无真实设备事件", color = colors.textMuted, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height((rows.size.coerceAtMost(4) * 41).dp)
+            ) {
+                items(rows.size) { index ->
+                    val row = rows[index]
+                    DeviceEventListRow(row, onClick = { selectedEvent.value = row.event })
+                    if (index != rows.lastIndex) {
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border.copy(alpha = 0.55f)))
+                    }
                 }
             }
         }
+    }
+    selectedEvent.value?.let { event ->
+        DeviceEventDetailDialog(
+            event = event,
+            onDismiss = { selectedEvent.value = null }
+        )
     }
 }
 
@@ -900,16 +1315,18 @@ private data class PrototypeEventRow(
     val title: String,
     val time: String,
     val icon: ImageVector,
-    val color: Color
+    val color: Color,
+    val event: DeviceEvent
 )
 
 @Composable
-private fun DeviceEventListRow(row: PrototypeEventRow) {
+private fun DeviceEventListRow(row: PrototypeEventRow, onClick: () -> Unit) {
     val colors = PatrolDisplay.colors
     Row(
         Modifier
             .fillMaxWidth()
             .height(40.dp)
+            .clickable(onClick = onClick)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -918,6 +1335,63 @@ private fun DeviceEventListRow(row: PrototypeEventRow) {
         Text(row.title, color = colors.textMuted, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Text(row.time, color = colors.textSubtle, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = colors.textSubtle, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun DeviceEventDetailDialog(event: DeviceEvent, onDismiss: () -> Unit) {
+    val colors = PatrolDisplay.colors
+    val accent = event.level.accent()
+    AlertDialog(
+        containerColor = colors.surface,
+        tonalElevation = 0.dp,
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(accent.copy(alpha = 0.08f))
+                    .border(1.dp, accent.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(if (event.level == DeviceEventLevel.Info) Icons.Filled.CheckCircle else Icons.Filled.Info, contentDescription = null, tint = accent, modifier = Modifier.size(24.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(event.title, color = colors.text, fontSize = 18.sp, lineHeight = 23.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(event.timestamp.toEventFullTimeText(), color = colors.textMuted, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                DeviceEventDetailField("级别", event.level.labelText(), accent)
+                DeviceEventDetailField("详情", event.detail.ifBlank { "无更多详情" }, colors.textMuted)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭", color = colors.textMuted, fontWeight = FontWeight.Black)
+            }
+        }
+    )
+}
+
+@Composable
+private fun DeviceEventDetailField(label: String, value: String, valueColor: Color) {
+    val colors = PatrolDisplay.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.control.copy(alpha = 0.55f))
+            .border(1.dp, colors.border.copy(alpha = 0.72f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(label, color = colors.textSubtle, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Black)
+        Text(value, color = valueColor, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -1556,7 +2030,7 @@ private fun DeviceTypeIcon(
 private val DeviceType.label: String
     get() = when (this) {
         DeviceType.Headset -> "摄录耳机"
-        DeviceType.Recorder -> "记录仪"
+        DeviceType.Recorder -> "智能眼镜"
         DeviceType.Sensor -> "传感器"
         DeviceType.Glasses -> "智能眼镜"
     }
@@ -1564,7 +2038,7 @@ private val DeviceType.label: String
 private val DeviceType.shortLabel: String
     get() = when (this) {
         DeviceType.Headset -> "摄录"
-        DeviceType.Recorder -> "记录"
+        DeviceType.Recorder -> "眼镜"
         DeviceType.Sensor -> "传感"
         DeviceType.Glasses -> "眼镜"
     }
@@ -1579,14 +2053,14 @@ private fun DeviceType.icon() = when (this) {
 private val DeviceType.emojiIcon: String
     get() = when (this) {
         DeviceType.Headset -> "🎧"
-        DeviceType.Recorder -> "📹"
+        DeviceType.Recorder -> "👓"
         DeviceType.Sensor -> "📟"
         DeviceType.Glasses -> "👓"
     }
 
 private fun DeviceType.accent() = when (this) {
     DeviceType.Headset -> TechBlue
-    DeviceType.Recorder -> Color(0xFF8B5CF6)
+    DeviceType.Recorder -> Color(0xFF14B8A6)
     DeviceType.Sensor -> Success
     DeviceType.Glasses -> Color(0xFF14B8A6)
 }
@@ -1595,6 +2069,12 @@ private fun DeviceEventLevel.accent() = when (this) {
     DeviceEventLevel.Info -> TechBlue
     DeviceEventLevel.Warning -> Warning
     DeviceEventLevel.Error -> Danger
+}
+
+private fun DeviceEventLevel.labelText() = when (this) {
+    DeviceEventLevel.Info -> "正常"
+    DeviceEventLevel.Warning -> "提醒"
+    DeviceEventLevel.Error -> "异常"
 }
 
 private data class AddDevicePalette(
@@ -1680,15 +2160,28 @@ private fun addDevicePalette(dark: Boolean): AddDevicePalette = if (dark) {
     )
 }
 
+private val eventTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+private val eventFullTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日 HH:mm:ss")
+
+private fun Long.toEventTimeText(): String =
+    runCatching {
+        Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).format(eventTimeFormatter)
+    }.getOrDefault("--:--")
+
+private fun Long.toEventFullTimeText(): String =
+    runCatching {
+        Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).format(eventFullTimeFormatter)
+    }.getOrDefault("时间未知")
+
 private fun streamHint(state: StreamRelayState): String = when (state) {
-    StreamRelayState.Idle -> "点击查看实时画面"
+    StreamRelayState.Idle -> "点击播放接入实时画面"
     StreamRelayState.Connecting -> "正在连接安全视频通道"
-    StreamRelayState.Relaying -> "点击关闭实时画面"
-    StreamRelayState.Failed -> "连接失败，点击重试"
+    StreamRelayState.Relaying -> "实时画面传输中"
+    StreamRelayState.Failed -> "连接失败，可重新播放"
 }
 
 private fun streamTag(state: StreamRelayState, recording: Boolean): String = when (state) {
-    StreamRelayState.Idle -> if (recording) "REC 00:12:45" else "LIVE"
+    StreamRelayState.Idle -> if (recording) "录像中" else "待接入"
     StreamRelayState.Connecting -> "连接中"
     StreamRelayState.Relaying -> "低延迟直播中"
     StreamRelayState.Failed -> "连接失败"

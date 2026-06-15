@@ -937,13 +937,14 @@ class UteSdkDeviceGateway(
         connected: Boolean
     ): DeviceStatus = withContext(Dispatchers.IO) {
         val connection = bridge.connection
+        val cacheAliases = statusCacheAliases(deviceId, discovered)
         val readBattery = readBatteryPercent(connection)
         val battery = readBattery
-            ?: cachedBattery(deviceId)
+            ?: cachedBattery(cacheAliases)
             ?: activeDevice.batterySnapshotForDevice(deviceId)
             ?: fallbackStatus.batterySnapshotForDevice(deviceId)
         val batteryKnown = battery != null
-        if (readBattery != null) rememberBattery(deviceId, readBattery)
+        if (readBattery != null) rememberBattery(cacheAliases, readBattery)
         val smartInfo = runCatching { connection.smartGetDeviceInfo().takeIf { it.isSuccess }?.data }.getOrNull()
         val glassesState = runCatching { connection.getGlassesStateInfo().takeIf { it.isSuccess }?.data }.getOrNull()
         val deviceInfo = runCatching {
@@ -978,16 +979,21 @@ class UteSdkDeviceGateway(
             ?: recorderStorage?.total?.storageBytesToGb()?.takeIf { it > 0f }
         val readFreeGb = store?.freeSpace?.storageBytesToGb()?.takeIf { it >= 0f }
             ?: recorderStorage?.free?.storageBytesToGb()?.takeIf { it >= 0f }
-        val cachedStorage = cachedStorage(deviceId)
+        val cachedStorage = cachedStorage(cacheAliases)
             ?: activeDevice.storageSnapshotForDevice(deviceId)
             ?: fallbackStatus.storageSnapshotForDevice(deviceId)
-        val readStorage = readTotalGb?.let { total ->
-            StorageSnapshot(
-                totalGb = total,
-                freeGb = (readFreeGb ?: cachedStorage?.freeGb ?: total).coerceIn(0f, total)
+        val readStorage = when {
+            readTotalGb != null -> StorageSnapshot(
+                totalGb = readTotalGb,
+                freeGb = (readFreeGb ?: cachedStorage?.freeGb ?: readTotalGb).coerceIn(0f, readTotalGb)
             )
+            readFreeGb != null && cachedStorage != null -> StorageSnapshot(
+                totalGb = cachedStorage.totalGb,
+                freeGb = readFreeGb.coerceIn(0f, cachedStorage.totalGb)
+            )
+            else -> null
         }
-        if (readStorage != null) rememberStorage(deviceId, readStorage)
+        if (readStorage != null) rememberStorage(cacheAliases, readStorage)
         val storage = readStorage ?: cachedStorage
         val totalGb = storage?.totalGb ?: fallbackStatus.storageTotalGb
         val freeGb = storage?.freeGb ?: (totalGb - fallbackStatus.storageUsedGb)
@@ -1140,27 +1146,64 @@ class UteSdkDeviceGateway(
             )
         }
 
-    private fun rememberBattery(deviceId: String, battery: Int) {
+    private fun rememberBattery(cacheAliases: List<String>, battery: Int) {
         val value = battery.coerceIn(0, 100)
-        lastKnownBatteryByDevice[deviceId] = value
-        statusCache.edit()
-            .putInt(statusCacheKey(deviceId, "battery"), value)
-            .apply()
+        val editor = statusCache.edit()
+        cacheAliases.forEach { alias ->
+            lastKnownBatteryByDevice[alias] = value
+            editor.putInt(statusCacheKey(alias, "battery"), value)
+        }
+        editor.apply()
     }
 
-    private fun cachedBattery(deviceId: String): Int? =
-        lastKnownBatteryByDevice[deviceId]
-            ?: statusCache.getInt(statusCacheKey(deviceId, "battery"), UnknownBattery)
-                .takeIf { it in 0..100 }
+    private fun cachedBattery(cacheAliases: List<String>): Int? =
+        cacheAliases.firstNotNullOfOrNull { alias ->
+            lastKnownBatteryByDevice[alias]
+                ?: statusCache.getInt(statusCacheKey(alias, "battery"), UnknownBattery)
+                    .takeIf { it in 0..100 }
+        }
 
-    private fun rememberStorage(deviceId: String, storage: StorageSnapshot) {
+    private fun rememberStorage(cacheAliases: List<String>, storage: StorageSnapshot) {
         if (storage.totalGb <= 0f) return
         val normalized = storage.copy(freeGb = storage.freeGb.coerceIn(0f, storage.totalGb))
-        lastKnownStorageByDevice[deviceId] = normalized
-        statusCache.edit()
-            .putFloat(statusCacheKey(deviceId, "storage_total_gb"), normalized.totalGb)
-            .putFloat(statusCacheKey(deviceId, "storage_free_gb"), normalized.freeGb)
-            .apply()
+        val editor = statusCache.edit()
+        cacheAliases.forEach { alias ->
+            lastKnownStorageByDevice[alias] = normalized
+            editor
+                .putFloat(statusCacheKey(alias, "storage_total_gb"), normalized.totalGb)
+                .putFloat(statusCacheKey(alias, "storage_free_gb"), normalized.freeGb)
+        }
+        editor.apply()
+    }
+
+    private fun cachedStorage(cacheAliases: List<String>): StorageSnapshot? =
+        cacheAliases.firstNotNullOfOrNull { alias ->
+            lastKnownStorageByDevice[alias] ?: run {
+                val total = statusCache.getFloat(statusCacheKey(alias, "storage_total_gb"), 0f)
+                if (total <= 0f) return@run null
+                val free = statusCache.getFloat(statusCacheKey(alias, "storage_free_gb"), total)
+                StorageSnapshot(totalGb = total, freeGb = free.coerceIn(0f, total)).also {
+                    lastKnownStorageByDevice[alias] = it
+                }
+            }
+        }
+
+    @SuppressLint("MissingPermission")
+    private fun statusCacheAliases(deviceId: String, discovered: ScannedDevice?): List<String> {
+        val bluetoothDevice = bridge.bluetoothDevice()
+        return listOf(
+            deviceId,
+            discovered?.id,
+            discovered?.macAddress,
+            runCatching { bluetoothDevice?.address }.getOrNull(),
+            discovered?.name,
+            runCatching { bluetoothDevice?.name }.getOrNull(),
+            bridge.client.deviceName,
+            activeDevice.name,
+            fallbackStatus.name
+        )
+            .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
+            .distinctBy { it.uppercase(Locale.US) }
     }
 
     private fun cachedStorage(deviceId: String): StorageSnapshot? =
@@ -1174,7 +1217,7 @@ class UteSdkDeviceGateway(
         }
 
     private fun statusCacheKey(deviceId: String, field: String): String =
-        "${deviceId.uppercase()}_$field"
+        "${deviceId.uppercase(Locale.US)}_$field"
 
     private fun mergedScannedDevices(): List<ScannedDevice> {
         val systemDevices = systemBluetoothAudioDevices()

@@ -97,6 +97,7 @@ private const val DeviceMediaTransferMaxAttempts = 2
 private const val DeviceMediaRetryDelayMillis = 1_500L
 private const val DeviceWifiRestartSettleMillis = 1_500L
 private const val DeviceMediaTransferTimeoutMillis = 30_000L
+private const val MaxDeviceEvents = 30
 
 class PatrolViewModel(
     private val appContext: Context? = null,
@@ -257,10 +258,11 @@ class PatrolViewModel(
     }
 
     fun toggleRecord() = viewModelScope.launch {
+        runDeviceCommandWithOverlay("正在等待录像指令回复") {
         val device = prepareDeviceForCommand(
             capabilityReady = { it.supportsVideo },
             unavailableMessage = "录像失败，耳机控制通道未就绪"
-        ) ?: return@launch
+        ) ?: return@runDeviceCommandWithOverlay
         val enabled = !device.isRecording
         _uiState.update {
             it.copy(operationMessage = operationMessage(if (enabled) "正在下发开始录像命令" else "正在下发停止录像命令", OperationMessageType.Info))
@@ -273,24 +275,32 @@ class PatrolViewModel(
                         "录像已停止，当前 SDK 不支持 BLE 上传视频文件"
                     else -> "录像已停止"
                 }
-                updateCurrentDeviceWithMessage(
-                    next.copy(isRecording = enabled),
-                    message
+                updateCurrentDeviceWithMessage(next.copy(isRecording = enabled), message)
+                addDeviceEvent(
+                    title = if (enabled) "录像已开始" else "录像已停止",
+                    detail = device.name,
+                    level = DeviceEventLevel.Info
                 )
             }
             .onFailure { throwable ->
                 val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
                 _uiState.update { state ->
-                    state.copy(operationMessage = operationMessage("录像控制失败，请确认耳机已配对并连接控制通道$detail", OperationMessageType.Error))
+                    val title = "录像控制失败"
+                    state.copy(
+                        deviceEvents = (listOf(newDeviceEvent(title, "请确认耳机已配对并连接控制通道$detail", DeviceEventLevel.Error)) + state.deviceEvents).take(MaxDeviceEvents),
+                        operationMessage = operationMessage("$title，请确认耳机已配对并连接控制通道$detail", OperationMessageType.Error)
+                    )
                 }
             }
+        }
     }
 
     fun toggleTalk() = viewModelScope.launch {
+        runDeviceCommandWithOverlay("正在等待录音指令回复") {
         val device = prepareDeviceForCommand(
             capabilityReady = { it.supportsAudioRecord },
             unavailableMessage = "录音失败，当前设备不支持录音或控制通道未就绪"
-        ) ?: return@launch
+        ) ?: return@runDeviceCommandWithOverlay
         val enabled = !device.isTalking
         _uiState.update {
             it.copy(operationMessage = operationMessage(if (enabled) "正在下发开始录音命令" else "正在下发停止录音命令", OperationMessageType.Info))
@@ -312,16 +322,23 @@ class PatrolViewModel(
                     next.copy(isTalking = enabled),
                     message
                 )
+                addDeviceEvent(
+                    title = if (enabled) "录音已开始" else "录音已停止",
+                    detail = device.name,
+                    level = DeviceEventLevel.Info
+                )
                 if (!enabled) refreshMediaFiles()
             }
             .onFailure { throwable ->
                 val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
                 _uiState.update { state ->
                     state.copy(
+                        deviceEvents = (listOf(newDeviceEvent("录音控制失败", "请确认耳机已配对并连接控制通道$detail", DeviceEventLevel.Error)) + state.deviceEvents).take(MaxDeviceEvents),
                         operationMessage = operationMessage("录音控制失败，请确认耳机已配对并连接控制通道$detail", OperationMessageType.Error)
                     )
                 }
             }
+        }
     }
 
     private fun observeIntercomState() {
@@ -382,10 +399,11 @@ class PatrolViewModel(
     }
 
     fun runDeviceSelfCheck() = viewModelScope.launch {
+        runDeviceCommandWithOverlay("正在执行设备自检") {
         val device = _uiState.value.device
         if (!device.canReceiveDeviceCommand()) {
             showOperationMessage("请先连接设备后再执行自检", OperationMessageType.Warning)
-            return@launch
+            return@runDeviceCommandWithOverlay
         }
         _uiState.update { it.copy(operationMessage = operationMessage("正在执行设备自检", OperationMessageType.Info)) }
         val refreshedDevice = runCatching { coordinator.bindDevice(device.id) }.getOrNull()
@@ -400,15 +418,19 @@ class PatrolViewModel(
         val localCount = runCatching { coordinator.mediaFiles(local = true).size }.getOrDefault(0)
         val deviceCount = runCatching { coordinator.mediaFiles(local = false).size }.getOrDefault(0)
         refreshMediaFiles()
+        val eventTitle = "设备自检完成"
+        val eventDetail = "电量 ${_uiState.value.device.batteryTextForMessage()}，存储 ${_uiState.value.device.storageTextForMessage()}，本地媒体 $localCount，设备媒体 $deviceCount"
         _uiState.update { state ->
             state.copy(
+                deviceEvents = (listOf(newDeviceEvent(eventTitle, eventDetail, DeviceEventLevel.Info)) + state.deviceEvents).take(MaxDeviceEvents),
                 deviceCapabilities = capabilities,
                 deviceWifiState = wifi,
                 operationMessage = operationMessage(
-                    "自检完成：电量 ${state.device.batteryTextForMessage()}，存储 ${state.device.storageTextForMessage()}，本地媒体 $localCount，设备媒体 $deviceCount",
+                    "自检完成：$eventDetail",
                     OperationMessageType.Success
                 )
             )
+        }
         }
     }
 
@@ -958,6 +980,7 @@ class PatrolViewModel(
         if (now - lastPhotoCaptureRequestAt < PhotoCaptureTapDebounceMillis) return
         lastPhotoCaptureRequestAt = now
         photoCaptureJob = viewModelScope.launch {
+            runDeviceCommandWithOverlay("正在等待拍照指令回复") {
             _uiState.update { state ->
                 state.copy(
                     photoCaptureInProgress = true,
@@ -968,13 +991,18 @@ class PatrolViewModel(
                 val device = prepareDeviceForCommand(
                     capabilityReady = { it.supportsPhoto },
                     unavailableMessage = "拍照失败，耳机控制通道未就绪"
-                ) ?: return@launch
+                ) ?: return@runDeviceCommandWithOverlay
                 val commandStartedAt = System.currentTimeMillis()
                 val next = runCatching { coordinator.takePhoto(device) }
                     .getOrElse { throwable ->
                         val detail = throwable.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
-                        showOperationMessage("拍照失败，未取得摄录耳机控制权$detail", OperationMessageType.Error)
-                        return@launch
+                        _uiState.update { state ->
+                            state.copy(
+                                deviceEvents = (listOf(newDeviceEvent("拍照失败", "未取得摄录耳机控制权$detail", DeviceEventLevel.Error)) + state.deviceEvents).take(MaxDeviceEvents),
+                                operationMessage = operationMessage("拍照失败，未取得摄录耳机控制权$detail", OperationMessageType.Error)
+                            )
+                        }
+                        return@runDeviceCommandWithOverlay
                     }
                 val captured = runCatching {
                     coordinator.mediaFiles(local = true)
@@ -985,6 +1013,7 @@ class PatrolViewModel(
                 if (captured != null) {
                     _uiState.update { state ->
                         state.copy(
+                            deviceEvents = (listOf(newDeviceEvent("现场照片已保存", captured.name, DeviceEventLevel.Info)) + state.deviceEvents).take(MaxDeviceEvents),
                             device = next,
                             connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
                             mediaFiles = state.mediaFiles.upsertMedia(captured),
@@ -993,33 +1022,42 @@ class PatrolViewModel(
                             operationMessage = operationMessage("现场照片已保存到手机沙盒", OperationMessageType.Success)
                         )
                     }
-                    return@launch
-                }
-                _uiState.update { state ->
-                    state.copy(
-                        device = next,
-                        connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
-                        operationMessage = operationMessage("拍照命令已下发；若媒体列表仍为空，请在设备文件页通过 Wi-Fi 同步", OperationMessageType.Info)
-                    )
+                } else {
+                    _uiState.update { state ->
+                        state.copy(
+                            deviceEvents = (listOf(newDeviceEvent("拍照命令已下发", device.name, DeviceEventLevel.Info)) + state.deviceEvents).take(MaxDeviceEvents),
+                            device = next,
+                            connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
+                            operationMessage = operationMessage("拍照命令已下发；若媒体列表仍为空，请在设备文件页通过 Wi-Fi 同步", OperationMessageType.Info)
+                        )
+                    }
                 }
             } finally {
                 _uiState.update { state -> state.copy(photoCaptureInProgress = false) }
             }
+            }
         }
     }
 
-    fun startLowLatencyStream() = viewModelScope.launch {
+    fun startLowLatencyStream() = startStream(StreamMode.LowLatency)
+
+    fun startStream(mode: StreamMode) = viewModelScope.launch {
         if (!_uiState.value.device.canReceiveDeviceCommand()) {
             showOperationMessage("请先连接设备", OperationMessageType.Warning)
             return@launch
         }
-        _uiState.update { it.copy(streamState = StreamRelayState.Connecting, operationMessage = operationMessage("正在连接实时画面", OperationMessageType.Info)) }
-        runCatching { coordinator.startStream(_uiState.value.device, StreamMode.LowLatency) }
+        val modeText = when (mode) {
+            StreamMode.LowLatency -> "低延迟"
+            StreamMode.Balanced -> "均衡"
+            StreamMode.EvidenceQuality -> "取证质量"
+        }
+        _uiState.update { it.copy(streamState = StreamRelayState.Connecting, operationMessage = operationMessage("正在连接${modeText}实时画面", OperationMessageType.Info)) }
+        runCatching { coordinator.startStream(_uiState.value.device, mode) }
             .onSuccess {
                 val streamState = coordinator.streamState().first()
                 val message = when (streamState) {
-                    StreamRelayState.Relaying -> operationMessage("实时画面已连接", OperationMessageType.Success)
-                    StreamRelayState.Connecting -> operationMessage("正在连接实时画面", OperationMessageType.Info)
+                    StreamRelayState.Relaying -> operationMessage("${modeText}实时画面已连接", OperationMessageType.Success)
+                    StreamRelayState.Connecting -> operationMessage("正在连接${modeText}实时画面", OperationMessageType.Info)
                     StreamRelayState.Failed -> operationMessage("实时画面暂不可用，等待 SDK 能力接入", OperationMessageType.Error)
                     StreamRelayState.Idle -> operationMessage("实时画面暂未开启", OperationMessageType.Info)
                 }
@@ -1102,35 +1140,39 @@ class PatrolViewModel(
     }
 
     fun clearConnectedDeviceAccount() = viewModelScope.launch {
+        runDeviceCommandWithOverlay("正在清除设备账号") {
         val device = _uiState.value.device
         if (!device.canReceiveDeviceCommand()) {
             showOperationMessage("请先连接设备后再清除设备账号", OperationMessageType.Warning)
-            return@launch
+            return@runDeviceCommandWithOverlay
         }
-        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备账号清除通道未启用", OperationMessageType.Warning)
+        val gateway = deviceControlGateway ?: return@runDeviceCommandWithOverlay showOperationMessage("设备账号清除通道未启用", OperationMessageType.Warning)
         val cleared = runCatching { gateway.clearDeviceAccount() }.getOrDefault(false)
         if (!cleared) {
             showOperationMessage("设备账号清除失败，请确认耳机已连接控制通道", OperationMessageType.Error)
-            return@launch
+            return@runDeviceCommandWithOverlay
         }
         markDeviceRequiresRepairing(device, "设备账号已清除，请重新配对 PatrolLink")
+        }
     }
 
     fun factoryResetConnectedDevice(target: DeviceFactoryResetTarget) = viewModelScope.launch {
+        runDeviceCommandWithOverlay("正在等待恢复出厂回复") {
         val device = _uiState.value.device
         if (!device.canReceiveDeviceCommand()) {
             showOperationMessage("请先连接设备控制通道后再恢复出厂", OperationMessageType.Warning)
-            return@launch
+            return@runDeviceCommandWithOverlay
         }
-        val gateway = deviceControlGateway ?: return@launch showOperationMessage("设备恢复出厂通道未启用", OperationMessageType.Warning)
+        val gateway = deviceControlGateway ?: return@runDeviceCommandWithOverlay showOperationMessage("设备恢复出厂通道未启用", OperationMessageType.Warning)
         val reset = runCatching { gateway.factoryResetDevice(target) }.getOrDefault(false)
         if (!reset) {
             val targetName = if (target == DeviceFactoryResetTarget.Headset) "耳机" else "眼镜"
             showOperationMessage("${targetName}恢复出厂失败，请确认设备控制通道已连接", OperationMessageType.Error)
-            return@launch
+            return@runDeviceCommandWithOverlay
         }
         val targetName = if (target == DeviceFactoryResetTarget.Headset) "耳机" else "眼镜"
         markDeviceRequiresRepairing(device, "${targetName}已恢复出厂并重启，请重新搜索并配对 PatrolLink")
+        }
     }
 
     private suspend fun markDeviceRequiresRepairing(device: DeviceStatus, message: String) {
@@ -2244,7 +2286,7 @@ class PatrolViewModel(
             if (event.shouldRefreshDeviceCapabilities()) refreshDeviceCapabilities()
             _uiState.update { state ->
                 state.copy(
-                    deviceEvents = (listOf(event) + state.deviceEvents).take(5),
+                    deviceEvents = (listOf(event) + state.deviceEvents).take(MaxDeviceEvents),
                     operationMessage = if (event.shouldShowOperationMessage()) {
                         operationMessage(event.title, event.toOperationMessageType())
                     } else {
@@ -2472,6 +2514,41 @@ class PatrolViewModel(
         runCatching { Log.i("PatrolOperation", "${type.name}: $text") }
         return OperationMessage(text, type)
     }
+
+    private suspend fun runDeviceCommandWithOverlay(message: String, block: suspend () -> Unit) {
+        _uiState.update {
+            it.copy(
+                deviceCommandInProgress = true,
+                deviceCommandMessage = message
+            )
+        }
+        try {
+            block()
+        } finally {
+            _uiState.update {
+                it.copy(
+                    deviceCommandInProgress = false,
+                    deviceCommandMessage = ""
+                )
+            }
+        }
+    }
+
+    private fun addDeviceEvent(title: String, detail: String, level: DeviceEventLevel) {
+        val event = newDeviceEvent(title, detail, level)
+        _uiState.update { state ->
+            state.copy(deviceEvents = (listOf(event) + state.deviceEvents).take(MaxDeviceEvents))
+        }
+    }
+
+    private fun newDeviceEvent(title: String, detail: String, level: DeviceEventLevel): DeviceEvent =
+        DeviceEvent(
+            id = "local-${System.currentTimeMillis()}-${title.hashCode()}",
+            title = title,
+            detail = detail,
+            level = level,
+            timestamp = System.currentTimeMillis()
+        )
 
     private fun Throwable.operatorFacingWifiError(): String =
         message

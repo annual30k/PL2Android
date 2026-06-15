@@ -180,6 +180,8 @@ data class AppUiState(
     val mediaLoading: Boolean = false,
     val streamState: StreamRelayState = StreamRelayState.Idle,
     val photoCaptureInProgress: Boolean = false,
+    val deviceCommandInProgress: Boolean = false,
+    val deviceCommandMessage: String = "",
     val sosActive: Boolean = false,
     val fontSizeMode: FontSizeMode = FontSizeMode.Standard,
     val displayThemeMode: DisplayThemeMode = DisplayThemeMode.System,

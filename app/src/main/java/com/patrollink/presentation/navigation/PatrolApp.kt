@@ -326,7 +326,7 @@ private fun EquipmentReminderDialog(battery: Int, onDismiss: () -> Unit) {
                 }
             }
             Text(
-                "您的个人装备（单警执法记录仪）当前电量为 ${battery.coerceIn(0, 100)}%，请及时充电。",
+                "您的智能眼镜/执法装备当前电量为 ${battery.coerceIn(0, 100)}%，请及时充电。",
                 color = colors.textMuted,
                 style = PatrolTextStyle.Body.copy(fontWeight = FontWeight.Bold)
             )

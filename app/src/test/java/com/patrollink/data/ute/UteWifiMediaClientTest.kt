@@ -14,8 +14,16 @@ class UteWifiMediaClientTest {
     }
 
     @Test
-    fun productionSyncPrefersPhoneConnectedHotspotBeforeOpeningSdkAp() {
-        assertTrue(shouldPreferPhoneConnectedWifiBeforeSdkOpen(currentPhoneWifiOnly = false))
+    fun productionSyncCanPreferCurrentDeviceHotspotBeforeSdkOpen() {
+        assertFalse(shouldPreferPhoneConnectedWifiBeforeSdkOpen(currentPhoneWifiOnly = false))
+        assertTrue(shouldPreferPhoneConnectedWifiBeforeSdkOpen(currentPhoneWifiOnly = true))
+        assertTrue(shouldUseCurrentHotspotBeforeSdkWifiOpen())
+    }
+
+    @Test
+    fun explicitCurrentPhoneWifiOnlyShortCircuitsSdkWifiOpen() {
+        assertFalse(shouldShortCircuitSdkWifiOpenForCurrentHotspot(currentPhoneWifiOnly = false))
+        assertTrue(shouldShortCircuitSdkWifiOpenForCurrentHotspot(currentPhoneWifiOnly = true))
     }
 
     @Test

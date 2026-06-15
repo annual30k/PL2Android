@@ -29,6 +29,7 @@ import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
+import com.patrollink.presentation.screen.loadImageBitmap
 import com.yc.nadalsdk.bean.DeviceBt3StateInfo
 import com.yc.nadalsdk.bean.DeviceInfoRequest
 import com.yc.nadalsdk.bean.HonorAccountConfig
@@ -248,7 +249,7 @@ private object SmokeTestRunner {
         val wifiMediaSyncOptions = SmokeWifiMediaSyncOptions(
             downloadFirst = intent.getBooleanExtra("wifiDownloadFirst", false),
             downloadKind = intent.getStringExtra("wifiDownloadKind").orEmpty().toSmokeMediaKindOrNull(),
-            currentPhoneWifiOnly = intent.getBooleanExtra("wifiMediaOnly", false),
+            currentPhoneWifiOnly = intent.getBooleanExtra("wifiMediaOnly", false) || currentWifiMediaOnly,
             downloadLimit = intent.getIntExtra("wifiDownloadLimit", 1).coerceIn(1, 50)
         )
         val commandHoldMillis = intent.getLongExtra("commandHoldMillis", CommandHoldMillis)
@@ -322,7 +323,7 @@ private object SmokeTestRunner {
             report.step("PAIRING_ACCOUNT", pairingAccountId)
         }
         if (localMediaOnly) {
-            runLocalMediaOnlyChecks(report, coordinator)
+            runLocalMediaOnlyChecks(context, report, coordinator)
             return
         }
         if (currentWifiMediaOnly) {
@@ -371,7 +372,7 @@ private object SmokeTestRunner {
             runHeadsetDiagnostics(report, bridge, runBt3Probe)
             runHeadsetAiRecorderCommands(report, bridge, aiRecorderOptions)
         }
-        runMediaChecks(report, coordinator, bridge)
+        runMediaChecks(context, report, coordinator, bridge)
         runFirmwareCheck(report, firmwareGateway, bound)
         runControlChannelDiagnostics(report, bridge, tokenStore.pairingAccountId(), runAuth, runPairing, runAccountProbe, authCode)
     }
@@ -1115,7 +1116,7 @@ private object SmokeTestRunner {
         runStep(report, "AI_RECORDER_FILES_AFTER") { headsetFileListSummary(bridge) }
     }
 
-    private suspend fun runMediaChecks(report: SmokeReport, coordinator: PatrolCoordinator, bridge: UteSdkBridge) {
+    private suspend fun runMediaChecks(context: Context, report: SmokeReport, coordinator: PatrolCoordinator, bridge: UteSdkBridge) {
         runStep(report, "MEDIA_LOCAL") {
             withTimeoutOrNull(MediaCheckTimeoutMillis) {
                 coordinator.mediaFiles(local = true).map { "${it.id}:${it.kind}:${it.size}:local=${it.local}" }
@@ -1138,9 +1139,17 @@ private object SmokeTestRunner {
                 coordinator.mediaFiles(local = true).map { "${it.id}:${it.kind}:${it.size}:local=${it.local}" }
             } ?: "timeout"
         }
+        runStep(report, "MEDIA_LOCAL_PHOTO_PREVIEW_DECODE") {
+            val photo = withTimeoutOrNull(MediaCheckTimeoutMillis) {
+                coordinator.mediaFiles(local = true).firstOrNull { it.kind == MediaKind.Photo && !it.contentUri.isNullOrBlank() }
+            } ?: error("no local photo with contentUri")
+            val bitmap = loadImageBitmap(context = context, value = photo.contentUri)
+                ?: error("decode failed: ${photo.contentUri}")
+            "${photo.id}:${bitmap.width}x${bitmap.height}:uri=${photo.contentUri}"
+        }
     }
 
-    private suspend fun runLocalMediaOnlyChecks(report: SmokeReport, coordinator: PatrolCoordinator) {
+    private suspend fun runLocalMediaOnlyChecks(context: Context, report: SmokeReport, coordinator: PatrolCoordinator) {
         val local = runStep(report, "MEDIA_LOCAL_ONLY") {
             withTimeoutOrNull(MediaCheckTimeoutMillis) {
                 coordinator.mediaFiles(local = true)
@@ -1150,6 +1159,13 @@ private object SmokeTestRunner {
             "MEDIA_LOCAL_ONLY_COUNT",
             "count=${local.size},files=${local.joinToString(separator = " | ") { "${it.id}:${it.kind}:${it.size}:uri=${it.contentUri.orEmpty()}" }}"
         )
+        runStep(report, "MEDIA_LOCAL_ONLY_PHOTO_PREVIEW_DECODE") {
+            val photo = local.firstOrNull { it.kind == MediaKind.Photo && !it.contentUri.isNullOrBlank() }
+                ?: error("no local photo with content uri")
+            val bitmap = withContext(Dispatchers.IO) { loadImageBitmap(context, photo.contentUri) }
+                ?: error("local photo preview decode failed: ${photo.contentUri}")
+            "${photo.id}:${bitmap.width}x${bitmap.height}:uri=${photo.contentUri}"
+        }
     }
 
     private suspend fun runCurrentWifiMediaOnlyChecks(

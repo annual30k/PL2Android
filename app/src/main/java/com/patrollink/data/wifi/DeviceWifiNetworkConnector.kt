@@ -324,9 +324,11 @@ class DeviceWifiSession internal constructor(
         network != null && connectivityManager?.bindProcessToNetwork(network) == true
 
     override fun close() {
-        runCatching {
-            if (connectivityManager?.boundNetworkForProcess == network) {
-                connectivityManager?.bindProcessToNetwork(null)
+        if (ownsTemporaryNetworkBinding(callback != null, legacyNetworkId != null)) {
+            runCatching {
+                if (connectivityManager?.boundNetworkForProcess == network) {
+                    connectivityManager?.bindProcessToNetwork(null)
+                }
             }
         }
         callback?.let { runCatching { connectivityManager?.unregisterNetworkCallback(it) } }
@@ -336,6 +338,9 @@ class DeviceWifiSession internal constructor(
         }
     }
 }
+
+internal fun ownsTemporaryNetworkBinding(hasNetworkCallback: Boolean, hasLegacyNetworkId: Boolean): Boolean =
+    hasNetworkCallback || hasLegacyNetworkId
 
 class DeviceWifiUserConnectionRequiredException(ssid: String) : IllegalStateException(
     "手机系统未授权连接设备热点 $ssid；请在系统 Wi-Fi 弹窗或设置中手动选择 $ssid，连接后返回 PatrolLink 重试媒体同步"

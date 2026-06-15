@@ -105,6 +105,18 @@ internal object UteWifiMediaParser {
         return listOf(
             primary,
             base.newBuilder().encodedPath("/").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/photo").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/photos").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/picture").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/pictures").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/image").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/images").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/video").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/videos").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/audio").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/record").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/DCIM").query(null).addPathSegment(fileName).build().toString(),
+            base.newBuilder().encodedPath("/DCIM/100MEDIA").query(null).addPathSegment(fileName).build().toString(),
             base.newBuilder().encodedPath("/download").query(null).addPathSegment(fileName).build().toString(),
             base.newBuilder().encodedPath("/file").query(null).addPathSegment(fileName).build().toString(),
             base.newBuilder().encodedPath("/media/download").query(null).addQueryParameter("name", fileName).build().toString()
@@ -203,7 +215,8 @@ internal data class UteWifiRemoteFile(
             verified = false,
             local = local,
             transferStatus = TransferStatus.Idle,
-            progress = 0f
+            progress = 0f,
+            contentUri = url.takeUnless { local }
         )
 
     fun localTarget(directory: File): File {

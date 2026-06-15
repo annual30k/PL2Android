@@ -9,8 +9,6 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import android.widget.MediaController
-import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -118,8 +116,12 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+private const val MediaThumbnailMaxPx = 512
+private const val RemoteImageThumbnailMaxBytes = 6L * 1024L * 1024L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -298,9 +300,10 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         }
     }
     uiState.previewMediaFile?.let { file ->
-        val previewAction = file.mediaPrimaryAction(phoneSelected = file.local)
+        val previewAction = file.mediaPrimaryAction(phoneSelected = uiState.selectedMediaLocal)
         MediaPreviewDialog(
             file = file,
+            contentRequest = viewModel::mediaContentRequest,
             primaryText = previewAction.label,
             primaryIcon = previewAction.icon,
             onPrimary = {
@@ -1003,7 +1006,11 @@ private fun MediaGridCard(
 @Composable
 private fun BoxScope.MediaSyncBadge(file: MediaFile, modifier: Modifier = Modifier) {
     val (icon, background, tint) = when (file.transferStatus) {
-        TransferStatus.Done -> Triple(if (file.local) Icons.Filled.CloudDone else Icons.Filled.PhoneAndroid, Success, Color.White)
+        TransferStatus.Done -> Triple(
+            if (file.local && file.lastTransferTarget == TransferTarget.Cloud) Icons.Filled.CloudDone else Icons.Filled.PhoneAndroid,
+            Success,
+            Color.White
+        )
         TransferStatus.Uploading, TransferStatus.Hashing, TransferStatus.Verifying -> Triple(Icons.Filled.CloudUpload, TechBlue, Color.White)
         TransferStatus.Failed -> Triple(Icons.Filled.CloudUpload, Color(0xFFFF4F73), Color.White)
         TransferStatus.Idle -> Triple(if (file.local) Icons.Filled.CloudUpload else Icons.Filled.UploadFile, Color.White.copy(alpha = 0.88f), TechBlue)
@@ -1046,8 +1053,8 @@ private fun BoxScope.MediaKindBadge(file: MediaFile) {
 private fun MediaArtwork(file: MediaFile, thumbnailRequest: suspend (MediaFile) -> MediaContentRequest?, modifier: Modifier) {
     val context = LocalContext.current
     var thumbnail by remember(file.id, file.contentUri, file.kind) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(file.id, file.contentUri, file.kind) {
-        thumbnail = if (file.kind == MediaKind.Audio) {
+    LaunchedEffect(file.id, file.contentUri, file.kind, file.transferStatus) {
+        thumbnail = if (file.kind == MediaKind.Audio || file.transferStatus.inProgress) {
             null
         } else {
             val request = thumbnailRequest(file)
@@ -1224,6 +1231,7 @@ private fun ActionBarItem(text: String, icon: ImageVector, iconColor: Color, tex
 @Composable
 private fun MediaPreviewDialog(
     file: MediaFile,
+    contentRequest: suspend (MediaFile) -> MediaContentRequest?,
     primaryText: String,
     primaryIcon: ImageVector,
     onPrimary: () -> Unit,
@@ -1280,7 +1288,7 @@ private fun MediaPreviewDialog(
                     .aspectRatio(if (file.kind == MediaKind.Audio) 1.15f else 1f)
                     .clip(RoundedCornerShape(18.dp))
             ) {
-                EmbeddedMediaPreview(file = file, modifier = Modifier.fillMaxSize())
+                EmbeddedMediaPreview(file = file, contentRequest = contentRequest, modifier = Modifier.fillMaxSize())
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 PreviewMetaPill("${file.time} · ${file.size}", Modifier.weight(1f))
@@ -1414,19 +1422,28 @@ private fun IntegrityFeatureRow(icon: ImageVector, title: String, body: String, 
 }
 
 @Composable
-private fun EmbeddedMediaPreview(file: MediaFile, modifier: Modifier = Modifier) {
+private fun EmbeddedMediaPreview(
+    file: MediaFile,
+    contentRequest: suspend (MediaFile) -> MediaContentRequest?,
+    modifier: Modifier = Modifier
+) {
     when (file.kind) {
-        MediaKind.Photo -> PhotoPreview(file = file, modifier = modifier)
-        MediaKind.Video, MediaKind.Audio -> PlayableMediaPreview(file = file, modifier = modifier)
+        MediaKind.Photo -> PhotoPreview(file = file, contentRequest = contentRequest, modifier = modifier)
+        MediaKind.Video, MediaKind.Audio -> PlayableMediaPreview(file = file, contentRequest = contentRequest, modifier = modifier)
     }
 }
 
 @Composable
-private fun PhotoPreview(file: MediaFile, modifier: Modifier = Modifier) {
+private fun PhotoPreview(
+    file: MediaFile,
+    contentRequest: suspend (MediaFile) -> MediaContentRequest?,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
-    var image by remember(file.contentUri) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(file.contentUri) {
-        image = withContext(Dispatchers.IO) { loadImageBitmap(context, file.contentUri) }
+    var image by remember(file.id, file.contentUri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(file.id, file.contentUri) {
+        val request = contentRequest(file)
+        image = withContext(Dispatchers.IO) { loadImageBitmap(context, request?.value ?: file.contentUri, request?.authorization) }
     }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         if (image != null) {
@@ -1444,8 +1461,20 @@ private fun PhotoPreview(file: MediaFile, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PlayableMediaPreview(file: MediaFile, modifier: Modifier = Modifier) {
-    val uri = remember(file.contentUri) { file.contentUri?.let(Uri::parse) }
+private fun PlayableMediaPreview(
+    file: MediaFile,
+    contentRequest: suspend (MediaFile) -> MediaContentRequest?,
+    modifier: Modifier = Modifier
+) {
+    var resolvedUri by remember(file.id, file.contentUri) { mutableStateOf(file.contentUri) }
+    LaunchedEffect(file.id, file.contentUri) {
+        resolvedUri = contentRequest(file)?.value ?: file.contentUri
+    }
+    val uri = remember(resolvedUri) { resolvedUri?.let(Uri::parse) }
+    var playerView by remember(file.id, file.contentUri) { mutableStateOf<TextureMediaPlayerView?>(null) }
+    var buffering by remember(file.id, file.contentUri) { mutableStateOf(uri != null) }
+    var playing by remember(file.id, file.contentUri) { mutableStateOf(false) }
+    var playbackError by remember(file.id, file.contentUri) { mutableStateOf<String?>(null) }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         if (uri == null) {
             MediaThumbBackground(kind = file.kind.toKindCode(), Modifier.fillMaxSize())
@@ -1458,23 +1487,70 @@ private fun PlayableMediaPreview(file: MediaFile, modifier: Modifier = Modifier)
         } else {
             AndroidView(
                 factory = { viewContext ->
-                    VideoView(viewContext).apply {
-                        setMediaController(MediaController(viewContext).also { it.setAnchorView(this) })
-                        setOnPreparedListener { player ->
-                            player.isLooping = false
-                            start()
-                        }
+                    TextureMediaPlayerView(viewContext).apply {
+                        playerView = this
                     }
                 },
                 update = { player ->
+                    playerView = player
+                    player.onBuffering = {
+                        buffering = true
+                        playbackError = null
+                    }
+                    player.onReady = {
+                        buffering = false
+                        playing = true
+                        playbackError = null
+                    }
+                    player.onPaused = { playing = false }
+                    player.onCompletion = { playing = false }
+                    player.onPlaybackError = { message ->
+                        buffering = false
+                        playing = false
+                        playbackError = message
+                    }
                     if (player.tag != uri) {
                         player.tag = uri
-                        player.setVideoURI(uri)
-                        player.requestFocus()
+                        buffering = true
+                        playing = false
+                        playbackError = null
+                        player.setMedia(uri, autoPlay = true)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable {
+                        playbackError = null
+                        if (playing) {
+                            playerView?.pause()
+                        } else {
+                            buffering = true
+                            playerView?.play()
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                when {
+                    playbackError != null -> {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(64.dp))
+                            Text(playbackError ?: "", color = Color.White, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    buffering -> {
+                        Text("加载中", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                    }
+                    !playing -> {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
+                    }
+                }
+            }
             if (file.kind == MediaKind.Audio) {
                 Box(
                     Modifier
@@ -1496,7 +1572,7 @@ private fun FullscreenMediaPlayer(file: MediaFile, onExitFullscreen: () -> Unit,
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        EmbeddedMediaPreview(file = file, modifier = Modifier.fillMaxSize())
+        EmbeddedMediaPreview(file = file, contentRequest = { null }, modifier = Modifier.fillMaxSize())
         Row(
             Modifier
                 .fillMaxWidth()
@@ -1555,7 +1631,11 @@ private fun Float.safeProgress(): Float =
 private fun mediaStatusLabel(file: MediaFile): String =
     if (file.local) {
         when (file.transferStatus) {
-            TransferStatus.Done -> "已上传"
+            TransferStatus.Done -> when (file.lastTransferTarget) {
+                TransferTarget.Cloud -> "已上传"
+                TransferTarget.PhoneSandbox -> "已同步手机"
+                null -> "已保存手机"
+            }
             TransferStatus.Idle -> "待上传"
             else -> transferLabel(file.transferStatus)
         }
@@ -1668,17 +1748,12 @@ private fun loadMediaThumbnail(context: Context, kind: MediaKind, request: Media
         MediaKind.Audio -> null
     }
 
-private fun loadImageBitmap(context: Context, value: String?, authorization: String? = null): Bitmap? {
+internal fun loadImageBitmap(context: Context, value: String?, authorization: String? = null): Bitmap? {
     val uri = value?.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: return null
     return runCatching {
         when {
-            uri.scheme == "content" || uri.scheme == "file" -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri))
-                } else {
-                    context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
-                }
-            }
+            uri.scheme == "content" -> decodeContentBitmap(context, uri)
+            uri.scheme == "file" -> uri.path?.let { decodeFileBitmap(it) }
             value.startsWith("http://") || value.startsWith("https://") -> {
                 val connection = (URL(value).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 4_000
@@ -1686,15 +1761,77 @@ private fun loadImageBitmap(context: Context, value: String?, authorization: Str
                     authorization?.let { setRequestProperty("Authorization", it) }
                 }
                 try {
-                    connection.inputStream.use(BitmapFactory::decodeStream)
+                    val bytes = connection.inputStream.use { input ->
+                        input.readBytes(limit = RemoteImageThumbnailMaxBytes)
+                    }
+                    decodeByteArrayBitmap(bytes)
                 } finally {
                     connection.disconnect()
                 }
             }
-            value.startsWith("/") -> BitmapFactory.decodeFile(value)
+            value.startsWith("/") -> decodeFileBitmap(value)
             else -> null
         }
     }.getOrNull()
+}
+
+private fun decodeContentBitmap(context: Context, uri: Uri): Bitmap? {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        return ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            val target = info.size.thumbnailTargetSize() ?: return@decodeBitmap
+            decoder.setTargetSize(target.first, target.second)
+        }
+    }
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize() }
+    return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+}
+
+private fun decodeFileBitmap(path: String): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize() }
+    return BitmapFactory.decodeFile(path, options)
+}
+
+private fun decodeByteArrayBitmap(bytes: ByteArray): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize() }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+}
+
+private fun java.io.InputStream.readBytes(limit: Long): ByteArray {
+    val output = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0L
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) break
+        total += read
+        if (total > limit) error("remote image too large for thumbnail")
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
+
+private fun android.util.Size.thumbnailTargetSize(): Pair<Int, Int>? {
+    val maxDim = maxOf(width, height)
+    if (maxDim <= MediaThumbnailMaxPx || width <= 0 || height <= 0) return null
+    val scale = MediaThumbnailMaxPx.toFloat() / maxDim.toFloat()
+    return (width * scale).roundToInt().coerceAtLeast(1) to (height * scale).roundToInt().coerceAtLeast(1)
+}
+
+private fun BitmapFactory.Options.thumbnailSampleSize(): Int {
+    val maxDim = maxOf(outWidth, outHeight)
+    if (maxDim <= MediaThumbnailMaxPx || outWidth <= 0 || outHeight <= 0) return 1
+    var sampleSize = 1
+    while (maxDim / (sampleSize * 2) >= MediaThumbnailMaxPx) {
+        sampleSize *= 2
+    }
+    return sampleSize
 }
 
 private fun loadVideoFrame(context: Context, value: String?, authorization: String? = null): Bitmap? {
@@ -1704,15 +1841,24 @@ private fun loadVideoFrame(context: Context, value: String?, authorization: Stri
         try {
             val uri = Uri.parse(raw)
             when {
+                uri.scheme == "content" || uri.scheme == "file" -> retriever.setDataSource(context, uri)
                 raw.startsWith("http://") || raw.startsWith("https://") -> {
                     val headers = authorization?.let { mapOf("Authorization" to it) }.orEmpty()
                     retriever.setDataSource(raw, headers)
                 }
-                uri.scheme == "content" || uri.scheme == "file" -> retriever.setDataSource(context, uri)
                 raw.startsWith("/") -> retriever.setDataSource(raw)
                 else -> return@runCatching null
             }
-            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                retriever.getScaledFrameAtTime(
+                    0,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    MediaThumbnailMaxPx,
+                    MediaThumbnailMaxPx
+                )
+            } else {
+                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            }
         } finally {
             retriever.release()
         }

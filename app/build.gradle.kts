@@ -54,6 +54,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    sourceSets {
+        getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/patrolRuntime/debug/assets"))
+        getByName("release").assets.srcDir(layout.buildDirectory.dir("generated/patrolRuntime/release/assets"))
+    }
 }
 
 kotlin {
@@ -100,4 +105,24 @@ dependencies {
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+val syncDebugPatrolRuntimeConfig by tasks.registering(Copy::class) {
+    from(rootProject.layout.projectDirectory.file("config/patrol-runtime.dev.json"))
+    into(layout.buildDirectory.dir("generated/patrolRuntime/debug/assets"))
+    rename { "patrol-runtime.json" }
+}
+
+val syncReleasePatrolRuntimeConfig by tasks.registering(Copy::class) {
+    from(rootProject.layout.projectDirectory.file("config/patrol-runtime.prod.json"))
+    into(layout.buildDirectory.dir("generated/patrolRuntime/release/assets"))
+    rename { "patrol-runtime.json" }
+}
+
+tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
+    dependsOn(syncDebugPatrolRuntimeConfig)
+}
+
+tasks.matching { it.name == "mergeReleaseAssets" }.configureEach {
+    dependsOn(syncReleasePatrolRuntimeConfig)
 }

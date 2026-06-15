@@ -7,6 +7,7 @@
         <domain includeSubdomains="false">10.143.106.231</domain>
         <domain includeSubdomains="false">192.168.1.3</domain>
         <domain includeSubdomains="false">192.168.1.6</domain>
+        <domain includeSubdomains="false">192.168.11.157</domain>
         <domain includeSubdomains="false">192.168.137.153</domain>
         <domain includeSubdomains="false">192.168.4.1</domain>
         <domain includeSubdomains="false">localhost</domain>

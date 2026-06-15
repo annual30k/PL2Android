@@ -25,4 +25,15 @@ class RuntimeConfigTest {
         assertEquals("https://api.example.test", settings.restBaseUrl)
         assertEquals("wss://ws.example.test/resource/websocket", settings.webSocketUrl)
     }
+
+    @Test
+    fun backendSettingsDeriveWebSocketUrlForCurrentLanDevelopmentHost() {
+        val settings = RuntimeConfigStore.normalizeBackendSettings(
+            restBaseUrl = "http://192.168.11.157:8080",
+            webSocketUrl = ""
+        )
+
+        assertEquals("http://192.168.11.157:8080", settings.restBaseUrl)
+        assertEquals("ws://192.168.11.157:8080/resource/websocket", settings.webSocketUrl)
+    }
 }

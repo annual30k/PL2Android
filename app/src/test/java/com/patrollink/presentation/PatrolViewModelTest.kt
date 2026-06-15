@@ -10,6 +10,8 @@ import kotlinx.coroutines.test.runTest
 import com.patrollink.data.MockPatrolCoordinatorFactory
 import com.patrollink.data.MockVersionGateway
 import com.patrollink.data.InMemoryBackgroundTaskGateway
+import com.patrollink.data.CerebellumRuntimeSettings
+import com.patrollink.data.RuntimeConfigGateway
 import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.edge.CerebellumAsrTranscribeRequestDto
 import com.patrollink.data.edge.CerebellumAsrTranscribeResponseDto
@@ -155,6 +157,9 @@ class PatrolViewModelTest {
     fun mediaDownloadAndDeleteMutateUiCollection() = runTest {
         val viewModel = testViewModel()
         loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
         val fileId = viewModel.uiState.value.mediaFiles.first { !it.local }.id
 
         viewModel.downloadMedia(fileId)
@@ -269,6 +274,9 @@ class PatrolViewModelTest {
             offlineSyncEngine = OfflineSyncEngine(taskGateway)
         )
         loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
 
         viewModel.syncDeviceMediaToPhone()
         advanceUntilIdle()
@@ -347,6 +355,9 @@ class PatrolViewModelTest {
             offlineSyncEngine = OfflineSyncEngine(taskGateway)
         )
         loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
 
         gateway.remote = listOf(refreshedDevicePhoto)
         viewModel.syncDeviceMediaToPhone(setOf(staleDevicePhoto.id), refreshFirst = true)
@@ -421,6 +432,9 @@ class PatrolViewModelTest {
             deviceControlGateway = TrackingWifiControlGateway(events)
         )
         loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
         events.clear()
 
         viewModel.syncDeviceMediaToPhone()
@@ -646,6 +660,9 @@ class PatrolViewModelTest {
         val mediaGateway = MutableListingMediaGateway(remote = listOf(remote))
         val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
         loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
         assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == remote.id && !it.local })
 
         mediaGateway.remote = emptyList()
@@ -676,6 +693,9 @@ class PatrolViewModelTest {
         val mediaGateway = MutableListingMediaGateway(remote = listOf(deviceFile), local = listOf(localFile))
         val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
         loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
 
         val deviceCopy = viewModel.uiState.value.mediaFiles.single { it.id == deviceFile.id && !it.local }
         val phoneCopy = viewModel.uiState.value.mediaFiles.single { it.id == deviceFile.id && it.local }
@@ -730,16 +750,29 @@ class PatrolViewModelTest {
             transferStatus = TransferStatus.Idle,
             progress = 0f
         )
-        val mediaGateway = MutableListingMediaGateway(remote = listOf(remote))
+        val existingLocal = remote.copy(
+            id = "ute-photo-existing-local",
+            name = "眼镜照片_existing-local.jpg",
+            local = true,
+            verified = true,
+            contentUri = temp.newFile("existing-local.jpg").toURI().toString()
+        )
+        val mediaGateway = MutableListingMediaGateway(remote = listOf(remote), local = listOf(existingLocal))
         val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
         loginForTest(viewModel)
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles()
+        advanceUntilIdle()
         assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == remote.id && !it.local })
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == existingLocal.id && it.local })
 
+        mediaGateway.local = emptyList()
         mediaGateway.remoteFailure = IllegalStateException("device wifi switch rejected: error=100000,data=false")
         viewModel.syncDeviceMediaToPhone(refreshFirst = true)
         advanceUntilIdle()
 
         assertTrue(viewModel.uiState.value.mediaFiles.none { it.id == remote.id && !it.local })
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == existingLocal.id && it.local && it.contentUri == existingLocal.contentUri })
         assertEquals(
             "设备文件读取失败：device wifi switch rejected: error=100000,data=false；请确认手机已连接设备热点后重试",
             viewModel.uiState.value.operationMessage?.text
@@ -836,6 +869,69 @@ class PatrolViewModelTest {
 
         assertEquals(media.id, viewModel.uiState.value.previewMediaFile?.id)
         assertTrue(viewModel.uiState.value.previewMediaFile?.contentUri?.isNotBlank() == true)
+    }
+
+    @Test
+    fun openDeviceVideoPreviewUsesRemoteDeviceUriWithoutForcingPhoneSync() = runTest {
+        val remote = MediaFile(
+            id = "ute-wifi-video-preview",
+            name = "眼镜视频_preview.mp4",
+            kind = com.patrollink.domain.MediaKind.Video,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = "http://192.168.222.1:8000/media/preview.mp4"
+        )
+        val localFile = temp.newFile("preview.mp4").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val mediaGateway = DownloadingMediaGateway(remote, localFile)
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles(showFailureMessage = true)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.id == remote.id && !it.local })
+
+        viewModel.openMediaPreview(remote.id, local = false)
+        advanceUntilIdle()
+
+        assertTrue(mediaGateway.transferTargets.isEmpty())
+        val preview = viewModel.uiState.value.previewMediaFile
+        assertEquals(remote.id, preview?.id)
+        assertTrue(preview?.local == false)
+        assertEquals(remote.contentUri, preview?.contentUri)
+    }
+
+    @Test
+    fun openDevicePreviewWithoutRemoteUriDoesNotFallbackToPhoneSync() = runTest {
+        val remote = MediaFile(
+            id = "ute-wifi-video-no-uri",
+            name = "眼镜视频_no_uri.mp4",
+            kind = com.patrollink.domain.MediaKind.Video,
+            time = "123",
+            size = "4 B",
+            duration = null,
+            verified = false,
+            local = false,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = null
+        )
+        val localFile = temp.newFile("preview-fallback.mp4").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val mediaGateway = DownloadingMediaGateway(remote, localFile)
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(mediaGateway))
+        viewModel.setMediaLocal(false)
+        viewModel.refreshMediaFiles(showFailureMessage = true)
+        advanceUntilIdle()
+
+        viewModel.openMediaPreview(remote.id, local = false)
+        advanceUntilIdle()
+
+        assertTrue(mediaGateway.transferTargets.isEmpty())
+        assertEquals(null, viewModel.uiState.value.previewMediaFile)
+        assertEquals(remote.id, viewModel.uiState.value.selectedMediaFileId)
     }
 
     @Test
@@ -1225,20 +1321,102 @@ class PatrolViewModelTest {
         assertTrue(missionId.contains("POLICE_9527"))
         assertEquals(missionId, viewModel.uiState.value.dailyReport.report?.missionId)
     }
+
+    @Test
+    fun saveCerebellumSettingsStoresLocallyAndEnablesHealthCheckWithoutBackend() = runTest {
+        val runtimeConfig = FakeRuntimeConfigGateway()
+        val createdApis = mutableListOf<Pair<String, String>>()
+        val viewModel = testViewModel(
+            runtimeConfigStore = runtimeConfig,
+            cerebellumApiFactory = { baseUrl, apiKey ->
+                createdApis += baseUrl to apiKey
+                FakeHealthCerebellumApi()
+            }
+        )
+
+        viewModel.updateCerebellumBaseUrl(" http://192.168.11.157:8088/ ")
+        viewModel.updateCerebellumApiKey(" local-key ")
+        viewModel.saveCerebellumSettings()
+        advanceUntilIdle()
+        viewModel.checkCerebellumHealth()
+        advanceUntilIdle()
+
+        assertEquals("http://192.168.11.157:8088", runtimeConfig.saved?.baseUrl)
+        assertEquals("local-key", runtimeConfig.saved?.apiKey)
+        assertEquals("http://192.168.11.157:8088" to "local-key", createdApis.single())
+        assertEquals("ok · local-cerebellum", viewModel.uiState.value.cerebellumSettings.healthStatus)
+        assertEquals("小脑健康检查通过", viewModel.uiState.value.operationMessage?.text)
+    }
+
+    @Test
+    fun refreshMediaFilesWhileViewingPhoneOnlyLoadsLocalMedia() = runTest {
+        val gateway = CountingMediaGateway(
+            localMedia = listOf(
+                MediaFile(
+                    id = "ute-photo-local-fast",
+                    name = "眼镜照片_fast.jpg",
+                    kind = com.patrollink.domain.MediaKind.Photo,
+                    time = "1710000000000",
+                    size = "1 MB",
+                    duration = null,
+                    verified = true,
+                    local = true,
+                    transferStatus = TransferStatus.Idle,
+                    progress = 0f,
+                    contentUri = temp.newFile("fast.jpg").toURI().toString()
+                )
+            )
+        )
+        val viewModel = testViewModel(coordinator = coordinatorWithMedia(gateway))
+
+        viewModel.setMediaLocal(true)
+        viewModel.refreshMediaFiles(showFailureMessage = true)
+        advanceUntilIdle()
+
+        assertEquals(1, gateway.localListCalls)
+        assertEquals(0, gateway.deviceListCalls)
+        assertTrue(viewModel.uiState.value.mediaFiles.any { it.local && it.id == "ute-photo-local-fast" })
+    }
 }
 
 private fun testViewModel(
     cerebellumApi: CerebellumApi? = null,
     coordinator: PatrolCoordinator = MockPatrolCoordinatorFactory.create(),
     offlineSyncEngine: OfflineSyncEngine? = null,
-    deviceControlGateway: DeviceControlGateway? = null
+    deviceControlGateway: DeviceControlGateway? = null,
+    runtimeConfigStore: RuntimeConfigGateway? = null,
+    cerebellumApiFactory: (String, String) -> CerebellumApi? = { _, _ -> null }
 ) = PatrolViewModel(
     coordinator = coordinator,
     deviceControlGateway = deviceControlGateway,
     versionGateway = MockVersionGateway(),
     cerebellumApi = cerebellumApi,
+    cerebellumApiFactory = cerebellumApiFactory,
+    runtimeConfigStore = runtimeConfigStore,
     offlineSyncEngine = offlineSyncEngine
 )
+
+private class FakeRuntimeConfigGateway : RuntimeConfigGateway {
+    var saved: CerebellumRuntimeSettings? = null
+
+    override fun readCerebellumSettings(): CerebellumRuntimeSettings =
+        saved ?: CerebellumRuntimeSettings(baseUrl = "", apiKey = "")
+
+    override fun saveCerebellumSettings(baseUrl: String, apiKey: String): CerebellumRuntimeSettings =
+        CerebellumRuntimeSettings(baseUrl = baseUrl.trim().trimEnd('/'), apiKey = apiKey.trim()).also {
+            saved = it
+        }
+}
+
+private class FakeHealthCerebellumApi : FakeCerebellumReportApi() {
+    override suspend fun health(): CerebellumHealthDto =
+        CerebellumHealthDto(
+            status = "ok",
+            deviceId = "local-cerebellum",
+            uptimeSeconds = 12,
+            primaryModel = "local-model"
+        )
+}
 
 private fun coordinatorWithMedia(mediaGateway: MediaGateway) = PatrolCoordinator(
     authGateway = com.patrollink.data.MockAuthGateway(),
@@ -1308,6 +1486,25 @@ private class DelayedLocalListingMediaGateway(private val localMedia: MediaFile)
     override suspend fun listFiles(local: Boolean): List<MediaFile> {
         if (local) delay(1_000)
         return if (local) listOf(localMedia) else emptyList()
+    }
+
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = emptyFlow()
+    override suspend fun delete(fileId: String, local: Boolean): Boolean = false
+    override suspend fun verifySha256(fileId: String): Boolean = false
+}
+
+private class CountingMediaGateway(private val localMedia: List<MediaFile>) : MediaGateway {
+    var localListCalls = 0
+    var deviceListCalls = 0
+
+    override suspend fun listFiles(local: Boolean): List<MediaFile> {
+        return if (local) {
+            localListCalls += 1
+            localMedia
+        } else {
+            deviceListCalls += 1
+            emptyList()
+        }
     }
 
     override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = emptyFlow()
@@ -1715,7 +1912,7 @@ private suspend fun TestScope.loginAndConnect(viewModel: PatrolViewModel) {
     advanceUntilIdle()
 }
 
-private class FakeCerebellumReportApi : CerebellumApi {
+private open class FakeCerebellumReportApi : CerebellumApi {
     var lastRequest: CerebellumReportRequestDto? = null
 
     override suspend fun createReport(request: CerebellumReportRequestDto): CerebellumReportResponseDto {

@@ -27,6 +27,7 @@ class MediaHumanSyncTest {
         context.startActivity(launchIntent)
 
         waitForApp()
+        loginIfNeeded()
         clickAny(By.text("媒体"), By.desc("媒体"))
         waitForAnyText("图库", "手机端", "设备端")
 
@@ -35,6 +36,28 @@ class MediaHumanSyncTest {
 
         clickAny(By.text("同步到手机"))
         waitForAnyText("已同步", "无需重复同步", "设备文件同步失败", "媒体文件下载失败", timeoutMillis = 180_000)
+    }
+
+    private fun loginIfNeeded() {
+        if (device.wait(Until.hasObject(By.textContains("安全登录")), 3_000)) {
+            val args = InstrumentationRegistry.getArguments()
+            val badge = args.getString("patrol.badge") ?: "POLICE_9527"
+            val password = args.getString("patrol.password") ?: "123456"
+            setText(By.textContains("请输入警员编号或手机号"), badge)
+            setText(By.textContains("请输入登录密码"), password)
+            device.findObject(By.textContains("我已阅读"))?.click()
+            clickAny(By.text("安全登录"), By.textContains("安全登录"))
+            waitForAnyText("ForceLink", "媒体", "设备", "图库", timeoutMillis = 30_000)
+        }
+    }
+
+    private fun setText(selector: BySelector, value: String) {
+        val field = device.wait(Until.findObject(selector), 8_000)
+        assertNotNull("Expected input field $selector", field)
+        field!!.click()
+        field.clear()
+        field.text = value
+        device.waitForIdle(500)
     }
 
     private fun waitForApp() {

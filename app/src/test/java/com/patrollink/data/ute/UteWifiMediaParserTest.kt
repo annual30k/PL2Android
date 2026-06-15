@@ -143,6 +143,18 @@ class UteWifiMediaParserTest {
             listOf(
                 "http://192.168.222.1:8000/media/20260613144750407.jpg",
                 "http://192.168.222.1:8000/20260613144750407.jpg",
+                "http://192.168.222.1:8000/photo/20260613144750407.jpg",
+                "http://192.168.222.1:8000/photos/20260613144750407.jpg",
+                "http://192.168.222.1:8000/picture/20260613144750407.jpg",
+                "http://192.168.222.1:8000/pictures/20260613144750407.jpg",
+                "http://192.168.222.1:8000/image/20260613144750407.jpg",
+                "http://192.168.222.1:8000/images/20260613144750407.jpg",
+                "http://192.168.222.1:8000/video/20260613144750407.jpg",
+                "http://192.168.222.1:8000/videos/20260613144750407.jpg",
+                "http://192.168.222.1:8000/audio/20260613144750407.jpg",
+                "http://192.168.222.1:8000/record/20260613144750407.jpg",
+                "http://192.168.222.1:8000/DCIM/20260613144750407.jpg",
+                "http://192.168.222.1:8000/DCIM/100MEDIA/20260613144750407.jpg",
                 "http://192.168.222.1:8000/download/20260613144750407.jpg",
                 "http://192.168.222.1:8000/file/20260613144750407.jpg",
                 "http://192.168.222.1:8000/media/download?name=20260613144750407.jpg"
@@ -150,6 +162,19 @@ class UteWifiMediaParserTest {
             files[0].downloadUrls
         )
         assertTrue(files[0].toMediaFile(local = false).name.startsWith("眼镜照片_"))
+    }
+
+    @Test
+    fun remoteWifiMediaKeepsHttpContentUriForDevicePreview() {
+        val file = UteWifiRemoteFile(
+            id = "ute-wifi-preview",
+            name = "20260613144750407.jpg",
+            kind = MediaKind.Photo,
+            sizeBytes = 1593149,
+            url = "http://192.168.222.1:8000/media/20260613144750407.jpg"
+        ).toMediaFile(local = false)
+
+        assertEquals("http://192.168.222.1:8000/media/20260613144750407.jpg", file.contentUri)
     }
 
     @Test

@@ -180,8 +180,10 @@ class UteWifiMediaClient(
 
     private suspend fun prepareDeviceWifi(currentPhoneWifiOnly: Boolean = false): PreparedDeviceWifi = coroutineScope {
         currentPhoneDeviceWifiSession()?.let { prepared ->
-            Log.i(Tag, "phone is already on device hotspot ${prepared.ssid}; using it without sdk wifi open")
-            return@coroutineScope prepared
+            if (currentPhoneWifiOnly || shouldUseCurrentHotspotBeforeSdkWifiOpen()) {
+                Log.i(Tag, "phone is already on device hotspot ${prepared.ssid}; using it without sdk wifi open")
+                return@coroutineScope prepared
+            }
         }
         UteAccountBindingGuard.requireAcceptedForWifi(accountBinder.bind("wifi-media"))
         val current = withContext(Dispatchers.IO) {
@@ -267,7 +269,7 @@ class UteWifiMediaClient(
             val response = runCatching {
                 client.newCall(Request.Builder().url(url).build()).execute()
             }.getOrElse {
-                lastFailure = "$url -> ${it.message}"
+                lastFailure = "$url -> ${it.downloadFailureSummary()}"
                 return@forEach
             }
             response.use {
@@ -314,6 +316,9 @@ class UteWifiMediaClient(
         runCatching { temp.delete() }
         error("wifi media download failed: ${lastFailure ?: remote.url}")
     }
+
+    private fun Throwable.downloadFailureSummary(): String =
+        "${this::class.java.simpleName}${message?.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()}"
 
     private suspend fun applyGloryViewWifiWarmup(
         ssid: String,
@@ -458,21 +463,51 @@ class UteWifiMediaClient(
             this == WifiState.IFI_AP_STARTING
 
     private suspend fun discoverFiles(session: DeviceWifiSession): List<UteWifiRemoteFile> = withContext(Dispatchers.IO) {
+        val discovered = linkedMapOf<String, UteWifiRemoteFile>()
+        val deadline = System.currentTimeMillis() + HttpMediaServiceReadyTimeoutMillis
+        var serviceResponded = false
+        var lastFailure: String? = null
+        do {
+            val result = probeMediaFiles(session)
+            serviceResponded = serviceResponded || result.serviceResponded
+            lastFailure = result.lastFailure ?: lastFailure
+            result.files.forEach { file -> discovered.putIfAbsent(file.id, file) }
+            if (discovered.isNotEmpty()) return@withContext discovered.values.toList()
+            if (serviceResponded) break
+            delay(HttpMediaServicePollMillis)
+        } while (System.currentTimeMillis() < deadline)
+        if (!serviceResponded) {
+            error("device media http service unavailable: ${lastFailure ?: "no response"}")
+        }
+        discovered.values.toList()
+    }
+
+    private fun probeMediaFiles(session: DeviceWifiSession): MediaProbeResult {
         val client = session.httpClient()
         val discovered = linkedMapOf<String, UteWifiRemoteFile>()
+        var serviceResponded = false
+        var lastFailure: String? = null
         session.probeUrls().take(FileProbeRequestLimit).forEach { url ->
             if (discovered.size >= MaxDiscoveredFiles) return@forEach
             val responseBody = runCatching {
                 client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-                    if (!response.isSuccessful) return@use null
+                    if (!response.isSuccessful) {
+                        if (response.code in 400..499) serviceResponded = true
+                        lastFailure = "$url -> ${response.code}"
+                        return@use null
+                    }
+                    serviceResponded = true
                     response.body?.string()
                 }
-            }.getOrNull() ?: return@forEach
+            }.getOrElse {
+                lastFailure = "$url -> ${it.message}"
+                null
+            } ?: return@forEach
             UteWifiMediaParser.parseRemoteFiles(responseBody, url).forEach { file ->
                 discovered.putIfAbsent(file.id, file)
             }
         }
-        discovered.values.toList()
+        return MediaProbeResult(discovered.values.toList(), serviceResponded, lastFailure)
     }
 
     private fun DeviceWifiSession.httpClient(): OkHttpClient {
@@ -557,6 +592,8 @@ class UteWifiMediaClient(
         const val HttpDownloadReadTimeoutMillis = 30_000L
         const val HttpDownloadWriteTimeoutMillis = 30_000L
         const val HttpDownloadCallTimeoutMillis = 45_000L
+        const val HttpMediaServiceReadyTimeoutMillis = 15_000L
+        const val HttpMediaServicePollMillis = 1_000L
         const val MaxDiscoveredFiles = 200
         const val ProbeHostLimit = 4
         const val DiagnosticProbeRequestLimit = 48
@@ -571,6 +608,12 @@ private data class DeviceWifiCredentials(
     val password: String
 )
 
+private data class MediaProbeResult(
+    val files: List<UteWifiRemoteFile>,
+    val serviceResponded: Boolean,
+    val lastFailure: String?
+)
+
 private data class PreparedDeviceWifi(
     val ssid: String,
     val password: String,
@@ -583,7 +626,12 @@ internal fun shouldTryPhoneConnectedWifiFallback(state: Int): Boolean =
         state == WifiState.IFI_AP_CONNECT_FAILED
 
 internal fun shouldPreferPhoneConnectedWifiBeforeSdkOpen(currentPhoneWifiOnly: Boolean): Boolean =
-    !currentPhoneWifiOnly
+    currentPhoneWifiOnly
+
+internal fun shouldShortCircuitSdkWifiOpenForCurrentHotspot(currentPhoneWifiOnly: Boolean): Boolean =
+    currentPhoneWifiOnly
+
+internal fun shouldUseCurrentHotspotBeforeSdkWifiOpen(): Boolean = true
 
 internal fun shouldUseCachedWifiDownloadPath(currentPhoneWifiOnly: Boolean, phoneAlreadyConnected: Boolean): Boolean =
     currentPhoneWifiOnly || phoneAlreadyConnected

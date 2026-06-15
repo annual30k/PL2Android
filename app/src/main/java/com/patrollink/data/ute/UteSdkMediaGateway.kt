@@ -51,7 +51,6 @@ class UteSdkMediaGateway(
                 .filterNot { it.isLikelyWebUiAssetMedia() }
                 .deduplicateLocalMediaCopies()
                 .distinctBy { it.id to it.local }
-                .ifEmpty { fallbackGateway.listFiles(local = true) }
         }
         val wifiFilesResult = withTimeoutOrNull(WifiMediaListTimeoutMillis) {
             runCatching { wifiMediaClient?.listFiles().orEmpty() }
@@ -103,11 +102,16 @@ class UteSdkMediaGateway(
                 val remote = cachedWifiFiles[fileId] ?: listFiles(local = false).firstOrNull { it.id == fileId }
                     ?: error("wifi media file not found: $fileId")
                 emit(remote.copy(transferStatus = TransferStatus.Uploading, progress = 0.05f, lastTransferTarget = TransferTarget.PhoneSandbox))
-                val downloaded = client.download(fileId, mediaDirectory)
+                val downloaded = withContext(Dispatchers.IO) {
+                    client.download(fileId, mediaDirectory)
+                }
                 emit(remote.copy(transferStatus = TransferStatus.Hashing, progress = 0.82f, lastTransferTarget = TransferTarget.PhoneSandbox))
-                val sha256 = integrityGateway.sha256(downloaded.readBytes())
-                val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, downloaded.lastModified())
-                File(mediaDirectory, "${downloaded.nameWithoutExtension}.integrity").writeText("sha256=$sha256\nwatermark=$token\n")
+                val (sha256, token) = withContext(Dispatchers.IO) {
+                    val hash = integrityGateway.sha256(downloaded.readBytes())
+                    val watermark = integrityGateway.watermarkToken(fileId, officerBadgeNo, downloaded.lastModified())
+                    File(mediaDirectory, "${downloaded.nameWithoutExtension}.integrity").writeText("sha256=$hash\nwatermark=$watermark\n")
+                    hash to watermark
+                }
                 val local = remote.copy(
                     local = true,
                     verified = true,
@@ -420,8 +424,7 @@ class UteSdkMediaGateway(
     }
 
     private fun localFiles(): List<MediaFile> =
-        mediaDirectory.listFiles { file -> file.isSupportedLocalMedia() }
-            .orEmpty()
+        mediaDirectory.supportedLocalMediaFiles()
             .map { file -> file.toLocalMediaFile() }
             .sortedByDescending { it.time.toLongOrNull() ?: 0L }
 
@@ -461,15 +464,6 @@ class UteSdkMediaGateway(
             contentUri = Uri.fromFile(this).toString()
         )
     }
-
-    private fun File.isSupportedLocalMedia(): Boolean =
-        !name.isLikelyWebUiAssetPath() &&
-            (extension.equals("opus", ignoreCase = true) ||
-                extension.equals("jpg", ignoreCase = true) ||
-                extension.equals("jpeg", ignoreCase = true) ||
-                extension.equals("png", ignoreCase = true) ||
-                extension.equals("mp4", ignoreCase = true) ||
-                extension.equals("mov", ignoreCase = true))
 
     private fun File.toMediaKind(): MediaKind = when (extension.lowercase()) {
         "jpg", "jpeg", "png" -> MediaKind.Photo
@@ -673,3 +667,20 @@ internal fun wifiDeviceFileNameForDelete(fileId: String, mediaName: String?): St
 
 internal fun requireUteCloudUploadResult(fileId: String, uploaded: MediaFile?): MediaFile =
     uploaded ?: error("media upload did not return uploaded file: $fileId")
+
+internal fun File.supportedLocalMediaFiles(): List<File> {
+    if (!exists()) return emptyList()
+    val candidates = if (isFile) sequenceOf(this) else walkTopDown()
+    return candidates
+        .filter { it.isFile && it.isSupportedLocalMediaFile() }
+        .toList()
+}
+
+private fun File.isSupportedLocalMediaFile(): Boolean =
+    !name.isLikelyWebUiAssetPath() &&
+        (extension.equals("opus", ignoreCase = true) ||
+            extension.equals("jpg", ignoreCase = true) ||
+            extension.equals("jpeg", ignoreCase = true) ||
+            extension.equals("png", ignoreCase = true) ||
+            extension.equals("mp4", ignoreCase = true) ||
+            extension.equals("mov", ignoreCase = true))

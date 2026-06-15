@@ -33,6 +33,11 @@ data class BackendRuntimeSettings(
     val webSocketUrl: String
 )
 
+interface RuntimeConfigGateway {
+    fun readCerebellumSettings(): CerebellumRuntimeSettings
+    fun saveCerebellumSettings(baseUrl: String, apiKey: String): CerebellumRuntimeSettings
+}
+
 private data class RuntimeConfigFile(
     val restBaseUrl: String? = null,
     val webSocketUrl: String? = null,
@@ -46,7 +51,7 @@ private data class RuntimeConfigFile(
     val useRealBle: Boolean? = null
 )
 
-class RuntimeConfigStore(context: Context) {
+class RuntimeConfigStore(context: Context) : RuntimeConfigGateway {
     private val prefs = context.getSharedPreferences("patrol_runtime_config", Context.MODE_PRIVATE)
     private val assets = context.applicationContext.assets
     private val packagedConfig by lazy { readPackagedConfig() }
@@ -72,7 +77,7 @@ class RuntimeConfigStore(context: Context) {
         )
     }
 
-    fun readCerebellumSettings(): CerebellumRuntimeSettings =
+    override fun readCerebellumSettings(): CerebellumRuntimeSettings =
         read().let { config ->
             CerebellumRuntimeSettings(
                 baseUrl = config.cerebellumBaseUrl,
@@ -102,9 +107,9 @@ class RuntimeConfigStore(context: Context) {
         return readBackendSettings()
     }
 
-    fun saveCerebellumSettings(baseUrl: String, apiKey: String): CerebellumRuntimeSettings {
+    override fun saveCerebellumSettings(baseUrl: String, apiKey: String): CerebellumRuntimeSettings {
         prefs.edit()
-            .putString(KEY_CEREBELLUM_BASE_URL, baseUrl.trim())
+            .putString(KEY_CEREBELLUM_BASE_URL, baseUrl.trim().trimEnd('/'))
             .putString(KEY_CEREBELLUM_API_KEY, apiKey.trim())
             .apply()
         return readCerebellumSettings()
@@ -190,18 +195,21 @@ class RuntimeConfigStore(context: Context) {
             "http://10.0.2.2:8080",
             "http://127.0.0.1:8080",
             "http://localhost:8080",
+            "http://192.168.1.3:8080",
             "https://api.patrollink.example.com"
         )
         private val LEGACY_WEBSOCKET_URLS = setOf(
             "ws://10.0.2.2:8080/resource/websocket",
             "ws://127.0.0.1:8080/resource/websocket",
             "ws://localhost:8080/resource/websocket",
+            "ws://192.168.1.3:8080/resource/websocket",
             "wss://api.patrollink.example.com/resource/websocket"
         )
         private val LEGACY_CEREBELLUM_BASE_URLS = setOf(
             "http://10.0.2.2:8089",
             "http://127.0.0.1:8089",
-            "http://localhost:8089"
+            "http://localhost:8089",
+            "http://192.168.1.3:8088"
         )
     }
 }

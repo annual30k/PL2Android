@@ -1,7 +1,9 @@
 package com.patrollink.data.wifi
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DeviceWifiNetworkConnectorTest {
@@ -42,5 +44,16 @@ class DeviceWifiNetworkConnectorTest {
         )
 
         assertNull(selected)
+    }
+
+    @Test
+    fun reusedCurrentWifiSessionDoesNotOwnTemporaryProcessBinding() {
+        assertFalse(ownsTemporaryNetworkBinding(hasNetworkCallback = false, hasLegacyNetworkId = false))
+    }
+
+    @Test
+    fun requestedOrLegacyWifiSessionOwnsTemporaryProcessBinding() {
+        assertTrue(ownsTemporaryNetworkBinding(hasNetworkCallback = true, hasLegacyNetworkId = false))
+        assertTrue(ownsTemporaryNetworkBinding(hasNetworkCallback = false, hasLegacyNetworkId = true))
     }
 }

@@ -34,7 +34,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,84 +83,118 @@ fun PatrolConfirmDialog(
         PatrolConfirmStyle.Warning -> Warning
         PatrolConfirmStyle.Danger -> Danger
     }
+    val severityText = when (style) {
+        PatrolConfirmStyle.Normal -> "操作确认"
+        PatrolConfirmStyle.Warning -> "注意确认"
+        PatrolConfirmStyle.Danger -> "危险操作"
+    }
+    val defaultIcon = when (style) {
+        PatrolConfirmStyle.Normal -> Icons.Filled.CheckCircle
+        PatrolConfirmStyle.Warning -> Icons.Filled.Info
+        PatrolConfirmStyle.Danger -> Icons.Filled.Security
+    }
+    val warningContainer = if (colors.dark) accent.copy(alpha = 0.14f) else accent.copy(alpha = 0.07f)
     AlertDialog(
         modifier = modifier,
         containerColor = colors.surface,
         tonalElevation = 0.dp,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         onDismissRequest = { if (!loading) onDismiss() },
         title = {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(accent.copy(alpha = 0.08f))
-                    .border(1.dp, accent.copy(alpha = 0.18f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Box(
                     Modifier
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(accent.copy(alpha = 0.14f)),
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = if (colors.dark) 0.24f else 0.11f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(icon ?: Icons.Filled.Info, contentDescription = null, tint = accent, modifier = Modifier.size(21.dp))
+                    Icon(icon ?: defaultIcon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(title, color = colors.text, fontSize = 19.sp, lineHeight = 24.sp, fontWeight = FontWeight.Black)
-                    Text(if (loading) loadingText else "请确认后继续", color = accent, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, color = colors.text, fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Black)
+                    Text(severityText, color = accent, fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Black, maxLines = 1)
                 }
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(message, color = colors.textMuted, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(message, color = colors.textMuted, fontSize = 14.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold)
                 warningText?.takeIf { it.isNotBlank() }?.let { warning ->
-                    Box(
+                    Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
-                            .background(accent.copy(alpha = 0.08f))
-                            .border(1.dp, accent.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 9.dp)
+                            .background(warningContainer)
+                            .padding(horizontal = 10.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(warning, color = accent, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
+                        Box(Modifier.width(3.dp).height(32.dp).clip(RoundedCornerShape(99.dp)).background(accent))
+                        Text(warning, color = accent, fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+                    }
+                }
+                if (loading) {
+                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(99.dp)),
+                            color = accent,
+                            trackColor = colors.control
+                        )
+                        Text("处理中，请保持当前页面", color = colors.textSubtle, fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Black)
                     }
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = !loading,
-                shape = RoundedCornerShape(9.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = accent,
-                    disabledContainerColor = accent.copy(alpha = 0.62f),
-                    contentColor = Color.White,
-                    disabledContentColor = Color.White
-                ),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (loading) {
-                    CircularProgressIndicator(
-                        color = Color.White,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(loadingText, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
-                } else {
-                    Text(confirmText, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+                Button(
+                    onClick = onDismiss,
+                    enabled = !loading,
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.control,
+                        disabledContainerColor = colors.control.copy(alpha = 0.52f),
+                        contentColor = colors.textMuted,
+                        disabledContentColor = colors.textSubtle
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) {
+                    Text(dismissText, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
                 }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !loading) {
-                Text(dismissText, color = colors.textMuted.copy(alpha = if (loading) 0.48f else 1f), fontWeight = FontWeight.Black)
+                Button(
+                    onClick = onConfirm,
+                    enabled = !loading,
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = accent,
+                        disabledContainerColor = accent.copy(alpha = 0.62f),
+                        contentColor = Color.White,
+                        disabledContentColor = Color.White
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp)
+                ) {
+                    if (loading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text(loadingText, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+                    } else {
+                        Text(confirmText, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+                    }
+                }
             }
         }
     )

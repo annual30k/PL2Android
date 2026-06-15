@@ -113,7 +113,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
             OfflineBanner(uiState.networkOnline)
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                contentPadding = PaddingValues(top = 6.dp, bottom = 96.dp),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 item {
@@ -1483,7 +1483,7 @@ private fun audioStatus(device: DeviceStatus, capabilities: DeviceCapabilities, 
 
 private fun storageStatus(device: DeviceStatus): String =
     when {
-        !device.storageKnown -> "读取失败"
+        !device.storageKnown -> device.pendingReadLabel()
         device.storageProgress() >= 0.92f -> "空间不足"
         device.storageProgress() >= 0.78f -> "占用较高"
         else -> "正常"
@@ -1982,7 +1982,7 @@ private fun DeviceStatus.canUseSdkControls(): Boolean =
     isControllableDevice() && !onlineDuration.startsWith("系统蓝牙")
 
 private fun DeviceStatus.batteryText(): String =
-    if (batteryKnown) "${battery.coerceIn(0, 100)}%" else "读取失败"
+    if (batteryKnown) "${battery.coerceIn(0, 100)}%" else pendingReadLabel()
 
 private fun DeviceStatus.batteryProgress(): Float =
     if (batteryKnown) battery.coerceIn(0, 100) / 100f else 0f
@@ -1991,15 +1991,18 @@ private fun DeviceStatus.storageText(): String =
     if (storageKnown) {
         "${storageUsedGb.formatGb()}GB / ${storageTotalGb.formatGb()}GB"
     } else {
-        "读取失败"
+        pendingReadLabel()
     }
 
 private fun DeviceStatus.storageTextCompact(): String =
     if (storageKnown) {
         "${storageUsedGb.formatGb()}/${storageTotalGb.formatGb()}GB"
     } else {
-        "读取失败"
+        pendingReadLabel()
     }
+
+private fun DeviceStatus.pendingReadLabel(): String =
+    if (isControllableDevice()) "读取中" else "读取失败"
 
 private fun DeviceStatus.storageProgress(): Float =
     if (storageKnown && storageTotalGb > 0f) {

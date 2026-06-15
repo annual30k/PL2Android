@@ -1511,7 +1511,6 @@ class PatrolViewModel(
 
     fun syncDeviceMediaToPhone(fileIds: Set<String> = emptySet(), refreshFirst: Boolean = false) {
         if (deviceMediaSyncJob?.isActive == true) {
-            showOperationMessage("正在同步设备文件，请稍候", OperationMessageType.Info)
             return
         }
         deviceMediaSyncJob = viewModelScope.launch {
@@ -1527,14 +1526,15 @@ class PatrolViewModel(
                         fileName = "正在读取设备文件",
                         status = TransferStatus.Uploading,
                         progress = 0.03f
-                    )
+                    ),
+                    operationMessage = null
                 )
             }
             if (refreshFirst) {
                 _uiState.update {
                     it.copy(
                         mediaLoading = true,
-                        operationMessage = operationMessage("正在打开设备热点并读取设备文件", OperationMessageType.Info)
+                        operationMessage = null
                     )
                 }
                 val phoneResult = runCatching { coordinator.mediaFiles(local = true) }
@@ -1564,7 +1564,6 @@ class PatrolViewModel(
                 _uiState.update { it.copy(mediaLoading = false) }
                 if (deviceResult.getOrDefault(emptyList()).isEmpty()) {
                     cancelDeviceMediaTransfers()
-                    showOperationMessage("设备端没有可同步文件，请先拍照/录像后刷新设备媒体列表", OperationMessageType.Warning)
                     return@launch
                 }
             }
@@ -1579,19 +1578,14 @@ class PatrolViewModel(
             when {
                 candidates.isEmpty() -> {
                     clearDeviceMediaSync()
-                    showOperationMessage("设备端没有可同步文件，请先刷新设备媒体列表", OperationMessageType.Warning)
                     return@launch
                 }
                 pending.isEmpty() -> {
                     refreshPhoneMediaAfterDeviceSync()
                     _uiState.update { it.copy(selectedMediaLocal = true) }
                     finishDeviceMediaSync(successCount = 0, failedCount = 0)
-                    showOperationMessage("设备端文件已在手机端，无需重复同步", OperationMessageType.Success)
                     return@launch
                 }
-            }
-            _uiState.update {
-                it.copy(operationMessage = operationMessage("正在同步 ${pending.size} 个设备文件到手机", OperationMessageType.Info))
             }
             markDeviceMediaTransferPreparing(pending)
             var successCount = 0
@@ -1617,21 +1611,6 @@ class PatrolViewModel(
                         progress = if (successCount > 0) 1f else it.deviceMediaSync.progress,
                         completedCount = successCount,
                         totalCount = pending.size
-                    ),
-                    operationMessage = operationMessage(
-                        buildString {
-                            if (successCount > 0) {
-                                append("已同步 $successCount 个设备文件到手机本地媒体文件，设备热点保持连接")
-                            } else {
-                                append("设备文件同步失败")
-                            }
-                            if (failedCount > 0) append("，失败 $failedCount 个")
-                        },
-                        when {
-                            failedCount > 0 && successCount == 0 -> OperationMessageType.Error
-                            failedCount > 0 -> OperationMessageType.Warning
-                            else -> OperationMessageType.Success
-                        }
                     )
                 )
             }
@@ -2694,10 +2673,13 @@ private fun com.patrollink.domain.DeviceStatus.requiresSdkControlReadiness(): Bo
         type in setOf(DeviceType.Headset, DeviceType.Glasses)
 
 private fun com.patrollink.domain.DeviceStatus.batteryTextForMessage(): String =
-    if (batteryKnown) "${battery.coerceIn(0, 100)}%" else "读取失败"
+    if (batteryKnown) "${battery.coerceIn(0, 100)}%" else pendingReadLabelForMessage()
 
 private fun com.patrollink.domain.DeviceStatus.storageTextForMessage(): String =
-    if (!storageKnown || storageTotalGb <= 0f) "读取失败" else "%.1f/%.1fGB".format(storageUsedGb, storageTotalGb)
+    if (!storageKnown || storageTotalGb <= 0f) pendingReadLabelForMessage() else "%.1f/%.1fGB".format(storageUsedGb, storageTotalGb)
+
+private fun com.patrollink.domain.DeviceStatus.pendingReadLabelForMessage(): String =
+    if (online && id.isNotBlank()) "读取中" else "读取失败"
 
 private fun Long.toUptimeLabel(): String {
     val days = this / 86_400

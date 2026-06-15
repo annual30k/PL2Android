@@ -311,7 +311,9 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         }
         val selectedTransfer = selected?.takeIf { it.transferStatus.inProgress && it.id != dismissedTransferFileId }
         val deviceSync = uiState.deviceMediaSync.takeIf { it.active }
-        if (deviceSync != null || selectedTransfer != null) {
+        if (deviceSync != null) {
+            DeviceSyncProgressDialog(sync = deviceSync)
+        } else if (selectedTransfer != null) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -321,14 +323,10 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                     },
                 contentAlignment = Alignment.Center
             ) {
-                if (deviceSync != null) {
-                    FloatingDeviceSyncProgress(sync = deviceSync, modifier = Modifier.clickable {})
-                } else if (selectedTransfer != null) {
-                    FloatingTransferProgress(file = selectedTransfer, modifier = Modifier.clickable {})
-                }
+                FloatingTransferProgress(file = selectedTransfer, modifier = Modifier.clickable {})
             }
         }
-        if (!uiState.selectedMediaLocal && uiState.mediaLoading) {
+        if (deviceSync == null && !uiState.selectedMediaLocal && uiState.mediaLoading) {
             MediaBlockingLoading(message = "正在读取设备文件")
         }
     }
@@ -1302,6 +1300,28 @@ private fun FloatingDeviceSyncProgress(sync: DeviceMediaSyncUiState, modifier: M
             progress = sync.progress.safeProgress(),
             modifier = Modifier.fillMaxWidth()
         )
+    }
+}
+
+@Composable
+private fun DeviceSyncProgressDialog(sync: DeviceMediaSyncUiState) {
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = if (PatrolDisplay.colors.dark) 0.32f else 0.18f))
+                .clickable(enabled = true, onClick = {}),
+            contentAlignment = Alignment.Center
+        ) {
+            FloatingDeviceSyncProgress(sync = sync)
+        }
     }
 }
 

@@ -79,6 +79,7 @@ class UteSdkDeviceGateway(
     private val photoCommandInFlightByDevice = ConcurrentHashMap<String, Long>()
     private val lastPhotoCommandFinishedAtByDevice = ConcurrentHashMap<String, Long>()
     private val photoSyncJobByDevice = ConcurrentHashMap<String, Job>()
+    private val confirmedControlAddressBySystemAddress = ConcurrentHashMap<String, String>()
     private val gatewayScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val statusCache by lazy {
         bridge.appContext.getSharedPreferences(StatusCacheName, Context.MODE_PRIVATE)
@@ -136,7 +137,14 @@ class UteSdkDeviceGateway(
             return fallbackStatus.copy(id = deviceId, online = false)
         }
         if (systemDiscovered?.isSystemAudioDevice() == true) {
-            val controlDiscovered = refreshSdkControlScan(deviceId, systemDiscovered)
+            val controlDiscovered = if (systemDiscovered.isGlassesLike()) {
+                resolveGlassesControlDevice(systemDiscovered)
+            } else {
+                refreshSdkControlScan(deviceId, systemDiscovered)
+            }
+            if (controlDiscovered != null) {
+                rememberConfirmedControlAlias(systemDiscovered, controlDiscovered)
+            }
             val systemAddressControlFallback = systemDiscovered
                 .takeIf { it.canTrySystemAddressControlFallback() }
                 ?.copy(
@@ -146,7 +154,7 @@ class UteSdkDeviceGateway(
             var usingBondedSystemAddressFallback = false
             val connectCandidate = controlDiscovered
                 ?: systemDiscovered
-                    .takeIf { it.isSystemAudioConnected() }
+                    .takeIf { it.isSystemAudioConnected() && !it.isGlassesLike() }
                     ?.copy(serviceUuid = SystemBluetoothAudioControlConnected)
                 ?: systemAddressControlFallback?.also {
                     usingBondedSystemAddressFallback = true
@@ -159,9 +167,10 @@ class UteSdkDeviceGateway(
                 activeDevice = systemAudioStatus(systemDiscovered)
                 return activeDevice
             }
+            val targetDeviceId = controlDiscovered?.id ?: deviceId
             val sdkStatus = runCatching {
                 connectAndReadStatus(
-                    deviceId = deviceId,
+                    deviceId = targetDeviceId,
                     discovered = connectCandidate,
                     connectTimeoutMillis = if (usingBondedSystemAddressFallback) {
                         BondedSystemAddressFallbackConnectTimeoutMillis
@@ -178,6 +187,7 @@ class UteSdkDeviceGateway(
                 )
                 return activeDevice
             }
+            removeConfirmedControlAlias(deviceId)
             activeDevice = systemAudioStatus(systemDiscovered)
             return activeDevice
         }
@@ -187,6 +197,7 @@ class UteSdkDeviceGateway(
     override suspend fun unbind(deviceId: String): DeviceStatus? = mutex.withLock {
         withContext(Dispatchers.IO) { runCatching { bridge.disconnect() } }
         connectResult = null
+        removeConfirmedControlAlias(deviceId)
         connectedAtByDevice.remove(deviceId)
         accountBoundByDevice.remove(deviceId)
         lastAccountBindAttemptAtByDevice.remove(deviceId)
@@ -1226,13 +1237,22 @@ class UteSdkDeviceGateway(
         val sdkHeadsets = sdkDevices.filter { device ->
             device.type == DeviceType.Headset && isKnownPatrolAudioName(device.name)
         }
+        val connectedSystemGlasses = systemDevices.firstOrNull { device ->
+            device.isSystemAudioConnected() && device.isGlassesLike()
+        }
+        val sdkGlasses = sdkDevices.filter { device ->
+            device.isGlassesControlDevice()
+        }
         val sdkHeadset = connectedSystemHeadset?.let { systemHeadset ->
             sdkHeadsets.preferredControlHeadset(systemHeadset)
                 ?.takeIf { candidate -> candidate.matchesSystemHeadset(systemHeadset) }
         }
+        val sdkGlassesDevice = connectedSystemGlasses?.let { systemGlasses ->
+            sdkGlasses.confirmedControlGlasses(systemGlasses)
+        }
         val output = linkedMapOf<String, ScannedDevice>()
         sdkDevices.forEach { device ->
-            if (connectedSystemHeadset == null || device !in sdkHeadsets) {
+            if ((connectedSystemHeadset == null || device !in sdkHeadsets) && device != sdkGlassesDevice) {
                 output[device.id] = device
             }
         }
@@ -1242,6 +1262,14 @@ class UteSdkDeviceGateway(
                 signalBars = maxOf(sdkHeadset.signalBars, connectedSystemHeadset?.signalBars ?: 0),
                 serviceUuid = SystemBluetoothAudioControlConnected,
                 bonded = true
+            )
+        } else if (sdkGlassesDevice != null) {
+            output[sdkGlassesDevice.id] = sdkGlassesDevice.copy(
+                name = connectedSystemGlasses?.name?.takeIf { it.isNotBlank() } ?: sdkGlassesDevice.name,
+                signalBars = maxOf(sdkGlassesDevice.signalBars, connectedSystemGlasses?.signalBars ?: 0),
+                serviceUuid = SystemBluetoothAudioControlConnected,
+                bonded = true,
+                type = DeviceType.Glasses
             )
         } else {
             systemDevices.forEach { output[it.id] = it }
@@ -1257,6 +1285,157 @@ class UteSdkDeviceGateway(
 
     private fun ScannedDevice.matchesSystemHeadset(systemHeadset: ScannedDevice): Boolean =
         id.equals(systemHeadset.id, ignoreCase = true) || name.equals(systemHeadset.name, ignoreCase = true)
+
+    private fun List<ScannedDevice>.confirmedControlGlasses(systemGlasses: ScannedDevice): ScannedDevice? {
+        if (isEmpty()) return null
+        firstOrNull { it.id.equals(systemGlasses.id, ignoreCase = true) || it.name.equals(systemGlasses.name, ignoreCase = true) }?.let { return it }
+        val confirmedControlAddress = confirmedControlAddress(systemGlasses.id)
+            ?: return null
+        return firstOrNull { it.id.equals(confirmedControlAddress, ignoreCase = true) }
+    }
+
+    private fun rememberConfirmedControlAlias(systemDevice: ScannedDevice, controlDevice: ScannedDevice) {
+        if (!systemDevice.isGlassesLike() || !controlDevice.isGlassesControlDevice()) return
+        val systemKey = systemDevice.id.normalizedAddressKey()
+        val controlAddress = controlDevice.id.takeIf { it.isNotBlank() } ?: return
+        confirmedControlAddressBySystemAddress[systemKey] = controlAddress
+        statusCache.edit().putString(confirmedControlAliasCacheKey(systemDevice.id), controlAddress).apply()
+        Log.i(SdkCommandLogTag, "confirmed glasses control alias system=${systemDevice.name}/${systemDevice.id},control=${controlDevice.name}/${controlDevice.id}")
+    }
+
+    private fun confirmedControlAddress(systemAddress: String): String? {
+        val systemKey = systemAddress.normalizedAddressKey()
+        confirmedControlAddressBySystemAddress[systemKey]?.let { return it }
+        return statusCache.getString(confirmedControlAliasCacheKey(systemAddress), null)
+            ?.takeIf { it.isNotBlank() }
+            ?.also { confirmedControlAddressBySystemAddress[systemKey] = it }
+    }
+
+    private fun removeConfirmedControlAlias(systemAddress: String) {
+        val systemKey = systemAddress.normalizedAddressKey()
+        confirmedControlAddressBySystemAddress.remove(systemKey)
+        confirmedControlAddressBySystemAddress.entries.removeIf { it.value.equals(systemAddress, ignoreCase = true) }
+        val editor = statusCache.edit().remove(confirmedControlAliasCacheKey(systemAddress))
+        statusCache.all.forEach { (key, value) ->
+            if (key.endsWith("_control_alias") && (value as? String).equals(systemAddress, ignoreCase = true)) {
+                editor.remove(key)
+            }
+        }
+        editor.apply()
+    }
+
+    private fun confirmedControlAliasCacheKey(systemAddress: String): String =
+        "${systemAddress.normalizedAddressKey()}_control_alias"
+
+    private suspend fun resolveGlassesControlDevice(systemGlasses: ScannedDevice): ScannedDevice? {
+        confirmedControlAddress(systemGlasses.id)?.let { cachedAddress ->
+            scanned[cachedAddress]?.takeIf { it.isGlassesControlDevice() }?.let { return it }
+        }
+        val candidates = refreshGlassesControlCandidates()
+            .filter { it.isGlassesControlDevice() }
+            .distinctBy { it.id.normalizedAddressKey() }
+            .sortedByDescending { it.signalBars }
+            .take(MaxControlAliasProbeCandidates)
+        for (candidate in candidates) {
+            val bt3 = queryBt3StateForControlCandidate(candidate) ?: continue
+            if (bt3.matchesSystemGlasses(systemGlasses)) {
+                rememberConfirmedControlAlias(systemGlasses, candidate)
+                return candidate
+            }
+        }
+        Log.w(
+            SdkCommandLogTag,
+            "no confirmed glasses control alias for ${systemGlasses.name}/${systemGlasses.id}; candidates=${candidates.joinToString { "${it.name}/${it.id}" }}"
+        )
+        return null
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun refreshGlassesControlCandidates(): List<ScannedDevice> {
+        val existing = scanned.values.filter { it.isGlassesControlDevice() }
+        if (!bridge.hasBluetoothScanPermission()) return existing
+        return withContext(Dispatchers.IO) {
+            val seen = ConcurrentHashMap<String, ScannedDevice>()
+            existing.forEach { seen[it.id] = it }
+            val complete = CompletableDeferred<Unit>()
+            fun remember(device: UteScanDevice) {
+                val mapped = device.toScannedDevice() ?: return
+                scanned[mapped.id] = mapped
+                if (mapped.isGlassesControlDevice()) {
+                    seen[mapped.id] = mapped
+                }
+            }
+            val callback = object : UteScanCallback {
+                override fun onScanning(device: UteScanDevice) {
+                    remember(device)
+                }
+
+                override fun onScanComplete(scanDeviceList: MutableList<UteScanDevice>) {
+                    scanDeviceList.forEach(::remember)
+                    if (!complete.isCompleted) complete.complete(Unit)
+                }
+
+                override fun onScanFailed(errorCode: Int) {
+                    Log.w(SdkCommandLogTag, "glasses control scan failed error=$errorCode")
+                    if (!complete.isCompleted) complete.complete(Unit)
+                }
+            }
+            val started = runCatching { bridge.client.scanDevice(callback, ControlScanMillis) }
+                .onFailure { Log.w(SdkCommandLogTag, "glasses control scan start failed: ${it.message}") }
+                .isSuccess
+            if (started) {
+                try {
+                    withTimeoutOrNull(ControlScanMillis + ControlScanGraceMillis) { complete.await() }
+                } finally {
+                    runCatching { bridge.client.cancelScan() }
+                }
+            }
+            seen.values.toList()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun queryBt3StateForControlCandidate(candidate: ScannedDevice): DeviceBt3StateInfo? =
+        withContext(Dispatchers.IO) {
+            val listener = connectStateListener()
+            runCatching { bridge.connection.setConnectStateListener(listener) }
+            connectResult = CompletableDeferred()
+            val bt3 = runCatching {
+                val connection = bridge.connect(candidate.id)
+                connection.setConnectStateListener(listener)
+                val connected = withTimeoutOrNull(ControlAliasProbeConnectTimeoutMillis) { connectResult?.await() } == true ||
+                    bridge.client.isConnected(candidate.id) ||
+                    bridge.client.isConnected
+                if (!connected) return@runCatching null
+                connection.queryDeviceBt3State().data
+            }.onFailure {
+                Log.w(SdkCommandLogTag, "query bt3 for ${candidate.name}/${candidate.id} failed: ${it.message}")
+            }.getOrNull()
+            Log.i(SdkCommandLogTag, "probe glasses control ${candidate.name}/${candidate.id} bt3=${bt3.toBt3Summary()}")
+            connectResult = null
+            runCatching { bridge.disconnect() }
+            bt3
+        }
+
+    private fun DeviceBt3StateInfo.matchesSystemGlasses(systemGlasses: ScannedDevice): Boolean {
+        val bt3Address = deviceAddressBt3.orEmpty().normalizedAddressKey()
+        val systemAddress = systemGlasses.id.normalizedAddressKey()
+        if (bt3Address.isNotBlank() && bt3Address == systemAddress) return true
+        val bt3Name = deviceNameBt3.orEmpty().trim()
+        return bt3Name.isNotBlank() && bt3Name.equals(systemGlasses.name.trim(), ignoreCase = true)
+    }
+
+    private fun ScannedDevice.isGlassesLike(): Boolean =
+        type == DeviceType.Glasses || isKnownPatrolGlassesName(name)
+
+    private fun ScannedDevice.isGlassesControlDevice(): Boolean =
+        type == DeviceType.Glasses &&
+            (serviceUuid == UteBleControlScanned ||
+                name.startsWith("SMI-", ignoreCase = true) ||
+                isKnownPatrolGlassesName(name))
+
+    private fun String.normalizedAddressKey(): String =
+        uppercase(Locale.US).filter { it.isLetterOrDigit() }
 
     @SuppressLint("MissingPermission")
     private suspend fun refreshSdkControlScan(deviceId: String, hint: ScannedDevice): ScannedDevice? {
@@ -1457,6 +1636,8 @@ class UteSdkDeviceGateway(
         const val ScanMillis = 10_000L
         const val ControlScanMillis = 5_000L
         const val ControlScanGraceMillis = 700L
+        const val ControlAliasProbeConnectTimeoutMillis = 2_000L
+        const val MaxControlAliasProbeCandidates = 3
         const val ConnectTimeoutMillis = 15_000L
         const val BondedSystemAddressFallbackConnectTimeoutMillis = 7_000L
         const val PreAccountConnectTimeoutMillis = 2_500L

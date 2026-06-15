@@ -10,6 +10,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.LruCache
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -124,7 +125,6 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -133,12 +133,20 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 private const val MediaThumbnailMaxPx = 512
+private const val MediaGridThumbnailMaxPx = 256
 private const val RemoteImageThumbnailMaxBytes = 6L * 1024L * 1024L
 private const val DeviceMediaThumbnailDiskMaxFiles = 256
 private const val DeviceMediaThumbnailDiskMaxBytes = 32L * 1024L * 1024L
 private val DevicePhotoThumbnailLimiter = Semaphore(2)
 private val DeviceVideoThumbnailLimiter = Semaphore(1)
-private val DeviceMediaThumbnailCache = ConcurrentHashMap<String, Bitmap>()
+private val MediaThumbnailMemoryCache = object : LruCache<String, Bitmap>(
+    ((Runtime.getRuntime().maxMemory() / 1024L) / 8L)
+        .coerceAtMost(48L * 1024L)
+        .toInt()
+) {
+    override fun sizeOf(key: String, value: Bitmap): Int =
+        (value.allocationByteCount / 1024).coerceAtLeast(1)
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -151,18 +159,26 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
     var showTimeFilters by remember { mutableStateOf(false) }
     var batchMode by remember { mutableStateOf(false) }
     var batchSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
-    val mediaGridState = rememberLazyGridState()
-    val visibleMediaKeys by remember {
-        derivedStateOf {
-            mediaGridState.layoutInfo.visibleItemsInfo
-                .mapNotNull { it.key as? String }
-                .toSet()
-        }
-    }
     val files = uiState.mediaFiles
         .filter { it.local == uiState.selectedMediaLocal }
         .filter { filter.matches(it.kind) }
         .filter { timeFilter.matches(it.time) }
+    val mediaGridState = rememberLazyGridState()
+    val activeMediaKeys by remember(files, mediaGridState) {
+        derivedStateOf {
+            val visibleItems = mediaGridState.layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) {
+                emptySet()
+            } else {
+                val firstIndex = (visibleItems.minOf { it.index } - 9).coerceAtLeast(0)
+                val lastIndex = (visibleItems.maxOf { it.index } + 9).coerceAtMost(files.lastIndex)
+                (firstIndex..lastIndex).map { index ->
+                    val file = files[index]
+                    "${file.local}-${file.id}"
+                }.toSet()
+            }
+        }
+    }
     val pendingDeviceSyncIds = remember(files, uiState.mediaFiles, uiState.selectedMediaLocal) {
         if (uiState.selectedMediaLocal) {
             emptySet()
@@ -257,7 +273,7 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                             val itemKey = "${file.local}-${file.id}"
                             MediaLibraryTile(
                                 file = file,
-                                loadThumbnail = itemKey in visibleMediaKeys,
+                                loadThumbnail = itemKey in activeMediaKeys,
                                 selected = selected?.id == file.id,
                                 checked = file.id in batchSelection,
                                 batchMode = batchMode,
@@ -1097,19 +1113,25 @@ private fun MediaArtwork(file: MediaFile, loadThumbnail: Boolean = true, thumbna
     val context = LocalContext.current
     var thumbnail by remember(file.id, file.contentUri, file.kind, file.local) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(file.id, file.contentUri, file.kind, file.local, file.transferStatus, loadThumbnail) {
-        thumbnail = when {
-            !loadThumbnail -> null
-            file.kind == MediaKind.Audio || file.transferStatus.inProgress -> null
-            file.local -> {
-                val request = thumbnailRequest(file)
-                withContext(Dispatchers.IO) { loadMediaThumbnail(context, file.kind, request) }
-            }
-            file.kind == MediaKind.Photo || file.kind == MediaKind.Video -> {
-                val request = thumbnailRequest(file)
-                loadDeviceMediaThumbnail(context, file.kind, request)
-            }
-            else -> null
+        thumbnail = null
+        if (!loadThumbnail || file.kind == MediaKind.Audio || file.transferStatus.inProgress) {
+            return@LaunchedEffect
         }
+        val request = thumbnailRequest(file)
+        val cacheKey = mediaThumbnailMemoryKey(file, request, MediaGridThumbnailMaxPx)
+        getMediaThumbnailFromMemory(cacheKey)?.let { cached ->
+            thumbnail = cached
+            return@LaunchedEffect
+        }
+        val loaded = if (file.local) {
+            withContext(Dispatchers.IO) { loadMediaThumbnail(context, file.kind, request, MediaGridThumbnailMaxPx) }
+        } else {
+            loadDeviceMediaThumbnail(context, file.kind, request, MediaGridThumbnailMaxPx)
+        }
+        if (loaded != null) {
+            putMediaThumbnailInMemory(cacheKey, loaded)
+        }
+        thumbnail = loaded
     }
     val brush = when (file.kind) {
         MediaKind.Video -> Brush.linearGradient(listOf(Color(0xFF17365D), Color(0xFF0C8DBC), Color(0xFF101827)))
@@ -2082,35 +2104,56 @@ private fun parseMediaInstant(raw: String): Instant? {
 private val ChineseMediaDateTimeFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy年M月d日 HH:mm", Locale.CHINA)
 
-private fun loadMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?): Bitmap? =
+private fun loadMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?, maxPx: Int = MediaThumbnailMaxPx): Bitmap? =
     when (kind) {
-        MediaKind.Photo -> loadImageBitmap(context, request?.value, request?.authorization)
-        MediaKind.Video -> loadVideoFrame(context, request?.value, request?.authorization)
+        MediaKind.Photo -> loadImageBitmap(context, request?.value, request?.authorization, maxPx)
+        MediaKind.Video -> loadVideoFrame(context, request?.value, request?.authorization, maxPx)
         MediaKind.Audio -> null
     }
 
-private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?): Bitmap? {
+private fun mediaThumbnailMemoryKey(file: MediaFile, request: MediaContentRequest?, maxPx: Int): String =
+    buildString {
+        append(maxPx)
+        append(':')
+        append(file.kind.name)
+        append(':')
+        append(if (file.local) "local" else "device")
+        append(':')
+        append(file.id)
+        append(':')
+        append(file.contentUri.orEmpty())
+        append(':')
+        append(request?.value.orEmpty())
+    }
+
+private fun getMediaThumbnailFromMemory(cacheKey: String): Bitmap? =
+    synchronized(MediaThumbnailMemoryCache) { MediaThumbnailMemoryCache.get(cacheKey) }
+
+private fun putMediaThumbnailInMemory(cacheKey: String, bitmap: Bitmap) {
+    synchronized(MediaThumbnailMemoryCache) { MediaThumbnailMemoryCache.put(cacheKey, bitmap) }
+}
+
+private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?, targetSize: Int = MediaThumbnailMaxPx): Bitmap? {
     val value = request?.value?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return null
-    val targetSize = MediaThumbnailMaxPx
-    val cacheKey = "${kind.name}:$value"
-    DeviceMediaThumbnailCache[cacheKey]?.let { return it }
+    val cacheKey = "${kind.name}:$targetSize:$value"
+    getMediaThumbnailFromMemory(cacheKey)?.let { return it }
     return withContext(Dispatchers.IO) {
         val cachedFile = deviceMediaThumbnailCacheFile(context, cacheKey)
         decodeFileBitmap(cachedFile.absolutePath, targetSize)?.let { cached ->
             cachedFile.setLastModified(System.currentTimeMillis())
-            DeviceMediaThumbnailCache[cacheKey] = cached
+            putMediaThumbnailInMemory(cacheKey, cached)
             return@withContext cached
         }
         val limiter = if (kind == MediaKind.Video) DeviceVideoThumbnailLimiter else DevicePhotoThumbnailLimiter
         limiter.withPermit {
-            DeviceMediaThumbnailCache[cacheKey]?.let { return@withPermit it }
+            getMediaThumbnailFromMemory(cacheKey)?.let { return@withPermit it }
             decodeFileBitmap(cachedFile.absolutePath, targetSize)?.let { cached ->
                 cachedFile.setLastModified(System.currentTimeMillis())
-                DeviceMediaThumbnailCache[cacheKey] = cached
+                putMediaThumbnailInMemory(cacheKey, cached)
                 return@withPermit cached
             }
-            loadRemoteDeviceThumbnail(context, kind, value, request.authorization)?.also { loaded ->
-                DeviceMediaThumbnailCache[cacheKey] = loaded
+            loadRemoteDeviceThumbnail(context, kind, value, request.authorization, targetSize)?.also { loaded ->
+                putMediaThumbnailInMemory(cacheKey, loaded)
                 runCatching {
                     cachedFile.parentFile?.mkdirs()
                     cachedFile.outputStream().use { output ->
@@ -2123,10 +2166,10 @@ private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, 
     }
 }
 
-private fun loadRemoteDeviceThumbnail(context: Context, kind: MediaKind, value: String, authorization: String?): Bitmap? =
+private fun loadRemoteDeviceThumbnail(context: Context, kind: MediaKind, value: String, authorization: String?, maxPx: Int = MediaThumbnailMaxPx): Bitmap? =
     when (kind) {
-        MediaKind.Photo -> loadImageBitmap(context, value, authorization)
-        MediaKind.Video -> loadVideoCoverFrame(context, value, authorization)
+        MediaKind.Photo -> loadImageBitmap(context, value, authorization, maxPx)
+        MediaKind.Video -> loadVideoCoverFrame(context, value, authorization, maxPx)
         MediaKind.Audio -> null
     }
 
@@ -2151,12 +2194,12 @@ private fun String.sha256Key(): String {
     return digest.joinToString("") { "%02x".format(it) }
 }
 
-internal fun loadImageBitmap(context: Context, value: String?, authorization: String? = null): Bitmap? {
+internal fun loadImageBitmap(context: Context, value: String?, authorization: String? = null, maxPx: Int = MediaThumbnailMaxPx): Bitmap? {
     val uri = value?.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: return null
     return runCatching {
         when {
-            uri.scheme == "content" -> decodeContentBitmap(context, uri)
-            uri.scheme == "file" -> uri.path?.let { decodeFileBitmap(it) }
+            uri.scheme == "content" -> decodeContentBitmap(context, uri, maxPx)
+            uri.scheme == "file" -> uri.path?.let { decodeFileBitmap(it, maxPx) }
             value.startsWith("http://") || value.startsWith("https://") -> {
                 val connection = (URL(value).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 4_000
@@ -2167,28 +2210,28 @@ internal fun loadImageBitmap(context: Context, value: String?, authorization: St
                     val bytes = connection.inputStream.use { input ->
                         input.readBytes(limit = RemoteImageThumbnailMaxBytes)
                     }
-                    decodeByteArrayBitmap(bytes)
+                    decodeByteArrayBitmap(bytes, maxPx)
                 } finally {
                     connection.disconnect()
                 }
             }
-            value.startsWith("/") -> decodeFileBitmap(value)
+            value.startsWith("/") -> decodeFileBitmap(value, maxPx)
             else -> null
         }
     }.getOrNull()
 }
 
-private fun decodeContentBitmap(context: Context, uri: Uri): Bitmap? {
+private fun decodeContentBitmap(context: Context, uri: Uri, maxPx: Int = MediaThumbnailMaxPx): Bitmap? {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         return ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-            val target = info.size.thumbnailTargetSize() ?: return@decodeBitmap
+            val target = info.size.thumbnailTargetSize(maxPx) ?: return@decodeBitmap
             decoder.setTargetSize(target.first, target.second)
         }
     }
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize() }
+    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize(maxPx) }
     return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
 }
 
@@ -2199,10 +2242,10 @@ private fun decodeFileBitmap(path: String, maxPx: Int = MediaThumbnailMaxPx): Bi
     return BitmapFactory.decodeFile(path, options)
 }
 
-private fun decodeByteArrayBitmap(bytes: ByteArray): Bitmap? {
+private fun decodeByteArrayBitmap(bytes: ByteArray, maxPx: Int = MediaThumbnailMaxPx): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize() }
+    val options = BitmapFactory.Options().apply { inSampleSize = bounds.thumbnailSampleSize(maxPx) }
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 }
 
@@ -2244,10 +2287,10 @@ private fun java.io.InputStream.readBytes(limit: Long): ByteArray {
     return output.toByteArray()
 }
 
-private fun android.util.Size.thumbnailTargetSize(): Pair<Int, Int>? {
+private fun android.util.Size.thumbnailTargetSize(maxPx: Int = MediaThumbnailMaxPx): Pair<Int, Int>? {
     val maxDim = maxOf(width, height)
-    if (maxDim <= MediaThumbnailMaxPx || width <= 0 || height <= 0) return null
-    val scale = MediaThumbnailMaxPx.toFloat() / maxDim.toFloat()
+    if (maxDim <= maxPx || width <= 0 || height <= 0 || maxPx <= 0) return null
+    val scale = maxPx.toFloat() / maxDim.toFloat()
     return (width * scale).roundToInt().coerceAtLeast(1) to (height * scale).roundToInt().coerceAtLeast(1)
 }
 
@@ -2261,8 +2304,8 @@ private fun BitmapFactory.Options.thumbnailSampleSize(maxPx: Int = MediaThumbnai
     return sampleSize
 }
 
-private fun loadVideoFrame(context: Context, value: String?, authorization: String? = null): Bitmap? =
-    loadVideoCoverFrame(context, value, authorization)
+private fun loadVideoFrame(context: Context, value: String?, authorization: String? = null, maxPx: Int = MediaThumbnailMaxPx): Bitmap? =
+    loadVideoCoverFrame(context, value, authorization, maxPx)
 
 private fun loadVideoCoverFrame(
     context: Context,

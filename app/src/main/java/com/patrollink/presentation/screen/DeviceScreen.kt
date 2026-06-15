@@ -1774,8 +1774,9 @@ private fun radarChipPlacements(devices: List<ScannedDevice>): Map<String, Radar
     }.toMap()
 }
 
-private fun List<ScannedDevice>.distinctByDeviceIdentity(): List<ScannedDevice> =
-    groupBy { device -> device.identityKey() }
+private fun List<ScannedDevice>.distinctByDeviceIdentity(): List<ScannedDevice> {
+    return filterNot { it.isRawGlassesControlAlias() }
+        .groupBy { device -> device.identityKey() }
         .values
         .map { group ->
             group.sortedWith(
@@ -1786,6 +1787,7 @@ private fun List<ScannedDevice>.distinctByDeviceIdentity(): List<ScannedDevice> 
                     .thenByDescending { it.signalBars }
             ).first()
         }
+}
 
 private fun ScannedDevice.identityKey(): String =
     when {
@@ -1794,6 +1796,11 @@ private fun ScannedDevice.identityKey(): String =
         id.isNotBlank() -> id
         else -> name
     }
+
+private fun ScannedDevice.isRawGlassesControlAlias(): Boolean =
+    type == DeviceType.Glasses &&
+        serviceUuid == "ute-ble-control-scanned" &&
+        name.startsWith("SMI-", ignoreCase = true)
 
 @Composable
 private fun DiscoveredDeviceCard(
@@ -2025,8 +2032,14 @@ private fun DeviceTypeIcon(
     modifier: Modifier = Modifier,
     fontSize: androidx.compose.ui.unit.TextUnit = 22.sp
 ) {
+    val imageModifier = when (type) {
+        DeviceType.Headset -> Modifier.size(width = (fontSize.value * 1.75f).dp, height = (fontSize.value * 1.18f).dp)
+        DeviceType.Glasses,
+        DeviceType.Recorder -> Modifier.size(width = (fontSize.value * 2.15f).dp, height = (fontSize.value * 0.95f).dp)
+        DeviceType.Sensor -> Modifier.size(width = (fontSize.value * 1.8f).dp, height = (fontSize.value * 0.95f).dp)
+    }
     Box(modifier, contentAlignment = Alignment.Center) {
-        Text(type.emojiIcon, fontSize = fontSize, lineHeight = (fontSize.value * 1.25f).sp, maxLines = 1)
+        DeviceAssetImage(type = type, contentDescription = null, modifier = imageModifier)
     }
 }
 

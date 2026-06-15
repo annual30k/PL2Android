@@ -308,15 +308,10 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
             primaryIcon = previewAction.icon,
             onPrimary = {
                 when (previewAction) {
-                    MediaPrimaryAction.UploadCloud -> {
-                        dismissedTransferFileId = null
-                        viewModel.uploadMedia(file.id, file.local)
-                    }
                     MediaPrimaryAction.UploadPhone -> {
                         dismissedTransferFileId = null
                         viewModel.downloadMedia(file.id)
                     }
-                    MediaPrimaryAction.UploadedCloud -> viewModel.showOperationMessage("${file.name} 已上传", OperationMessageType.Success)
                     MediaPrimaryAction.UploadedPhone -> viewModel.showOperationMessage("${file.name} 已同步到手机", OperationMessageType.Success)
                     MediaPrimaryAction.Busy -> viewModel.showOperationMessage("${file.name} ${mediaStatusLabel(file)}，请稍候", OperationMessageType.Warning)
                 }
@@ -1651,8 +1646,6 @@ private fun mediaStatusLabel(file: MediaFile): String =
     }
 
 private enum class MediaPrimaryAction(val label: String, val icon: ImageVector) {
-    UploadCloud("上传云端", Icons.Filled.UploadFile),
-    UploadedCloud("已上传", Icons.Filled.CloudDone),
     UploadPhone("同步到手机", Icons.Filled.PhoneAndroid),
     UploadedPhone("已同步手机", Icons.Filled.PhoneAndroid),
     Busy("处理中", Icons.Filled.CloudUpload)
@@ -1660,8 +1653,7 @@ private enum class MediaPrimaryAction(val label: String, val icon: ImageVector) 
 
 private fun MediaFile.mediaPrimaryAction(phoneSelected: Boolean): MediaPrimaryAction = when {
     transferStatus.inProgress -> MediaPrimaryAction.Busy
-    phoneSelected && transferStatus == TransferStatus.Done && lastTransferTarget == TransferTarget.Cloud -> MediaPrimaryAction.UploadedCloud
-    phoneSelected -> MediaPrimaryAction.UploadCloud
+    phoneSelected -> MediaPrimaryAction.UploadedPhone
     transferStatus == TransferStatus.Done -> MediaPrimaryAction.UploadedPhone
     else -> MediaPrimaryAction.UploadPhone
 }

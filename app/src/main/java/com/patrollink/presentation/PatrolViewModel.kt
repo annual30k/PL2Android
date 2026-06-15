@@ -1562,6 +1562,8 @@ class PatrolViewModel(
                     return@launch
                 }
                 pending.isEmpty() -> {
+                    refreshPhoneMediaAfterDeviceSync()
+                    _uiState.update { it.copy(selectedMediaLocal = true) }
                     finishDeviceMediaSync(successCount = 0, failedCount = 0)
                     showOperationMessage("设备端文件已在手机端，无需重复同步", OperationMessageType.Success)
                     return@launch

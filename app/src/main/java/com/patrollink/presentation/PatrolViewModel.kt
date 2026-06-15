@@ -585,12 +585,19 @@ class PatrolViewModel(
             val next = (loadedWithState + transient)
                 .distinctBy { it.id to it.local }
                 .markDeviceFilesPresentInPhoneSandbox()
+            val shouldReturnToPhoneMedia =
+                !showFailureMessage &&
+                    !viewingPhone &&
+                    phoneMedia.isNotEmpty() &&
+                    (deviceResult.isFailure || deviceMedia.isEmpty())
+            val nextMediaLocal = if (shouldReturnToPhoneMedia) true else state.selectedMediaLocal
             val nextSelected = state.selectedMediaFileId?.takeIf { selectedId ->
-                next.any { it.id == selectedId && it.local == state.selectedMediaLocal }
-            } ?: next.firstOrNull { it.local == state.selectedMediaLocal }?.id
+                next.any { it.id == selectedId && it.local == nextMediaLocal }
+            } ?: next.firstOrNull { it.local == nextMediaLocal }?.id
             state.copy(
                 mediaFiles = next,
                 selectedMediaFileId = nextSelected,
+                selectedMediaLocal = nextMediaLocal,
                 mediaLoading = false,
                 operationMessage = when {
                     showFailureMessage && !state.selectedMediaLocal && deviceResult.isFailure ->

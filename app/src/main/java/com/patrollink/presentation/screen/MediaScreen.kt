@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -71,6 +72,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -109,19 +111,29 @@ import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 private const val MediaThumbnailMaxPx = 512
 private const val RemoteImageThumbnailMaxBytes = 6L * 1024L * 1024L
+private const val DeviceMediaThumbnailDiskMaxFiles = 256
+private const val DeviceMediaThumbnailDiskMaxBytes = 32L * 1024L * 1024L
+private val DevicePhotoThumbnailLimiter = Semaphore(2)
+private val DeviceVideoThumbnailLimiter = Semaphore(1)
+private val DeviceMediaThumbnailCache = ConcurrentHashMap<String, Bitmap>()
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -134,6 +146,14 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
     var showTimeFilters by remember { mutableStateOf(false) }
     var batchMode by remember { mutableStateOf(false) }
     var batchSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val mediaGridState = rememberLazyGridState()
+    val visibleMediaKeys by remember {
+        derivedStateOf {
+            mediaGridState.layoutInfo.visibleItemsInfo
+                .mapNotNull { it.key as? String }
+                .toSet()
+        }
+    }
     val files = uiState.mediaFiles
         .filter { it.local == uiState.selectedMediaLocal }
         .filter { filter.matches(it.kind) }
@@ -220,14 +240,17 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),
+                        state = mediaGridState,
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(bottom = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         items(files, key = { "${it.local}-${it.id}" }) { file ->
+                            val itemKey = "${file.local}-${file.id}"
                             MediaLibraryTile(
                                 file = file,
+                                loadThumbnail = itemKey in visibleMediaKeys,
                                 selected = selected?.id == file.id,
                                 checked = file.id in batchSelection,
                                 batchMode = batchMode,
@@ -737,6 +760,7 @@ private fun ToolbarCommand(text: String, icon: ImageVector, tint: Color, onClick
 @Composable
 private fun MediaLibraryTile(
     file: MediaFile,
+    loadThumbnail: Boolean,
     selected: Boolean,
     checked: Boolean,
     batchMode: Boolean,
@@ -750,7 +774,7 @@ private fun MediaLibraryTile(
             .aspectRatio(1f)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
-        MediaArtwork(file = file, thumbnailRequest = thumbnailRequest, modifier = Modifier.fillMaxSize())
+        MediaArtwork(file = file, loadThumbnail = loadThumbnail, thumbnailRequest = thumbnailRequest, modifier = Modifier.fillMaxSize())
         CompactKindBadge(file, modifier = Modifier.align(Alignment.TopStart).padding(5.dp))
         CompactCloudBadge(file, modifier = Modifier.align(Alignment.TopEnd).padding(5.dp))
         if (file.kind != MediaKind.Photo) {
@@ -1045,15 +1069,22 @@ private fun BoxScope.MediaKindBadge(file: MediaFile) {
 }
 
 @Composable
-private fun MediaArtwork(file: MediaFile, thumbnailRequest: suspend (MediaFile) -> MediaContentRequest?, modifier: Modifier) {
+private fun MediaArtwork(file: MediaFile, loadThumbnail: Boolean = true, thumbnailRequest: suspend (MediaFile) -> MediaContentRequest?, modifier: Modifier) {
     val context = LocalContext.current
-    var thumbnail by remember(file.id, file.contentUri, file.kind) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(file.id, file.contentUri, file.kind, file.transferStatus) {
-        thumbnail = if (file.kind == MediaKind.Audio || file.transferStatus.inProgress) {
-            null
-        } else {
-            val request = thumbnailRequest(file)
-            withContext(Dispatchers.IO) { loadMediaThumbnail(context, file.kind, request) }
+    var thumbnail by remember(file.id, file.contentUri, file.kind, file.local) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(file.id, file.contentUri, file.kind, file.local, file.transferStatus, loadThumbnail) {
+        thumbnail = when {
+            !loadThumbnail -> null
+            file.kind == MediaKind.Audio || file.transferStatus.inProgress -> null
+            file.local -> {
+                val request = thumbnailRequest(file)
+                withContext(Dispatchers.IO) { loadMediaThumbnail(context, file.kind, request) }
+            }
+            file.kind == MediaKind.Photo || file.kind == MediaKind.Video -> {
+                val request = thumbnailRequest(file)
+                loadDeviceMediaThumbnail(context, file.kind, request)
+            }
+            else -> null
         }
     }
     val brush = when (file.kind) {
@@ -1739,6 +1770,67 @@ private fun loadMediaThumbnail(context: Context, kind: MediaKind, request: Media
         MediaKind.Video -> loadVideoFrame(context, request?.value, request?.authorization)
         MediaKind.Audio -> null
     }
+
+private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?): Bitmap? {
+    val value = request?.value?.takeIf { it.startsWith("http://") || it.startsWith("https://") } ?: return null
+    val cacheKey = "${kind.name}:$value"
+    DeviceMediaThumbnailCache[cacheKey]?.let { return it }
+    return withContext(Dispatchers.IO) {
+        val cachedFile = deviceMediaThumbnailCacheFile(context, cacheKey)
+        decodeFileBitmap(cachedFile.absolutePath)?.let { cached ->
+            cachedFile.setLastModified(System.currentTimeMillis())
+            DeviceMediaThumbnailCache[cacheKey] = cached
+            return@withContext cached
+        }
+        val limiter = if (kind == MediaKind.Video) DeviceVideoThumbnailLimiter else DevicePhotoThumbnailLimiter
+        limiter.withPermit {
+            DeviceMediaThumbnailCache[cacheKey]?.let { return@withPermit it }
+            decodeFileBitmap(cachedFile.absolutePath)?.let { cached ->
+                cachedFile.setLastModified(System.currentTimeMillis())
+                DeviceMediaThumbnailCache[cacheKey] = cached
+                return@withPermit cached
+            }
+            loadRemoteDeviceThumbnail(context, kind, value, request.authorization)?.also { loaded ->
+                DeviceMediaThumbnailCache[cacheKey] = loaded
+                runCatching {
+                    cachedFile.parentFile?.mkdirs()
+                    cachedFile.outputStream().use { output ->
+                        loaded.compress(Bitmap.CompressFormat.JPEG, 82, output)
+                    }
+                    trimDeviceMediaThumbnailCache(cachedFile.parentFile)
+                }
+            }
+        }
+    }
+}
+
+private fun loadRemoteDeviceThumbnail(context: Context, kind: MediaKind, value: String, authorization: String?): Bitmap? =
+    when (kind) {
+        MediaKind.Photo -> loadImageBitmap(context, value, authorization)
+        MediaKind.Video -> loadVideoFrame(context, value, authorization)
+        MediaKind.Audio -> null
+    }
+
+private fun deviceMediaThumbnailCacheFile(context: Context, cacheKey: String): File =
+    File(File(context.cacheDir, "device_media_thumbnails"), "${cacheKey.sha256Key()}.jpg")
+
+private fun trimDeviceMediaThumbnailCache(directory: File?) {
+    val files = directory?.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() }.orEmpty()
+    var totalBytes = files.sumOf { it.length() }
+    files.forEachIndexed { index, file ->
+        if (index >= DeviceMediaThumbnailDiskMaxFiles || totalBytes > DeviceMediaThumbnailDiskMaxBytes) {
+            val length = file.length()
+            if (runCatching { file.delete() }.getOrDefault(false)) {
+                totalBytes -= length
+            }
+        }
+    }
+}
+
+private fun String.sha256Key(): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(toByteArray())
+    return digest.joinToString("") { "%02x".format(it) }
+}
 
 internal fun loadImageBitmap(context: Context, value: String?, authorization: String? = null): Bitmap? {
     val uri = value?.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: return null

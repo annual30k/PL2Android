@@ -63,7 +63,6 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -107,6 +106,8 @@ import com.patrollink.domain.TransferTarget
 import com.patrollink.presentation.MediaContentRequest
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.MediaThumbBackground
+import com.patrollink.presentation.component.PatrolConfirmDialog
+import com.patrollink.presentation.component.PatrolConfirmStyle
 import com.patrollink.presentation.component.StatusTag
 import com.patrollink.presentation.component.SystemBars
 import com.patrollink.presentation.theme.Muted
@@ -383,44 +384,36 @@ fun MediaScreen(uiState: AppUiState, viewModel: PatrolViewModel) {
         )
     }
     pendingDelete?.let { file ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("确认删除") },
-            text = { Text(if (file.local) "删除 ${file.name} 后，手机端列表将不再显示该文件。" else "删除 ${file.name} 后，将向设备发送删除文件指令，并从设备端列表移除。") },
-            confirmButton = {
-                Button(onClick = {
-                    viewModel.deleteMedia(file.id, file.local)
-                    pendingDelete = null
-                }) {
-                    Text("删除")
-                }
+        PatrolConfirmDialog(
+            title = "确认删除",
+            message = if (file.local) {
+                "删除 ${file.name} 后，手机端列表将不再显示该文件。"
+            } else {
+                "删除 ${file.name} 后，将向设备发送删除文件指令，并从设备端列表移除。"
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) {
-                    Text("取消")
-                }
+            warningText = "删除后无法从当前列表直接恢复，请确认文件已经不再需要。",
+            confirmText = "删除",
+            style = PatrolConfirmStyle.Danger,
+            onDismiss = { pendingDelete = null },
+            onConfirm = {
+                viewModel.deleteMedia(file.id, file.local)
+                pendingDelete = null
             }
         )
     }
     pendingBatchDelete.takeIf { it.isNotEmpty() }?.let { ids ->
-        AlertDialog(
-            onDismissRequest = { pendingBatchDelete = emptySet() },
-            title = { Text("批量删除") },
-            text = { Text("确认删除已选 ${ids.size} 个媒体文件？正在传输的文件会自动跳过。") },
-            confirmButton = {
-                Button(onClick = {
-                    viewModel.deleteMediaBatch(ids, uiState.selectedMediaLocal)
-                    batchSelection = emptySet()
-                    batchMode = false
-                    pendingBatchDelete = emptySet()
-                }) {
-                    Text("删除")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingBatchDelete = emptySet() }) {
-                    Text("取消")
-                }
+        PatrolConfirmDialog(
+            title = "批量删除",
+            message = "确认删除已选 ${ids.size} 个媒体文件？正在传输的文件会自动跳过。",
+            warningText = "批量删除会一次性移除多个文件，请确认选择范围正确。",
+            confirmText = "删除",
+            style = PatrolConfirmStyle.Danger,
+            onDismiss = { pendingBatchDelete = emptySet() },
+            onConfirm = {
+                viewModel.deleteMediaBatch(ids, uiState.selectedMediaLocal)
+                batchSelection = emptySet()
+                batchMode = false
+                pendingBatchDelete = emptySet()
             }
         )
     }

@@ -196,6 +196,7 @@ data class AppUiState(
     val deviceSettings: DeviceAdvancedSettings = DeviceAdvancedSettings(),
     val deviceEvents: List<DeviceEvent> = emptyList(),
     val realtimeAudioSyncing: Boolean = false,
+    val unbindingDeviceIds: Set<String> = emptySet(),
     val device: DeviceStatus,
     val connectedDevices: List<DeviceStatus> = emptyList(),
     val scannedDevices: List<ScannedDevice> = emptyList(),

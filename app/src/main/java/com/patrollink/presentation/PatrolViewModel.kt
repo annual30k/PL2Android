@@ -1089,26 +1089,36 @@ class PatrolViewModel(
         scannedName: String = "",
         scannedType: DeviceType = DeviceType.Headset
     ) = viewModelScope.launch {
-        val target = resolveConnectedDevice(scannedId, macAddress, scannedName, scannedType)
-        if (target == null) {
-            showOperationMessage("当前没有可解绑设备", OperationMessageType.Warning)
-            return@launch
-        }
-        val gateway = deviceControlGateway
-        if (gateway != null && target.canReceiveDeviceCommand()) {
-            val cleared = runCatching { gateway.clearDeviceAccount() }.getOrDefault(false)
-            if (!cleared) {
-                unbindDeviceLocally(
-                    deviceId = target.id,
-                    message = "设备端账号清除失败，已移除 PatrolLink 本地绑定；如仍无法重连，请在设备侧重置配对",
-                    messageType = OperationMessageType.Warning
-                )
+        val requestedKeys = listOf(scannedId, macAddress).filter { it.isNotBlank() }
+        requestedKeys.forEach { setDeviceUnbinding(it, true) }
+        var target: DeviceStatus? = null
+        try {
+            target = resolveConnectedDevice(scannedId, macAddress, scannedName, scannedType)
+            val resolvedTarget = target
+            if (resolvedTarget == null) {
+                showOperationMessage("当前没有可解绑设备", OperationMessageType.Warning)
                 return@launch
             }
-            markDeviceRequiresRepairing(target, "设备账号已清除，请重新配对 PatrolLink")
-            return@launch
+            setDeviceUnbinding(resolvedTarget.id, true)
+            val gateway = deviceControlGateway
+            if (gateway != null && resolvedTarget.canReceiveDeviceCommand()) {
+                val cleared = runCatching { gateway.clearDeviceAccount() }.getOrDefault(false)
+                if (!cleared) {
+                    unbindDeviceLocally(
+                        deviceId = resolvedTarget.id,
+                        message = "设备端账号清除失败，已移除 PatrolLink 本地绑定；如仍无法重连，请在设备侧重置配对",
+                        messageType = OperationMessageType.Warning
+                    )
+                    return@launch
+                }
+                markDeviceRequiresRepairing(resolvedTarget, "设备账号已清除，请重新配对 PatrolLink")
+                return@launch
+            }
+            unbindDeviceLocally(resolvedTarget.id)
+        } finally {
+            requestedKeys.forEach { setDeviceUnbinding(it, false) }
+            target?.id?.let { setDeviceUnbinding(it, false) }
         }
-        unbindDeviceLocally(target.id)
     }
 
     fun clearConnectedDeviceAccount() = viewModelScope.launch {
@@ -1164,13 +1174,19 @@ class PatrolViewModel(
                 deviceCapabilities = DeviceCapabilities(),
                 deviceWifiState = DeviceWifiState(),
                 realtimeAudioSyncing = false,
+                unbindingDeviceIds = state.unbindingDeviceIds - device.id,
                 operationMessage = operationMessage(message, OperationMessageType.Warning)
             )
         }
     }
 
     fun unbindDevice(deviceId: String) = viewModelScope.launch {
-        unbindDeviceLocally(deviceId)
+        setDeviceUnbinding(deviceId, true)
+        try {
+            unbindDeviceLocally(deviceId)
+        } finally {
+            setDeviceUnbinding(deviceId, false)
+        }
     }
 
     private suspend fun unbindDeviceLocally(
@@ -1200,11 +1216,24 @@ class PatrolViewModel(
                 deviceCapabilities = DeviceCapabilities(),
                 deviceWifiState = DeviceWifiState(),
                 realtimeAudioSyncing = false,
+                unbindingDeviceIds = state.unbindingDeviceIds - deviceId,
                 operationMessage = operationMessage(
                     message ?: "${target?.name?.ifBlank { "设备" } ?: "设备"} 已解绑",
                     messageType
                 )
             )
+        }
+    }
+
+    private fun setDeviceUnbinding(deviceId: String, loading: Boolean) {
+        if (deviceId.isBlank()) return
+        _uiState.update { state ->
+            val nextIds = if (loading) {
+                state.unbindingDeviceIds + deviceId
+            } else {
+                state.unbindingDeviceIds - deviceId
+            }
+            if (nextIds == state.unbindingDeviceIds) state else state.copy(unbindingDeviceIds = nextIds)
         }
     }
 

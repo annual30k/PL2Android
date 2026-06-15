@@ -85,6 +85,8 @@ import com.patrollink.presentation.component.DeviceStatPill
 import com.patrollink.presentation.component.MetricTile
 import com.patrollink.presentation.component.OfflineBanner
 import com.patrollink.presentation.component.PatrolCard
+import com.patrollink.presentation.component.PatrolConfirmDialog
+import com.patrollink.presentation.component.PatrolConfirmStyle
 import com.patrollink.presentation.component.StatusTag
 import com.patrollink.presentation.component.SystemBars
 import com.patrollink.presentation.theme.PatrolDisplay
@@ -592,147 +594,95 @@ private fun ResetPairingDialog(
     val colors = PatrolDisplay.colors
     val pendingAction = remember { mutableStateOf<MoreConfirmAction?>(null) }
     val action = pendingAction.value
+    if (action != null) {
+        PatrolConfirmDialog(
+            title = action.confirmTitle,
+            message = action.confirmMessage,
+            warningText = action.warningText,
+            confirmText = action.confirmButton,
+            style = PatrolConfirmStyle.Danger,
+            onDismiss = { pendingAction.value = null },
+            onConfirm = {
+                when (action) {
+                    MoreConfirmAction.ClearAccount -> onClearAccount()
+                    MoreConfirmAction.ResetHeadset -> onResetHeadset()
+                    MoreConfirmAction.ResetGlasses -> onResetGlasses()
+                }
+            }
+        )
+        return
+    }
     AlertDialog(
         containerColor = colors.surface,
         tonalElevation = 0.dp,
-        onDismissRequest = {
-            if (action == null) {
-                onDismiss()
-            } else {
-                pendingAction.value = null
-            }
-        },
+        onDismissRequest = onDismiss,
         title = {
-            if (action == null) {
-                Row(
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(TechBlue.copy(alpha = 0.08f))
+                    .border(1.dp, TechBlue.copy(alpha = 0.16f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
                     Modifier
-                        .fillMaxWidth()
+                        .size(34.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(TechBlue.copy(alpha = 0.08f))
-                        .border(1.dp, TechBlue.copy(alpha = 0.16f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        .background(TechBlue.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        Modifier
-                            .size(34.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(TechBlue.copy(alpha = 0.14f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Filled.MoreHoriz, contentDescription = null, tint = TechBlue, modifier = Modifier.size(22.dp))
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("更多设备操作", color = colors.text, fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Black)
-                        Text("用于处理配对异常或设备重置", color = TechBlue, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black)
-                    }
+                    Icon(Icons.Filled.MoreHoriz, contentDescription = null, tint = TechBlue, modifier = Modifier.size(22.dp))
                 }
-            } else {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Danger.copy(alpha = 0.08f))
-                        .border(1.dp, Danger.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Box(
-                        Modifier
-                            .size(34.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Danger.copy(alpha = 0.14f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Filled.Info, contentDescription = null, tint = Danger, modifier = Modifier.size(21.dp))
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(action.confirmTitle, color = colors.text, fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Black)
-                        Text("请再次确认后继续", color = Danger, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black)
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("更多设备操作", color = colors.text, fontSize = 20.sp, lineHeight = 25.sp, fontWeight = FontWeight.Black)
+                    Text("用于处理配对异常或设备重置", color = TechBlue, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black)
                 }
             }
         },
         text = {
-            if (action == null) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    MoreActionRow(
-                        title = "清除配对账号",
-                        description = "解除当前账号与设备的绑定关系",
-                        icon = Icons.Filled.Router,
-                        accent = TechBlue,
-                        danger = false,
-                        onClick = { pendingAction.value = MoreConfirmAction.ClearAccount }
-                    )
-                    MoreActionRow(
-                        title = "恢复耳机出厂",
-                        description = "清除耳机端数据，完成后需要重新配对",
-                        icon = Icons.Filled.Mic,
-                        accent = Danger,
-                        danger = true,
-                        onClick = { pendingAction.value = MoreConfirmAction.ResetHeadset }
-                    )
-                    MoreActionRow(
-                        title = "恢复眼镜出厂",
-                        description = "清除眼镜端数据，完成后需要重新配对",
-                        icon = Icons.Filled.CameraAlt,
-                        accent = Danger,
-                        danger = true,
-                        onClick = { pendingAction.value = MoreConfirmAction.ResetGlasses }
-                    )
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Warning.copy(alpha = 0.10f))
-                            .border(1.dp, Warning.copy(alpha = 0.24f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        Text("恢复出厂会删除设备端数据，请确认设备在身边后再操作。", color = Warning, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
-                    }
-                }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(action.confirmMessage, color = colors.textMuted, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Danger.copy(alpha = 0.08f))
-                            .border(1.dp, Danger.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 9.dp)
-                    ) {
-                        Text(action.warningText, color = Danger, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
-                    }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                MoreActionRow(
+                    title = "清除配对账号",
+                    description = "解除当前账号与设备的绑定关系",
+                    icon = Icons.Filled.Router,
+                    accent = TechBlue,
+                    danger = false,
+                    onClick = { pendingAction.value = MoreConfirmAction.ClearAccount }
+                )
+                MoreActionRow(
+                    title = "恢复耳机出厂",
+                    description = "清除耳机端数据，完成后需要重新配对",
+                    icon = Icons.Filled.Mic,
+                    accent = Danger,
+                    danger = true,
+                    onClick = { pendingAction.value = MoreConfirmAction.ResetHeadset }
+                )
+                MoreActionRow(
+                    title = "恢复眼镜出厂",
+                    description = "清除眼镜端数据，完成后需要重新配对",
+                    icon = Icons.Filled.CameraAlt,
+                    accent = Danger,
+                    danger = true,
+                    onClick = { pendingAction.value = MoreConfirmAction.ResetGlasses }
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Warning.copy(alpha = 0.10f))
+                        .border(1.dp, Warning.copy(alpha = 0.24f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    Text("恢复出厂会删除设备端数据，请确认设备在身边后再操作。", color = Warning, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
                 }
             }
         },
         confirmButton = {
-            if (action == null) {
-                TextButton(onClick = onDismiss) {
-                    Text("关闭", color = colors.textMuted, fontWeight = FontWeight.Black)
-                }
-            } else {
-                TextButton(
-                    onClick = {
-                        when (action) {
-                            MoreConfirmAction.ClearAccount -> onClearAccount()
-                            MoreConfirmAction.ResetHeadset -> onResetHeadset()
-                            MoreConfirmAction.ResetGlasses -> onResetGlasses()
-                        }
-                    }
-                ) {
-                    Text(action.confirmButton, color = Danger, fontWeight = FontWeight.Black)
-                }
-            }
-        },
-        dismissButton = {
-            if (action != null) {
-                TextButton(onClick = { pendingAction.value = null }) {
-                    Text("取消", color = colors.textMuted, fontWeight = FontWeight.Black)
-                }
+            TextButton(onClick = onDismiss) {
+                Text("关闭", color = colors.textMuted, fontWeight = FontWeight.Black)
             }
         }
     )
@@ -1165,42 +1115,19 @@ private fun HeadsetActions(device: DeviceStatus, capabilities: DeviceCapabilitie
         }
     }
     if (confirmClearAccount.value) {
-        AlertDialog(
-            onDismissRequest = { confirmClearAccount.value = false },
-            title = { Text("重置设备配对") },
-            text = { Text("先尝试清除设备账号；如果设备仍提示账号不一致，可恢复耳机或眼镜模块出厂设置。恢复出厂会删除设备端数据，完成后需要重新搜索并配对 PatrolLink。") },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
-                        onClick = {
-                            confirmClearAccount.value = false
-                            viewModel.clearConnectedDeviceAccount()
-                        }
-                    ) {
-                        Text("清账号", color = Danger)
-                    }
-                    TextButton(
-                        onClick = {
-                            confirmClearAccount.value = false
-                            viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Headset)
-                        }
-                    ) {
-                        Text("恢复耳机", color = Danger)
-                    }
-                    TextButton(
-                        onClick = {
-                            confirmClearAccount.value = false
-                            viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Glasses)
-                        }
-                    ) {
-                        Text("恢复眼镜", color = Danger)
-                    }
-                }
+        ResetPairingDialog(
+            onDismiss = { confirmClearAccount.value = false },
+            onClearAccount = {
+                confirmClearAccount.value = false
+                viewModel.clearConnectedDeviceAccount()
             },
-            dismissButton = {
-                TextButton(onClick = { confirmClearAccount.value = false }) {
-                    Text("取消")
-                }
+            onResetHeadset = {
+                confirmClearAccount.value = false
+                viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Headset)
+            },
+            onResetGlasses = {
+                confirmClearAccount.value = false
+                viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Glasses)
             }
         )
     }
@@ -1595,6 +1522,7 @@ fun AddDeviceScreen(
                         device = device,
                         palette = palette,
                         connected = connected,
+                        unbindLoading = connected && device.isUnbinding(uiState.unbindingDeviceIds, connectedDevices),
                         onUnbind = {
                             viewModel.unbindDiscoveredDevice(
                                 scannedId = device.id,
@@ -1807,10 +1735,18 @@ private fun DiscoveredDeviceCard(
     device: ScannedDevice,
     palette: AddDevicePalette,
     connected: Boolean,
+    unbindLoading: Boolean,
     onUnbind: () -> Unit,
     onConnect: () -> Unit
 ) {
     val confirmUnbind = remember { mutableStateOf(false) }
+    val unbindRequested = remember { mutableStateOf(false) }
+    LaunchedEffect(unbindLoading) {
+        if (unbindRequested.value && !unbindLoading) {
+            confirmUnbind.value = false
+            unbindRequested.value = false
+        }
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -1864,36 +1800,40 @@ private fun DiscoveredDeviceCard(
                     else if (device.bonded) Color(0xFF2F7DF6)
                     else Color(0xFF4D8DF6)
                 )
-                .clickable(onClick = if (connected) { { confirmUnbind.value = true } } else onConnect),
+                .clickable(
+                    enabled = !unbindLoading,
+                    onClick = if (connected) { { confirmUnbind.value = true } } else onConnect
+                ),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                if (connected) "解绑" else "连接",
-                color = Color.White,
-                style = PatrolTextStyle.BodyStrong.copy(fontSize = 12.sp, lineHeight = 16.sp),
-                maxLines = 1
-            )
+            if (unbindLoading) {
+                CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+            } else {
+                Text(
+                    if (connected) "解绑" else "连接",
+                    color = Color.White,
+                    style = PatrolTextStyle.BodyStrong.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                    maxLines = 1
+                )
+            }
         }
     }
     if (confirmUnbind.value) {
-        AlertDialog(
-            onDismissRequest = { confirmUnbind.value = false },
-            title = { Text("解除设备绑定") },
-            text = { Text("将清除设备账号并从 PatrolLink 移除当前绑定。完成后需要重新搜索并配对设备。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmUnbind.value = false
-                        onUnbind()
-                    }
-                ) {
-                    Text("解除绑定", color = Danger)
-                }
+        PatrolConfirmDialog(
+            title = "解除设备绑定",
+            message = "将清除设备账号并从 PatrolLink 移除当前绑定。完成后需要重新搜索并配对设备。",
+            warningText = "解绑过程中请勿重复点击，设备端清除失败时会保留明确提示。",
+            confirmText = "解除绑定",
+            loading = unbindRequested.value || unbindLoading,
+            loadingText = "正在解绑",
+            style = PatrolConfirmStyle.Danger,
+            onDismiss = {
+                confirmUnbind.value = false
+                unbindRequested.value = false
             },
-            dismissButton = {
-                TextButton(onClick = { confirmUnbind.value = false }) {
-                    Text("取消")
-                }
+            onConfirm = {
+                unbindRequested.value = true
+                onUnbind()
             }
         )
     }
@@ -1961,6 +1901,19 @@ private fun ScannedDevice.isConnected(connectedDevices: List<DeviceStatus>): Boo
                     scannedMac.contains(deviceId)
                 ) ||
             isKnownDualModeAudioDevice() && device.type == DeviceType.Headset && hasSimilarAudioName(device.name, name)
+    }
+}
+
+private fun ScannedDevice.isUnbinding(unbindingDeviceIds: Set<String>, connectedDevices: List<DeviceStatus>): Boolean {
+    if (unbindingDeviceIds.isEmpty()) return false
+    val matchingConnectedIds = connectedDevices
+        .filter { connected -> this.isConnected(listOf(connected)) }
+        .map { it.id.normalizedDeviceKey() }
+        .toSet()
+    val scannedKeys = setOf(id.normalizedDeviceKey(), macAddress.normalizedDeviceKey()).filter { it.isNotBlank() }
+    return unbindingDeviceIds.any { pending ->
+        val pendingKey = pending.normalizedDeviceKey()
+        pendingKey.isNotBlank() && (pendingKey in scannedKeys || pendingKey in matchingConnectedIds)
     }
 }
 

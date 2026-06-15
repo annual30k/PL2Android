@@ -29,9 +29,12 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +43,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,6 +56,116 @@ import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
+
+enum class PatrolConfirmStyle {
+    Normal,
+    Warning,
+    Danger
+}
+
+@Composable
+fun PatrolConfirmDialog(
+    title: String,
+    message: String,
+    confirmText: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    dismissText: String = "取消",
+    warningText: String? = null,
+    style: PatrolConfirmStyle = PatrolConfirmStyle.Danger,
+    loading: Boolean = false,
+    loadingText: String = "正在处理",
+    icon: ImageVector? = null
+) {
+    val colors = PatrolDisplay.colors
+    val accent = when (style) {
+        PatrolConfirmStyle.Normal -> TechBlue
+        PatrolConfirmStyle.Warning -> Warning
+        PatrolConfirmStyle.Danger -> Danger
+    }
+    AlertDialog(
+        modifier = modifier,
+        containerColor = colors.surface,
+        tonalElevation = 0.dp,
+        shape = RoundedCornerShape(12.dp),
+        onDismissRequest = { if (!loading) onDismiss() },
+        title = {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accent.copy(alpha = 0.08f))
+                    .border(1.dp, accent.copy(alpha = 0.18f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(accent.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon ?: Icons.Filled.Info, contentDescription = null, tint = accent, modifier = Modifier.size(21.dp))
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, color = colors.text, fontSize = 19.sp, lineHeight = 24.sp, fontWeight = FontWeight.Black)
+                    Text(if (loading) loadingText else "请确认后继续", color = accent, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(message, color = colors.textMuted, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold)
+                warningText?.takeIf { it.isNotBlank() }?.let { warning ->
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(accent.copy(alpha = 0.08f))
+                            .border(1.dp, accent.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 9.dp)
+                    ) {
+                        Text(warning, color = accent, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = !loading,
+                shape = RoundedCornerShape(9.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = accent,
+                    disabledContainerColor = accent.copy(alpha = 0.62f),
+                    contentColor = Color.White,
+                    disabledContentColor = Color.White
+                ),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(loadingText, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+                } else {
+                    Text(confirmText, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !loading) {
+                Text(dismissText, color = colors.textMuted.copy(alpha = if (loading) 0.48f else 1f), fontWeight = FontWeight.Black)
+            }
+        }
+    )
+}
 
 @Composable
 fun ForceTopBar(

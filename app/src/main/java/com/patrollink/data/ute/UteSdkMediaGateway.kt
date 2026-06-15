@@ -19,6 +19,7 @@ import com.yc.nadalsdk.bean.smart.DeleteGlassesFilesByName
 import com.yc.nadalsdk.bean.smart.SmartAudioDataInfo
 import com.yc.nadalsdk.bean.smart.SmartImageDataInfo
 import com.yc.nadalsdk.constants.NotifyType
+import com.yc.nadalsdk.constants.recorder.DeleteFileResult
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineStart
@@ -322,7 +323,10 @@ class UteSdkMediaGateway(
             fileType = AudioFileType
         }
         return withContext(Dispatchers.IO) {
-            runCatching { bridge.connection.deleteAudioRecordFile(request).isSuccess }.getOrDefault(false)
+            runCatching {
+                val response = bridge.connection.deleteAudioRecordFile(request)
+                audioDeleteSucceeded(response.isSuccess, response.data?.result)
+            }.getOrDefault(false)
         }
     }
 
@@ -664,6 +668,9 @@ internal fun wifiDeviceFileNameForDelete(fileId: String, mediaName: String?): St
         ?.takeIf { it.isNotBlank() }
     return cleaned
 }
+
+internal fun audioDeleteSucceeded(responseSuccess: Boolean, result: Int?): Boolean =
+    responseSuccess && result == DeleteFileResult.DELETE_SUCCESS
 
 internal fun requireUteCloudUploadResult(fileId: String, uploaded: MediaFile?): MediaFile =
     uploaded ?: error("media upload did not return uploaded file: $fileId")

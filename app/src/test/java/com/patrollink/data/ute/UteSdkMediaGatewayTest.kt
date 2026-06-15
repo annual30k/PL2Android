@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import com.yc.nadalsdk.constants.recorder.DeleteFileResult
 
 class UteSdkMediaGatewayTest {
     @get:Rule
@@ -32,6 +33,14 @@ class UteSdkMediaGatewayTest {
         assertNull(wifiDeviceFileNameForDelete("ute-photo-local", "眼镜照片_IMG.jpg"))
         assertNull(wifiDeviceFileNameForDelete("ute-wifi-abcd", null))
         assertNull(wifiDeviceFileNameForDelete("ute-wifi-abcd", ""))
+    }
+
+    @Test
+    fun audioDeleteRequiresSdkBusinessSuccess() {
+        assertEquals(true, audioDeleteSucceeded(responseSuccess = true, result = DeleteFileResult.DELETE_SUCCESS))
+        assertEquals(false, audioDeleteSucceeded(responseSuccess = true, result = DeleteFileResult.DELETE_FAIL_RECORDING_IN_PROGRESS))
+        assertEquals(false, audioDeleteSucceeded(responseSuccess = true, result = null))
+        assertEquals(false, audioDeleteSucceeded(responseSuccess = false, result = DeleteFileResult.DELETE_SUCCESS))
     }
 
     @Test

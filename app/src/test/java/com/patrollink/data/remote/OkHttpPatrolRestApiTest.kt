@@ -21,6 +21,47 @@ class OkHttpPatrolRestApiTest {
     }
 
     @Test
+    fun currentUserMapsAvatarFromBackendProfile() = runTest {
+        val server = MockWebServer()
+        server.use {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody(
+                        envelope(
+                            """
+                            {
+                              "userId":"1",
+                              "name":"张警官",
+                              "badgeNo":"POLICE_9527",
+                              "department":"第一巡逻支队",
+                              "phone":"13800009527",
+                              "email":"zhang.police@city.gov.cn",
+                              "dutyArea":"福州温泉公园",
+                              "shiftDuration":"05:24:12",
+                              "patrolGroup":"巡逻组 A-42",
+                              "systemNode":"0x4F2A",
+                              "avatar":"http://192.168.11.157:9000/patrol/avatar/officer.png"
+                            }
+                            """.trimIndent()
+                        )
+                    )
+            )
+            val api = OkHttpPatrolRestApi(
+                baseUrl = server.url("/").toString(),
+                tokenProvider = { "access-token" },
+                clientIdProvider = { "client-id" }
+            )
+
+            val user = api.currentUser().data.toDomain()
+
+            assertEquals("http://192.168.11.157:9000/patrol/avatar/officer.png", user.avatarUrl)
+            assertEquals("/api/v1/users/me", server.takeRequest().path)
+        }
+    }
+
+    @Test
     fun resumableUploadCreatesTaskSkipsUploadedChunksAndCompletes() = runTest {
         val server = MockWebServer()
         val media = File.createTempFile("patrol-media", ".bin").apply {

@@ -44,7 +44,8 @@ data class UserProfileDto(
     val dutyArea: String,
     val shiftDuration: String,
     val patrolGroup: String,
-    val systemNode: String
+    val systemNode: String,
+    val avatar: String? = null
 )
 
 data class CerebellumSettingsDto(

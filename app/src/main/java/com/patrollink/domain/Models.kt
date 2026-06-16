@@ -24,7 +24,8 @@ data class UserProfile(
     val dutyArea: String,
     val shiftDuration: String,
     val patrolGroup: String,
-    val systemNode: String
+    val systemNode: String,
+    val avatarUrl: String? = null
 )
 
 data class PatrolGeoPoint(

@@ -70,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
@@ -150,7 +152,23 @@ fun ProfileScreen(
                                 .background(Brush.linearGradient(listOf(Color(0xFF0B63F6), Color(0xFF0B1326)))),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Filled.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(42.dp))
+                            if (!user.avatarUrl.isNullOrBlank()) {
+                                var isSuccess by remember(user.avatarUrl) { mutableStateOf(false) }
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    AsyncImage(
+                                        model = user.avatarUrl,
+                                        contentDescription = "用户头像",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                        onSuccess = { isSuccess = true }
+                                    )
+                                    if (!isSuccess) {
+                                        Icon(Icons.Filled.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(42.dp))
+                                    }
+                                }
+                            } else {
+                                Icon(Icons.Filled.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(42.dp))
+                            }
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

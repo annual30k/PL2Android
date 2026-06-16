@@ -56,7 +56,8 @@ class MockRestApi {
             dutyArea = "福州温泉公园",
             shiftDuration = "05:24:12",
             patrolGroup = "巡逻组 A-42 | 温泉公园重点巡区",
-            systemNode = "0x4F2A"
+            systemNode = "0x4F2A",
+            avatar = null
         )
     )
 

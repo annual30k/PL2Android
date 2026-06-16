@@ -31,7 +31,7 @@ import com.patrollink.domain.VersionCheckResult
 
 fun AuthSessionDto.toDomain() = AuthSession(accessToken, refreshToken, expiresInSeconds)
 
-fun UserProfileDto.toDomain() = UserProfile(name, badgeNo, department, phone, email, dutyArea, shiftDuration, patrolGroup, systemNode)
+fun UserProfileDto.toDomain() = UserProfile(name, badgeNo, department, phone, email, dutyArea, shiftDuration, patrolGroup, systemNode, avatar)
 
 fun DeviceStatusDto.toDomain() = DeviceStatus(
     id = deviceId,

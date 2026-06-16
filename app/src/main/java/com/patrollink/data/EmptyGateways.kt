@@ -3,6 +3,7 @@ package com.patrollink.data
 import com.patrollink.domain.AlertGateway
 import com.patrollink.domain.AlertItem
 import com.patrollink.domain.AlertResult
+import com.patrollink.domain.AlertAttachment
 import com.patrollink.domain.AuthGateway
 import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DeviceAdvancedSettings
@@ -92,7 +93,7 @@ class EmptyDeviceControlGateway : DeviceControlGateway {
 class EmptyAlertGateway : AlertGateway {
     override fun observeAlerts(): Flow<List<AlertItem>> = flowOf(emptyList())
     override suspend fun acknowledge(alertId: String): AlertItem = error("警情后端未配置")
-    override suspend fun close(alertId: String, result: AlertResult, note: String): AlertItem = error("警情后端未配置")
+    override suspend fun close(alertId: String, result: AlertResult, note: String, attachments: List<AlertAttachment>): AlertItem = error("警情后端未配置")
 }
 
 class EmptyMediaGateway : MediaGateway {

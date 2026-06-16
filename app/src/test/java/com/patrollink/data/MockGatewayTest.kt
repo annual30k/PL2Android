@@ -2,6 +2,7 @@ package com.patrollink.data
 
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
+import com.patrollink.domain.AlertAttachment
 import com.patrollink.domain.DeviceCommand
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.GpsLocation
@@ -51,6 +52,36 @@ class MockGatewayTest {
 
         assertEquals(AlertStatus.Handling, handling.status)
         assertEquals(AlertStatus.Closed, closed.status)
+    }
+
+    @Test
+    fun alertCloseSubmitsDocumentAlignedResultAndAttachments() = runTest {
+        val api = com.patrollink.data.remote.MockRestApi()
+        val gateway = MockAlertGateway(api)
+        val alert = gateway.observeAlerts().first().first { it.status == AlertStatus.Pending }
+
+        gateway.close(
+            alert.id,
+            AlertResult.TakenAway,
+            "现场核验后带离",
+            listOf(
+                AlertAttachment(
+                    clientFileId = "local-evidence-1",
+                    fileName = "现场证据.jpg",
+                    mimeType = "image/jpeg",
+                    sizeBytes = 1024,
+                    source = "CAMERA",
+                    localUri = "content://patrollink/evidence/1",
+                    uploadIntent = "UPLOAD_NOW"
+                )
+            )
+        )
+
+        val request = requireNotNull(api.lastAlertCloseRequest)
+        assertEquals("TAKEN_AWAY", request.result)
+        assertEquals("现场核验后带离", request.note)
+        assertEquals(1, request.attachments.size)
+        assertEquals("UPLOAD_NOW", request.attachments.first().uploadIntent)
     }
 
     @Test

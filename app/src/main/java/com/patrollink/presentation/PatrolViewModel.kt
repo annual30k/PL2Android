@@ -20,6 +20,7 @@ import com.patrollink.data.remote.CerebellumSettingsDto
 import com.patrollink.data.remote.DailyReportContentUpdateDto
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.remote.UploadAttachmentDto
+import com.patrollink.domain.AlertAttachment
 import com.patrollink.domain.AlertResult
 import com.patrollink.domain.AlertStatus
 import com.patrollink.domain.AuthSession
@@ -894,7 +895,7 @@ class PatrolViewModel(
         attachments: List<UploadAttachmentDto> = emptyList()
     ) = viewModelScope.launch {
         val payload = alertSubmitPayload(alertId, result, note, attachments)
-        coordinator.handleAlert(alertId, result, note)
+        coordinator.handleAlert(alertId, result, note, payload.attachments.map { it.toDomainAttachment() })
         _uiState.update {
             it.copy(alerts = it.alerts.map { alert ->
                 if (alert.id == alertId) alert.copy(status = AlertStatus.Closed) else alert
@@ -910,6 +911,8 @@ class PatrolViewModel(
     ) {
         val payload = alertDraftPayload(alertId, result, note, attachments)
         val resultLabel = when (result) {
+            AlertResult.Questioned -> "已盘问"
+            AlertResult.TakenAway -> "已带离"
             AlertResult.Resolved -> "已处置"
             AlertResult.FalseAlarm -> "误报"
             AlertResult.RequestBackup -> "请求增援"
@@ -944,10 +947,22 @@ class PatrolViewModel(
     )
 
     private fun AlertResult.toApiValue(): String = when (this) {
+        AlertResult.Questioned -> "QUESTIONED"
+        AlertResult.TakenAway -> "TAKEN_AWAY"
         AlertResult.FalseAlarm -> "FALSE_ALARM"
         AlertResult.Resolved -> "RESOLVED"
         AlertResult.RequestBackup -> "REQUEST_BACKUP"
     }
+
+    private fun UploadAttachmentDto.toDomainAttachment() = AlertAttachment(
+        clientFileId = clientFileId,
+        fileName = fileName,
+        mimeType = mimeType,
+        sizeBytes = sizeBytes,
+        source = source,
+        localUri = localUri,
+        uploadIntent = uploadIntent
+    )
 
     fun activateSos() = viewModelScope.launch {
         val location = locationGateway?.currentLocation() ?: _uiState.value.sosLocation

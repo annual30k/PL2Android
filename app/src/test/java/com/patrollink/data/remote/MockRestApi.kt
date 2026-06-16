@@ -3,6 +3,9 @@ package com.patrollink.data.remote
 import com.patrollink.domain.GpsLocation
 
 class MockRestApi {
+    var lastAlertCloseRequest: AlertCloseRequestDto? = null
+        private set
+
     private var device = DeviceStatusDto(
         deviceId = "HEADSET_001",
         deviceName = "ForceLink-H1",
@@ -120,6 +123,7 @@ class MockRestApi {
 
     fun closeAlert(alertId: String, request: AlertCloseRequestDto): ApiEnvelope<AlertDto> {
         require(request.note.length <= 200) { "note too long" }
+        lastAlertCloseRequest = request
         return updateAlert(alertId) { it.copy(status = "CLOSED") }
     }
 

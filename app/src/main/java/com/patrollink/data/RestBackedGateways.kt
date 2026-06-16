@@ -12,12 +12,14 @@ import com.patrollink.data.remote.LoginRequestDto
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.remote.StreamRelayRequestDto
 import com.patrollink.data.remote.TransferRequestDto
+import com.patrollink.data.remote.UploadAttachmentDto
 import com.patrollink.data.voip.BluetoothVoipAudioRouter
 import com.patrollink.data.remote.toDomain
 import com.patrollink.data.remote.toDomainEvent
 import com.patrollink.data.remote.toDomainState
 import com.patrollink.data.remote.toDto
 import com.patrollink.data.voip.AndroidWebRtcIntercomClient
+import com.patrollink.domain.AlertAttachment
 import com.patrollink.domain.AlertGateway
 import com.patrollink.domain.AlertItem
 import com.patrollink.domain.AlertResult
@@ -112,15 +114,27 @@ class RestAlertGateway(
 
     override suspend fun acknowledge(alertId: String): AlertItem = api.acknowledgeAlert(alertId).data.toDomain()
 
-    override suspend fun close(alertId: String, result: AlertResult, note: String): AlertItem {
+    override suspend fun close(alertId: String, result: AlertResult, note: String, attachments: List<AlertAttachment>): AlertItem {
         val resultValue = when (result) {
+            AlertResult.Questioned -> "QUESTIONED"
+            AlertResult.TakenAway -> "TAKEN_AWAY"
             AlertResult.FalseAlarm -> "FALSE_ALARM"
             AlertResult.Resolved -> "RESOLVED"
             AlertResult.RequestBackup -> "REQUEST_BACKUP"
         }
-        return api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, operatorIdProvider())).data.toDomain()
+        return api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, operatorIdProvider(), attachments.map { it.toDto() })).data.toDomain()
     }
 }
+
+private fun AlertAttachment.toDto() = UploadAttachmentDto(
+    clientFileId = clientFileId,
+    fileName = fileName,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
+    source = source,
+    localUri = localUri,
+    uploadIntent = uploadIntent
+)
 
 class RestMediaGateway(private val api: PatrolRestApi) : MediaGateway {
     override suspend fun listFiles(local: Boolean): List<MediaFile> =

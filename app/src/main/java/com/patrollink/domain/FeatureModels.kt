@@ -1,7 +1,7 @@
 package com.patrollink.domain
 
 enum class DeviceCommand { TakePhoto, StartRecord, StopRecord, StartTalk, StopTalk }
-enum class AlertResult { FalseAlarm, Resolved, RequestBackup }
+enum class AlertResult { Questioned, TakenAway, FalseAlarm, Resolved, RequestBackup }
 enum class TransferTarget { PhoneSandbox, Cloud }
 enum class RealtimeConnection { Disconnected, Connecting, Connected, Reconnecting }
 enum class StreamMode { LowLatency, Balanced, EvidenceQuality }
@@ -28,6 +28,16 @@ data class DeviceWifiState(
     val ssid: String = "",
     val passwordConfigured: Boolean = false,
     val connected: Boolean = false
+)
+
+data class AlertAttachment(
+    val clientFileId: String,
+    val fileName: String,
+    val mimeType: String,
+    val sizeBytes: Long?,
+    val source: String,
+    val localUri: String?,
+    val uploadIntent: String = "SUBMIT_WITH_FORM"
 )
 
 data class DeviceAdvancedSettings(

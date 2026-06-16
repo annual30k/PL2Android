@@ -14,6 +14,7 @@ import com.patrollink.data.remote.toDto
 import com.patrollink.domain.AlertGateway
 import com.patrollink.domain.AlertItem
 import com.patrollink.domain.AlertResult
+import com.patrollink.domain.AlertAttachment
 import com.patrollink.domain.AuthGateway
 import com.patrollink.domain.AuthSession
 import com.patrollink.domain.DeviceCommand
@@ -107,13 +108,15 @@ class MockAlertGateway(private val api: MockRestApi = MockRestApi()) : AlertGate
         return updated
     }
 
-    override suspend fun close(alertId: String, result: AlertResult, note: String): AlertItem {
+    override suspend fun close(alertId: String, result: AlertResult, note: String, attachments: List<AlertAttachment>): AlertItem {
         val resultValue = when (result) {
+            AlertResult.Questioned -> "QUESTIONED"
+            AlertResult.TakenAway -> "TAKEN_AWAY"
             AlertResult.FalseAlarm -> "FALSE_ALARM"
             AlertResult.Resolved -> "RESOLVED"
             AlertResult.RequestBackup -> "REQUEST_BACKUP"
         }
-        val updated = api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, api.currentUser().data.badgeNo)).data.toDomain()
+        val updated = api.closeAlert(alertId, AlertCloseRequestDto(resultValue, note, api.currentUser().data.badgeNo, attachments.map { it.toDto() })).data.toDomain()
         replace(updated)
         return updated
     }
@@ -122,6 +125,16 @@ class MockAlertGateway(private val api: MockRestApi = MockRestApi()) : AlertGate
         alerts.update { list -> list.map { if (it.id == updated.id) updated else it } }
     }
 }
+
+private fun AlertAttachment.toDto() = com.patrollink.data.remote.UploadAttachmentDto(
+    clientFileId = clientFileId,
+    fileName = fileName,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
+    source = source,
+    localUri = localUri,
+    uploadIntent = uploadIntent
+)
 
 class MockMediaGateway(private val api: MockRestApi = MockRestApi()) : MediaGateway {
     private val files = MutableStateFlow(api.mediaFiles(local = false).data.items.map { it.toDomain() } + api.mediaFiles(local = true).data.items.map { it.toDomain() })

@@ -56,12 +56,22 @@ class PatrolCoordinator(
 
     fun observeAlerts(): Flow<List<AlertItem>> = alertGateway.observeAlerts()
 
-    suspend fun handleAlert(alertId: String, result: AlertResult, note: String = ""): AlertItem {
-        if (result == AlertResult.RequestBackup) {
-            alertGateway.acknowledge(alertId)
-            return alertGateway.close(alertId, result, note.ifBlank { "请求支援" })
-        }
-        return alertGateway.close(alertId, result, note.ifBlank { result.name })
+    suspend fun handleAlert(
+        alertId: String,
+        result: AlertResult,
+        note: String = "",
+        attachments: List<AlertAttachment> = emptyList()
+    ): AlertItem {
+        alertGateway.acknowledge(alertId)
+        return alertGateway.close(alertId, result, note.ifBlank { result.defaultNote() }, attachments)
+    }
+
+    private fun AlertResult.defaultNote(): String = when (this) {
+        AlertResult.Questioned -> "现场已盘问"
+        AlertResult.TakenAway -> "现场已带离"
+        AlertResult.FalseAlarm -> "现场核实为误报"
+        AlertResult.Resolved -> "现场已处置"
+        AlertResult.RequestBackup -> "请求支援"
     }
 
     suspend fun mediaFiles(local: Boolean): List<MediaFile> = mediaGateway.listFiles(local)

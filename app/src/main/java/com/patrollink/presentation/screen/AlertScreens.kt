@@ -166,7 +166,7 @@ fun AlertDetailScreen(
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     val alert = uiState.alerts.firstOrNull { it.id == alertId } ?: uiState.alerts.first()
     val context = LocalContext.current
-    var selectedResult by remember { mutableStateOf("已处置") }
+    var selectedResult by remember { mutableStateOf("已盘问") }
     var note by remember { mutableStateOf("") }
     var evidenceFiles by remember { mutableStateOf<List<UploadFileItem>>(emptyList()) }
     var showEvidenceSourceDialog by remember { mutableStateOf(false) }
@@ -563,9 +563,9 @@ private fun ProcessingCard(
     ) {
         Text("处置结果", color = colors.textSubtle, fontSize = 13.sp, fontWeight = FontWeight.Black)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ResultChip("已处置", selectedResult == "已处置", onSelectResult, Modifier.weight(1f))
+            ResultChip("已盘问", selectedResult == "已盘问", onSelectResult, Modifier.weight(1f))
+            ResultChip("已带离", selectedResult == "已带离", onSelectResult, Modifier.weight(1f))
             ResultChip("误报", selectedResult == "误报", onSelectResult, Modifier.weight(1f))
-            ResultChip("请求增援", selectedResult == "请求增援", onSelectResult, Modifier.weight(1f))
         }
         Text("处置备注", color = colors.textSubtle, fontSize = 13.sp, fontWeight = FontWeight.Black)
         Box(
@@ -625,6 +625,8 @@ private fun alertLevelColor(level: AlertLevel): Color = when (level) {
 }
 
 private fun alertResultFromLabel(label: String): AlertResult = when (label) {
+    "已盘问" -> AlertResult.Questioned
+    "已带离" -> AlertResult.TakenAway
     "误报" -> AlertResult.FalseAlarm
     "请求增援" -> AlertResult.RequestBackup
     else -> AlertResult.Resolved

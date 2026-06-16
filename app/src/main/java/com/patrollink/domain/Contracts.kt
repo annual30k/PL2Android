@@ -19,7 +19,7 @@ interface DeviceGateway {
 interface AlertGateway {
     fun observeAlerts(): Flow<List<AlertItem>>
     suspend fun acknowledge(alertId: String): AlertItem
-    suspend fun close(alertId: String, result: AlertResult, note: String): AlertItem
+    suspend fun close(alertId: String, result: AlertResult, note: String, attachments: List<AlertAttachment> = emptyList()): AlertItem
 }
 
 interface MediaGateway {

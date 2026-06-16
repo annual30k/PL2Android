@@ -8,6 +8,7 @@ enum class FontSizeMode { Compact, Standard, Large }
 enum class DisplayThemeMode { System, Light, Dark }
 enum class DeviceType { Headset, Recorder, Sensor, Glasses }
 enum class OperationMessageType { Info, Success, Warning, Error }
+enum class LocationFetchStatus { Idle, Loading, Available, Unavailable }
 
 data class OperationMessage(
     val text: String,
@@ -197,6 +198,7 @@ data class AppUiState(
     val deviceEvents: List<DeviceEvent> = emptyList(),
     val realtimeAudioSyncing: Boolean = false,
     val unbindingDeviceIds: Set<String> = emptySet(),
+    val locationFetchStatus: LocationFetchStatus = LocationFetchStatus.Idle,
     val device: DeviceStatus,
     val connectedDevices: List<DeviceStatus> = emptyList(),
     val scannedDevices: List<ScannedDevice> = emptyList(),

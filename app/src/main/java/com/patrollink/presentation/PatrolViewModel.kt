@@ -43,7 +43,9 @@ import com.patrollink.domain.FirmwareDeviceMetadata
 import com.patrollink.domain.FirmwareGateway
 import com.patrollink.domain.FirmwareUpdatePhase
 import com.patrollink.domain.FirmwareUpdateUiState
+import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.IntercomState
+import com.patrollink.domain.LocationFetchStatus
 import com.patrollink.domain.LocationGateway
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaKind
@@ -70,6 +72,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -480,8 +483,24 @@ class PatrolViewModel(
 
     fun refreshCurrentLocation() = viewModelScope.launch {
         val gateway = locationGateway ?: return@launch
+        if (_uiState.value.locationFetchStatus == LocationFetchStatus.Loading) return@launch
+        _uiState.update { it.copy(locationFetchStatus = LocationFetchStatus.Loading) }
         runCatching { gateway.currentLocation() }
-            .onSuccess { location -> _uiState.update { it.copy(sosLocation = location) } }
+            .onSuccess { location ->
+                _uiState.update {
+                    it.copy(
+                        sosLocation = location,
+                        locationFetchStatus = if (location.hasUsableCoordinate()) {
+                            LocationFetchStatus.Available
+                        } else {
+                            LocationFetchStatus.Unavailable
+                        }
+                    )
+                }
+            }
+            .onFailure {
+                _uiState.update { it.copy(locationFetchStatus = LocationFetchStatus.Unavailable) }
+            }
     }
 
     fun refreshPatrolArea() = viewModelScope.launch {
@@ -2919,6 +2938,13 @@ private fun isKnownGlassesName(name: String): Boolean {
         "ABA002" in normalized ||
         "眼镜" in name
 }
+
+private fun GpsLocation.hasUsableCoordinate(): Boolean =
+    latitude.isFinite() &&
+        longitude.isFinite() &&
+        latitude in -90.0..90.0 &&
+        longitude in -180.0..180.0 &&
+        !(abs(latitude) < 0.000001 && abs(longitude) < 0.000001)
 
 private fun MediaFile.matchesPhoneSandboxCopyOf(deviceFile: MediaFile): Boolean {
     if (!local || !contentUri.hasUsableValue()) return false

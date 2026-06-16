@@ -83,6 +83,7 @@ import com.amap.api.maps.MapsInitializer
 import com.amap.api.maps.model.BitmapDescriptorFactory
 import com.amap.api.maps.model.CircleOptions
 import com.amap.api.maps.model.LatLng
+import com.amap.api.maps.model.LatLngBounds
 import com.amap.api.maps.model.MarkerOptions
 import com.amap.api.maps.model.PolygonOptions
 import com.amap.api.maps.model.PolylineOptions
@@ -90,6 +91,7 @@ import com.patrollink.domain.GpsLocation
 import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.FontSizeMode
 import com.patrollink.domain.AppUiState
+import com.patrollink.domain.LocationFetchStatus
 import com.patrollink.domain.PatrolArea
 import com.patrollink.domain.PatrolGeoPoint
 import com.patrollink.presentation.PatrolViewModel
@@ -102,7 +104,9 @@ import com.patrollink.presentation.theme.PatrolTextStyle
 import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
+import kotlin.math.abs
 import java.util.Locale
+import kotlinx.coroutines.delay
 import android.graphics.Color as AndroidColor
 
 private val ProfileIconSlotSize = 44.dp
@@ -121,7 +125,10 @@ fun ProfileScreen(
     val colors = PatrolDisplay.colors
     val titleColor = profileTitleColor()
     LaunchedEffect(Unit) {
-        viewModel.refreshCurrentLocation()
+        while (true) {
+            viewModel.refreshCurrentLocation()
+            delay(15_000L)
+        }
     }
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
     val user = uiState.user
@@ -164,7 +171,12 @@ fun ProfileScreen(
                             Text(uiState.patrolArea.name, color = titleColor, style = PatrolTextStyle.BodyStrong.copy(fontSize = 15.sp, lineHeight = 21.sp))
                             Text("${uiState.patrolArea.teamName} | ${user.patrolGroup.substringAfter("| ", user.patrolGroup)}", color = colors.textMuted, style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold))
                         }
-                        PatrolAreaMap(location = uiState.sosLocation, dutyArea = uiState.patrolArea.name, patrolArea = uiState.patrolArea)
+                        PatrolAreaMap(
+                            location = uiState.sosLocation,
+                            locationStatus = uiState.locationFetchStatus,
+                            dutyArea = uiState.patrolArea.name,
+                            patrolArea = uiState.patrolArea
+                        )
                     }
                 }
             }
@@ -708,11 +720,17 @@ private fun SectionHeading(title: String, icon: ImageVector, accent: Color) {
 }
 
 @Composable
-private fun PatrolAreaMap(location: GpsLocation, dutyArea: String, patrolArea: PatrolArea) {
+private fun PatrolAreaMap(
+    location: GpsLocation,
+    locationStatus: LocationFetchStatus,
+    dutyArea: String,
+    patrolArea: PatrolArea
+) {
     var expanded by remember { mutableStateOf(false) }
 
     DutyMapView(
         location = location,
+        locationStatus = locationStatus,
         dutyArea = dutyArea,
         patrolArea = patrolArea,
         expanded = false,
@@ -731,6 +749,7 @@ private fun PatrolAreaMap(location: GpsLocation, dutyArea: String, patrolArea: P
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 DutyMapView(
                     location = location,
+                    locationStatus = locationStatus,
                     dutyArea = dutyArea,
                     patrolArea = patrolArea,
                     expanded = true,
@@ -760,13 +779,32 @@ private fun PatrolAreaMap(location: GpsLocation, dutyArea: String, patrolArea: P
 @Composable
 private fun DutyMapView(
     location: GpsLocation,
+    locationStatus: LocationFetchStatus,
     dutyArea: String,
     patrolArea: PatrolArea,
     expanded: Boolean,
     onMapClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val currentLabel = "${"%.4f".format(Locale.CHINA, location.latitude)}, ${"%.4f".format(Locale.CHINA, location.longitude)}"
+    val hasLocation = location.hasUsableCoordinate()
+    val currentLabel = if (hasLocation) {
+        "${"%.4f".format(Locale.CHINA, location.latitude)}, ${"%.4f".format(Locale.CHINA, location.longitude)}"
+    } else {
+        when (locationStatus) {
+            LocationFetchStatus.Loading -> "定位中"
+            else -> "暂无定位"
+        }
+    }
+    val accuracyLabel = if (hasLocation && location.accuracyMeters > 0f) {
+        "${"%.1f".format(Locale.CHINA, location.accuracyMeters)}m"
+    } else {
+        "--"
+    }
+    val locationStatusLabel = when {
+        hasLocation -> "已定位"
+        locationStatus == LocationFetchStatus.Loading -> "定位中"
+        else -> "暂无有效定位"
+    }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val dark = PatrolDisplay.colors.dark
@@ -825,7 +863,7 @@ private fun DutyMapView(
             Text(dutyArea, color = Color.White, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Black)
             if (expanded) {
                 Text(
-                    "精度 ${"%.1f".format(Locale.CHINA, location.accuracyMeters)}m",
+                    "精度 $accuracyLabel",
                     color = Color(0xFFBFDBFE),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Black
@@ -834,7 +872,7 @@ private fun DutyMapView(
         }
         if (!expanded) {
             Text(
-                "精度 ${"%.1f".format(Locale.CHINA, location.accuracyMeters)}m",
+                "精度 $accuracyLabel",
                 color = Color(0xFFBFDBFE),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Black,
@@ -898,16 +936,22 @@ private fun DutyMapView(
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Icon(Icons.Filled.LocationOn, contentDescription = null, tint = TechBlue, modifier = Modifier.size(14.dp))
-            Text("当前位置 $currentLabel", color = Color.White, fontSize = 10.sp, lineHeight = 13.sp, fontWeight = FontWeight.Black)
+            Text(
+                "当前位置 $currentLabel · $locationStatusLabel",
+                color = Color.White,
+                fontSize = 10.sp,
+                lineHeight = 13.sp,
+                fontWeight = FontWeight.Black
+            )
         }
     }
 }
 
 private fun MapView.configureDutyMap(location: GpsLocation, patrolArea: PatrolArea, expanded: Boolean, dark: Boolean, onMapClick: () -> Unit) {
     val aMap = map ?: return
-    val point = location.toAmapLatLng(this)
-    val route = patrolArea.route.map { it.toAmapLatLng(this) }
-    val boundary = patrolArea.boundary.map { it.toAmapLatLng(this) }
+    val point = if (location.hasUsableCoordinate()) location.toAmapLatLng(this) else null
+    val route = patrolArea.route.filter { it.hasUsableCoordinate() }.map { it.toAmapLatLng(this) }
+    val boundary = patrolArea.boundary.filter { it.hasUsableCoordinate() }.map { it.toAmapLatLng(this) }
 
     aMap.clear()
     aMap.mapType = if (dark) AMap.MAP_TYPE_NIGHT else AMap.MAP_TYPE_NORMAL
@@ -919,7 +963,6 @@ private fun MapView.configureDutyMap(location: GpsLocation, patrolArea: PatrolAr
         setAllGesturesEnabled(expanded)
     }
     aMap.setOnMapClickListener { onMapClick() }
-    aMap.moveCamera(CameraUpdateFactory.newLatLngZoom(point, if (expanded) 16.8f else 15.8f))
     if (boundary.size >= 3) {
         aMap.addPolygon(
             PolygonOptions()
@@ -937,21 +980,58 @@ private fun MapView.configureDutyMap(location: GpsLocation, patrolArea: PatrolAr
                 .color(if (dark) AndroidColor.argb(235, 34, 211, 238) else AndroidColor.argb(230, 8, 145, 178))
         )
     }
-    aMap.addCircle(
-        CircleOptions()
-            .center(point)
-            .radius(location.accuracyMeters.coerceAtLeast(30f).toDouble())
-            .strokeColor(if (dark) AndroidColor.argb(210, 96, 165, 250) else AndroidColor.argb(190, 11, 99, 246))
-            .fillColor(if (dark) AndroidColor.argb(48, 96, 165, 250) else AndroidColor.argb(42, 11, 99, 246))
-            .strokeWidth(3f)
-    )
-    aMap.addMarker(
-        MarkerOptions()
-            .position(point)
-            .title("当前位置")
-            .snippet(location.address)
-            .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE))
-    )
+    if (point != null) {
+        aMap.addCircle(
+            CircleOptions()
+                .center(point)
+                .radius(location.accuracyMeters.coerceAtLeast(30f).toDouble())
+                .strokeColor(if (dark) AndroidColor.argb(210, 96, 165, 250) else AndroidColor.argb(190, 11, 99, 246))
+                .fillColor(if (dark) AndroidColor.argb(48, 96, 165, 250) else AndroidColor.argb(42, 11, 99, 246))
+                .strokeWidth(3f)
+        )
+        aMap.addMarker(
+            MarkerOptions()
+                .position(point)
+                .title("当前位置")
+                .snippet(location.address)
+                .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE))
+        )
+    }
+    moveCameraToDutyArea(aMap, boundary, route, point, expanded)
+}
+
+private fun moveCameraToDutyArea(aMap: AMap, boundary: List<LatLng>, route: List<LatLng>, point: LatLng?, expanded: Boolean) {
+    val dutyPoints = boundary.ifEmpty { route }
+    when {
+        dutyPoints.size >= 2 -> {
+            val boundsBuilder = LatLngBounds.builder()
+            dutyPoints.forEach { boundsBuilder.include(it) }
+            val padding = if (expanded) 96 else 56
+            runCatching {
+                aMap.moveCamera(CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), padding))
+            }.onFailure {
+                aMap.moveCamera(CameraUpdateFactory.newLatLngZoom(dutyPoints.first(), if (expanded) 15.8f else 14.8f))
+            }
+        }
+        dutyPoints.size == 1 -> aMap.moveCamera(CameraUpdateFactory.newLatLngZoom(dutyPoints.first(), if (expanded) 16.2f else 15.2f))
+        point != null -> aMap.moveCamera(CameraUpdateFactory.newLatLngZoom(point, if (expanded) 16.8f else 15.8f))
+    }
+}
+
+private fun GpsLocation.hasUsableCoordinate(): Boolean {
+    return latitude.isFinite() &&
+        longitude.isFinite() &&
+        latitude in -90.0..90.0 &&
+        longitude in -180.0..180.0 &&
+        !(abs(latitude) < 0.000001 && abs(longitude) < 0.000001)
+}
+
+private fun PatrolGeoPoint.hasUsableCoordinate(): Boolean {
+    return latitude.isFinite() &&
+        longitude.isFinite() &&
+        latitude in -90.0..90.0 &&
+        longitude in -180.0..180.0 &&
+        !(abs(latitude) < 0.000001 && abs(longitude) < 0.000001)
 }
 
 private fun GpsLocation.toAmapLatLng(mapView: MapView): LatLng {

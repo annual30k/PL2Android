@@ -136,8 +136,6 @@ import kotlinx.coroutines.withContext
 private const val MediaThumbnailMaxPx = 512
 private const val MediaGridThumbnailMaxPx = 256
 private const val RemoteImageThumbnailMaxBytes = 6L * 1024L * 1024L
-private const val DeviceMediaThumbnailDiskMaxFiles = 256
-private const val DeviceMediaThumbnailDiskMaxBytes = 32L * 1024L * 1024L
 private val DevicePhotoThumbnailLimiter = Semaphore(2)
 private val DeviceVideoThumbnailLimiter = Semaphore(1)
 private val MediaThumbnailMemoryCache = object : LruCache<String, Bitmap>(
@@ -1038,6 +1036,14 @@ private fun MediaGridCard(
         }
         Column(Modifier.padding(top = 10.dp, start = 4.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(file.name, color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "ID: ${file.id}",
+                color = colors.textSubtle,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     mediaDateTimeLabel(file.time),
@@ -1409,8 +1415,6 @@ private fun MediaPreviewDialog(
     onDismiss: () -> Unit
 ) {
     val colors = PatrolDisplay.colors
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var fullScreen by remember(file.id) { mutableStateOf(false) }
     val canFullscreen = file.kind == MediaKind.Video || file.kind == MediaKind.Photo
     Dialog(
@@ -1438,15 +1442,7 @@ private fun MediaPreviewDialog(
                 Spacer(Modifier.width(12.dp))
                 if (canFullscreen) {
                     IconButton(
-                        onClick = {
-                            scope.launch {
-                                val request = contentRequest(file)
-                                val target = request?.value ?: file.contentUri
-                                if (!openNativeMediaViewer(context, file, target)) {
-                                    fullScreen = true
-                                }
-                            }
-                        },
+                        onClick = { fullScreen = true },
                         modifier = Modifier.size(44.dp)
                     ) {
                         Icon(
@@ -1819,12 +1815,12 @@ private fun BoxScope.PlaybackCenterOverlay(message: String?, onClick: () -> Unit
 }
 
 private fun openNativeMediaViewer(context: Context, file: MediaFile, value: String?): Boolean {
-    val uri = value?.takeIf { it.isNotBlank() }?.toShareableMediaUri(context) ?: return false
+    val shareable = value?.takeIf { it.isNotBlank() }?.toShareableMedia(context, file) ?: return false
     val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(uri, file.viewerMimeType(value))
+        setDataAndType(shareable.uri, shareable.mimeType)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        if (uri.scheme == "content") {
-            clipData = ClipData.newUri(context.contentResolver, file.name, uri)
+        if (shareable.uri.scheme == "content") {
+            clipData = ClipData.newUri(context.contentResolver, file.name, shareable.uri)
         }
     }
     return runCatching {
@@ -1833,7 +1829,9 @@ private fun openNativeMediaViewer(context: Context, file: MediaFile, value: Stri
     }.getOrDefault(false)
 }
 
-private fun String.toShareableMediaUri(context: Context): Uri? {
+private data class ShareableMedia(val uri: Uri, val mimeType: String)
+
+private fun String.toShareableMedia(context: Context, file: MediaFile): ShareableMedia? {
     val uri = runCatching { Uri.parse(this) }.getOrNull() ?: return null
     val localFile = when {
         uri.scheme == "file" -> uri.path?.takeIf { it.isNotBlank() }?.let(::File)
@@ -1841,9 +1839,60 @@ private fun String.toShareableMediaUri(context: Context): Uri? {
         else -> null
     }?.takeIf { it.exists() && it.isFile }
     return if (localFile != null) {
-        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", localFile)
+        val mimeType = localFile.detectMediaMimeType() ?: file.viewerMimeType(this)
+        val fileForShare = if (file.kind == MediaKind.Photo) {
+            localFile.normalizedImageShareFile(context, file, mimeType)
+        } else {
+            localFile
+        }
+        ShareableMedia(
+            uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", fileForShare),
+            mimeType = mimeType
+        )
     } else {
-        uri
+        ShareableMedia(uri = uri, mimeType = file.viewerMimeType(this))
+    }
+}
+
+private fun File.normalizedImageShareFile(context: Context, file: MediaFile, mimeType: String): File {
+    val extension = mimeType.toImageExtension()
+        ?: extension.takeIf { it.isNotBlank() }?.lowercase(Locale.ROOT)
+        ?: "jpg"
+    if (extension.equals(this.extension, ignoreCase = true)) return this
+    val targetDir = File(context.cacheDir, "media_preview_cache/share").apply { mkdirs() }
+    val safeName = file.name
+        .substringBeforeLast('.', file.name)
+        .replace(Regex("[^A-Za-z0-9._-]"), "_")
+        .ifBlank { file.id }
+    val target = File(targetDir, "$safeName-${file.id.sha256Key().take(12)}.$extension")
+    if (!target.exists() || target.length() != length()) {
+        inputStream().use { input -> target.outputStream().use { output -> input.copyTo(output) } }
+    }
+    return target
+}
+
+private fun String.toImageExtension(): String? = when (this) {
+    "image/jpeg" -> "jpg"
+    "image/png" -> "png"
+    "image/webp" -> "webp"
+    "image/gif" -> "gif"
+    "image/bmp" -> "bmp"
+    else -> null
+}
+
+private fun File.detectMediaMimeType(): String? {
+    val header = ByteArray(12)
+    val read = inputStream().use { it.read(header) }
+    if (read < 4) return null
+    return when {
+        header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte() && header[2] == 0xFF.toByte() -> "image/jpeg"
+        header[0] == 0x89.toByte() && header[1] == 0x50.toByte() && header[2] == 0x4E.toByte() && header[3] == 0x47.toByte() -> "image/png"
+        header[0] == 0x47.toByte() && header[1] == 0x49.toByte() && header[2] == 0x46.toByte() -> "image/gif"
+        header[0] == 0x42.toByte() && header[1] == 0x4D.toByte() -> "image/bmp"
+        read >= 12 &&
+            header[0] == 0x52.toByte() && header[1] == 0x49.toByte() && header[2] == 0x46.toByte() && header[3] == 0x46.toByte() &&
+            header[8] == 0x57.toByte() && header[9] == 0x45.toByte() && header[10] == 0x42.toByte() && header[11] == 0x50.toByte() -> "image/webp"
+        else -> null
     }
 }
 
@@ -2152,7 +2201,6 @@ private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, 
                     cachedFile.outputStream().use { output ->
                         loaded.compress(Bitmap.CompressFormat.JPEG, 82, output)
                     }
-                    trimDeviceMediaThumbnailCache(cachedFile.parentFile)
                 }
             }
         }
@@ -2167,20 +2215,7 @@ private fun loadRemoteDeviceThumbnail(context: Context, kind: MediaKind, value: 
     }
 
 private fun deviceMediaThumbnailCacheFile(context: Context, cacheKey: String): File =
-    File(File(context.cacheDir, "device_media_thumbnails"), "${cacheKey.sha256Key()}.jpg")
-
-private fun trimDeviceMediaThumbnailCache(directory: File?) {
-    val files = directory?.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() }.orEmpty()
-    var totalBytes = files.sumOf { it.length() }
-    files.forEachIndexed { index, file ->
-        if (index >= DeviceMediaThumbnailDiskMaxFiles || totalBytes > DeviceMediaThumbnailDiskMaxBytes) {
-            val length = file.length()
-            if (runCatching { file.delete() }.getOrDefault(false)) {
-                totalBytes -= length
-            }
-        }
-    }
-}
+    File(File(context.filesDir, "patrol_media_cache/device_media_thumbnails"), "${cacheKey.sha256Key()}.jpg")
 
 private fun String.sha256Key(): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(toByteArray())

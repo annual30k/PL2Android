@@ -110,7 +110,6 @@ class UteWifiMediaClient(
         val prepared = prepareDeviceWifi(currentPhoneWifiOnly = currentPhoneWifiOnly)
         prepared.session?.let { session ->
             return try {
-                session.bindProcess()
                 block(session)
             } finally {
                 session.close()
@@ -126,7 +125,6 @@ class UteWifiMediaClient(
     ): T {
         val session = connector.currentSession(ssid) ?: throw DeviceWifiUserConnectionRequiredException(ssid)
         return try {
-            session.bindProcess()
             block(session)
         } finally {
             session.close()
@@ -141,10 +139,6 @@ class UteWifiMediaClient(
     ): T {
         val session = retainedOrConnectedSession(ssid, password)
         return try {
-            val bound = session.bindProcess()
-            if (!bound && session.network != null) {
-                Log.w(Tag, "device wifi bindProcess returned false for ssid=$ssid; continuing with network socket factory")
-            }
             block(session)
         } finally {
             Log.i(Tag, "device wifi session retained on phone side for ssid=$ssid; keeping device AP state unchanged")

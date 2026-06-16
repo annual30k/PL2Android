@@ -415,7 +415,7 @@ private fun List<UploadFileItem>.toUploadAttachments(): List<UploadAttachmentDto
     }
 
 private fun createEvidenceImageUri(context: Context): Uri {
-    val dir = File(context.cacheDir, "evidence").apply { mkdirs() }
+    val dir = File(context.filesDir, "patrol_media_cache/evidence").apply { mkdirs() }
     val file = File(dir, "evidence-${System.currentTimeMillis()}.jpg")
     return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }

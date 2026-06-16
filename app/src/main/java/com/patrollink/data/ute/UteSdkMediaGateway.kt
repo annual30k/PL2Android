@@ -48,10 +48,15 @@ class UteSdkMediaGateway(
         if (local) {
             val discovered = localFiles()
             mediaIndex.upsertLocalMediaSnapshot(discovered)
-            return (mediaIndex?.files(local = true).orEmpty() + discovered)
-                .filterNot { it.isLikelyWebUiAssetMedia() }
-                .deduplicateLocalMediaCopies()
-                .distinctBy { it.id to it.local }
+            val indexed = mediaIndex?.files(local = true).orEmpty()
+            val backendPhone = withTimeoutOrNull(FallbackListTimeoutMillis) {
+                fallbackGateway.listFiles(local = true)
+            }.orEmpty()
+            return mergePhoneMediaSources(
+                discoveredLocal = discovered,
+                indexedLocal = indexed,
+                backendPhone = backendPhone
+            )
         }
         val wifiFilesResult = withTimeoutOrNull(WifiMediaListTimeoutMillis) {
             runCatching { wifiMediaClient?.listFiles().orEmpty() }
@@ -640,6 +645,59 @@ class UteSdkMediaGateway(
         const val VideoSyncUnsupportedMessage = "当前 UTE SDK 只开放录像控制，没有开放录像文件同步到手机接口；需要设备 Wi-Fi 文件服务或厂家视频同步协议"
         const val AudioSyncUnavailableMessage = "当前没有可同步的录音文件；只有设备主动回传音频或支持 AI Recorder 文件同步时，录音才能上传到手机"
         const val WifiSyncUnavailableMessage = "设备 Wi-Fi 媒体传输客户端不可用"
+    }
+}
+
+internal fun mergePhoneMediaSources(
+    discoveredLocal: List<MediaFile>,
+    indexedLocal: List<MediaFile>,
+    backendPhone: List<MediaFile>
+): List<MediaFile> =
+    (discoveredLocal + indexedLocal + backendPhone)
+        .asSequence()
+        .filter { it.local }
+        .filterNot { it.isLikelyWebUiAssetPhoneMedia() }
+        .distinctBy { it.id to it.local }
+        .toList()
+        .deduplicatePhoneMediaCopies()
+
+private fun MediaFile.isLikelyWebUiAssetPhoneMedia(): Boolean =
+    name.removePhoneMediaDisplayPrefix().isLikelyWebUiAssetPath() ||
+        contentUri.orEmpty().substringAfterLast('/').isLikelyWebUiAssetPath()
+
+private fun List<MediaFile>.deduplicatePhoneMediaCopies(): List<MediaFile> {
+    if (isEmpty()) return this
+    return groupBy { file -> file.phoneMediaCopyKey() }
+        .values
+        .map { copies ->
+            copies.maxWithOrNull(
+                compareBy<MediaFile> { it.contentUri?.toPhoneLocalMediaFile()?.exists() == true }
+                    .thenBy { it.id.startsWith("ute-wifi-") }
+                    .thenBy { it.verified }
+                    .thenBy { it.contentUri?.isNotBlank() == true }
+            ) ?: copies.first()
+        }
+        .sortedByDescending { it.time.toLongOrNull() ?: 0L }
+}
+
+private fun MediaFile.phoneMediaCopyKey(): String =
+    contentUri
+        ?.toPhoneLocalMediaFile()
+        ?.absolutePath
+        ?.lowercase()
+        ?: name.removePhoneMediaDisplayPrefix().lowercase()
+
+private fun String.removePhoneMediaDisplayPrefix(): String =
+    removePrefix("眼镜照片_")
+        .removePrefix("眼镜视频_")
+        .removePrefix("设备录音_")
+
+private fun String.toPhoneLocalMediaFile(): File? {
+    val uri = runCatching { Uri.parse(this) }.getOrNull()
+    return when {
+        uri?.scheme == "file" -> uri.path?.let(::File)
+        uri?.scheme == null && startsWith("/") && !startsWith("/files/") -> File(this)
+        else -> null
     }
 }
 

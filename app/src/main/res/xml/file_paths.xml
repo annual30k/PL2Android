@@ -16,6 +16,9 @@
         name="patrol_media"
         path="patrol_media/" />
     <files-path
+        name="patrol_media_cache"
+        path="patrol_media_cache/" />
+    <files-path
         name="sos_audio"
         path="sos_audio/" />
 </paths>

@@ -91,7 +91,10 @@ object ServiceFactory {
         val uteBridge = if (config.useRealBle) sharedUteBridge ?: UteSdkBridge(context) else null
         val restMediaGateway = restApi?.let(::RestMediaGateway)
         val emptyMediaGateway = EmptyMediaGateway()
-        val mediaIndex = RoomMediaIndex(PatrolDatabase.get(context).mediaFileDao())
+        val mediaIndex = RoomMediaIndex(
+            PatrolDatabase.get(context).mediaFileDao(),
+            accountKeyProvider = pairingAccountIdProvider
+        )
         val uteMediaDirectory = File(context.filesDir, "patrol_media/ute")
         val uteWifiMediaClient = uteBridge?.let {
             UteWifiMediaClient(

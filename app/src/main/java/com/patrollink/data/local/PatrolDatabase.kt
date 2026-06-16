@@ -40,6 +40,7 @@ data class OfflineTaskEntity(
 @Entity(tableName = "media_index")
 data class MediaFileEntity(
     @PrimaryKey val storageKey: String,
+    val accountKey: String,
     val id: String,
     val name: String,
     val kind: String,
@@ -72,12 +73,19 @@ data class MediaFileEntity(
         )
 
     companion object {
-        private fun storageKey(id: String, local: Boolean): String =
-            "${if (local) "PHONE" else "DEVICE"}:$id"
+        private fun storageKey(accountKey: String, id: String, local: Boolean): String =
+            "${normalizeAccountKey(accountKey)}:${if (local) "PHONE" else "DEVICE"}:$id"
 
-        fun from(file: MediaFile, localPath: String? = file.contentUri, sha256: String? = null, watermarkToken: String? = null): MediaFileEntity =
+        fun from(
+            file: MediaFile,
+            accountKey: String = DefaultMediaAccountKey,
+            localPath: String? = file.contentUri,
+            sha256: String? = null,
+            watermarkToken: String? = null
+        ): MediaFileEntity =
             MediaFileEntity(
-                storageKey = storageKey(file.id, file.local),
+                storageKey = storageKey(accountKey, file.id, file.local),
+                accountKey = normalizeAccountKey(accountKey),
                 id = file.id,
                 name = file.name,
                 kind = file.kind.name,
@@ -113,19 +121,22 @@ interface MediaFileDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(file: MediaFileEntity)
 
-    @Query("SELECT * FROM media_index WHERE local = :local ORDER BY updatedAt DESC")
-    suspend fun files(local: Boolean): List<MediaFileEntity>
+    @Query("SELECT * FROM media_index WHERE accountKey = :accountKey AND local = :local ORDER BY updatedAt DESC")
+    suspend fun files(accountKey: String, local: Boolean): List<MediaFileEntity>
 
-    @Query("SELECT * FROM media_index WHERE id = :id AND local = :local LIMIT 1")
-    suspend fun find(id: String, local: Boolean): MediaFileEntity?
+    @Query("SELECT * FROM media_index WHERE accountKey = :accountKey AND id = :id AND local = :local LIMIT 1")
+    suspend fun find(accountKey: String, id: String, local: Boolean): MediaFileEntity?
 
-    @Query("DELETE FROM media_index WHERE id = :id AND local = :local")
-    suspend fun delete(id: String, local: Boolean): Int
+    @Query("DELETE FROM media_index WHERE accountKey = :accountKey AND id = :id AND local = :local")
+    suspend fun delete(accountKey: String, id: String, local: Boolean): Int
+
+    @Query("DELETE FROM media_index")
+    suspend fun clearAll(): Int
 }
 
 @Database(
     entities = [OfflineTaskEntity::class, MediaFileEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class PatrolDatabase : RoomDatabase() {
@@ -144,3 +155,12 @@ abstract class PatrolDatabase : RoomDatabase() {
             }
     }
 }
+
+const val DefaultMediaAccountKey = "anonymous"
+
+fun normalizeAccountKey(accountKey: String?): String =
+    accountKey
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        ?: DefaultMediaAccountKey

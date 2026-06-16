@@ -6,6 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import com.patrollink.domain.MediaFile
+import com.patrollink.domain.MediaKind
+import com.patrollink.domain.TransferStatus
 import com.yc.nadalsdk.constants.recorder.DeleteFileResult
 
 class UteSdkMediaGatewayTest {
@@ -64,6 +67,23 @@ class UteSdkMediaGatewayTest {
     }
 
     @Test
+    fun phoneMediaListIncludesBackendPhoneRecordsWhenLocalSandboxIsEmpty() {
+        val backendPhone = mediaFile(
+            id = "FILE-2066573218384801793",
+            name = "20260101161434970.jpg",
+            contentUri = "/files/FILE-2066573218384801793/download"
+        )
+
+        val merged = mergePhoneMediaSources(
+            discoveredLocal = emptyList(),
+            indexedLocal = emptyList(),
+            backendPhone = listOf(backendPhone)
+        )
+
+        assertEquals(listOf(backendPhone), merged)
+    }
+
+    @Test
     fun wifiMediaListFailurePropagatesBeforeBackendFallbackWhenNoSdkFilesExist() {
         assertEquals(
             true,
@@ -90,4 +110,19 @@ class UteSdkMediaGatewayTest {
             )
         )
     }
+
+    private fun mediaFile(id: String, name: String, contentUri: String) =
+        MediaFile(
+            id = id,
+            name = name,
+            kind = MediaKind.Photo,
+            time = "2026-06-16",
+            size = "1.5 MB",
+            duration = null,
+            verified = true,
+            local = true,
+            transferStatus = TransferStatus.Done,
+            progress = 1f,
+            contentUri = contentUri
+        )
 }

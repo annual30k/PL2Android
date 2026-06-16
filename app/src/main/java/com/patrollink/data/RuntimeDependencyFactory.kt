@@ -3,6 +3,7 @@ package com.patrollink.data
 import android.content.Context
 import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.local.AndroidKeystoreSecureStore
+import com.patrollink.data.local.LocalMediaCacheCleaner
 import com.patrollink.data.local.WorkManagerBackgroundTaskGateway
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.remote.OkHttpPatrolRestApi
@@ -38,6 +39,7 @@ data class RuntimeDependencies(
     val tokenStore: RuntimeTokenStore,
     val configStore: RuntimeConfigStore,
     val offlineSyncEngine: OfflineSyncEngine,
+    val localMediaCacheCleaner: LocalMediaCacheCleaner,
     val config: RuntimeConfig
 )
 
@@ -83,6 +85,7 @@ object RuntimeDependencyFactory {
             tokenStore = tokenStore,
             configStore = RuntimeConfigStore(appContext),
             offlineSyncEngine = OfflineSyncEngine(WorkManagerBackgroundTaskGateway(appContext)),
+            localMediaCacheCleaner = LocalMediaCacheCleaner(appContext),
             config = config
         )
     }

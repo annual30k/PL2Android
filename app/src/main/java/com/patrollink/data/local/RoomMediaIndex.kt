@@ -8,20 +8,25 @@ interface MediaIndexWriter {
 }
 
 class RoomMediaIndex(
-    private val dao: MediaFileDao
+    private val dao: MediaFileDao,
+    private val accountKeyProvider: () -> String = { DefaultMediaAccountKey }
 ) : MediaIndexWriter {
+    private val accountKey: String get() = normalizeAccountKey(accountKeyProvider())
+
     override suspend fun upsert(file: MediaFile, localPath: String?, sha256: String?, watermarkToken: String?) {
-        dao.upsert(MediaFileEntity.from(file, localPath, sha256, watermarkToken))
+        dao.upsert(MediaFileEntity.from(file, accountKey = accountKey, localPath = localPath, sha256 = sha256, watermarkToken = watermarkToken))
     }
 
     suspend fun files(local: Boolean): List<MediaFile> =
-        dao.files(local).map { it.toDomain() }
+        dao.files(accountKey, local).map { it.toDomain() }
 
     suspend fun find(fileId: String, local: Boolean): MediaFile? =
-        dao.find(fileId, local)?.toDomain()
+        dao.find(accountKey, fileId, local)?.toDomain()
 
     suspend fun delete(fileId: String, local: Boolean): Boolean =
-        dao.delete(fileId, local) > 0
+        dao.delete(accountKey, fileId, local) > 0
+
+    suspend fun clearAll(): Int = dao.clearAll()
 }
 
 suspend fun MediaIndexWriter?.upsertLocalMediaSnapshot(files: List<MediaFile>) {

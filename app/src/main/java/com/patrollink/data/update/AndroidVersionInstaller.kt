@@ -18,7 +18,7 @@ class AndroidVersionInstaller(
     private val client: OkHttpClient = OkHttpClient(),
     private val integrity: EvidenceIntegrityGateway = DefaultEvidenceIntegrityGateway()
 ) : VersionInstaller {
-    private val directory = File(context.cacheDir, "updates").apply { mkdirs() }
+    private val directory = File(context.filesDir, "patrol_media_cache/updates").apply { mkdirs() }
 
     override suspend fun prepare(update: VersionCheckResult, expectedSha256: String?): VersionInstallPackage {
         val url = update.downloadUrl ?: error("missing update downloadUrl")

@@ -83,6 +83,20 @@ class PatrolViewModelTest {
     }
 
     @Test
+    fun loginWithDifferentAccountClearsLocalMediaCache() = runTest {
+        var clearCount = 0
+        val viewModel = testViewModel(
+            currentLocalAccountProvider = { "POLICE_9527" },
+            clearLocalMediaCache = { clearCount += 1 }
+        )
+
+        viewModel.login("test", "123456", agreed = true)
+        advanceUntilIdle()
+
+        assertEquals(1, clearCount)
+    }
+
+    @Test
     fun deviceControlsUpdateRecordingAndTalkingState() = runTest {
         val viewModel = testViewModel()
         loginAndConnect(viewModel)
@@ -957,6 +971,28 @@ class PatrolViewModelTest {
     }
 
     @Test
+    fun backendPhoneMediaRequiresCloudDownloadBeforeLocalPreview() {
+        val cloudPhoneFile = MediaFile(
+            id = "FILE-2066573218384801793",
+            name = "20260101161434970.jpg",
+            kind = com.patrollink.domain.MediaKind.Photo,
+            time = "123",
+            size = "3 MB",
+            duration = null,
+            verified = true,
+            local = true,
+            transferStatus = TransferStatus.Idle,
+            progress = 0f,
+            contentUri = "/files/FILE-2066573218384801793/download"
+        )
+        val localFile = temp.newFile("20260101161434970.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+
+        assertTrue(cloudPhoneFile.requiresCloudDownloadBeforeLocalPreview("http://127.0.0.1:8080"))
+        assertFalse(cloudPhoneFile.copy(contentUri = localFile.absolutePath).requiresCloudDownloadBeforeLocalPreview("http://127.0.0.1:8080"))
+        assertFalse(cloudPhoneFile.copy(local = false).requiresCloudDownloadBeforeLocalPreview("http://127.0.0.1:8080"))
+    }
+
+    @Test
     fun successfulCloudUploadClosesPreviewAndShowsSuccessMessage() = runTest {
         val localFile = temp.newFile("cloud-upload.jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         val media = MediaFile(
@@ -1407,7 +1443,9 @@ private fun testViewModel(
     offlineSyncEngine: OfflineSyncEngine? = null,
     deviceControlGateway: DeviceControlGateway? = null,
     runtimeConfigStore: RuntimeConfigGateway? = null,
-    cerebellumApiFactory: (String, String) -> CerebellumApi? = { _, _ -> null }
+    cerebellumApiFactory: (String, String) -> CerebellumApi? = { _, _ -> null },
+    currentLocalAccountProvider: () -> String? = { null },
+    clearLocalMediaCache: suspend () -> Unit = {}
 ) = PatrolViewModel(
     coordinator = coordinator,
     deviceControlGateway = deviceControlGateway,
@@ -1415,7 +1453,9 @@ private fun testViewModel(
     cerebellumApi = cerebellumApi,
     cerebellumApiFactory = cerebellumApiFactory,
     runtimeConfigStore = runtimeConfigStore,
-    offlineSyncEngine = offlineSyncEngine
+    offlineSyncEngine = offlineSyncEngine,
+    currentLocalAccountProvider = currentLocalAccountProvider,
+    clearLocalMediaCache = clearLocalMediaCache
 )
 
 private class FakeRuntimeConfigGateway : RuntimeConfigGateway {

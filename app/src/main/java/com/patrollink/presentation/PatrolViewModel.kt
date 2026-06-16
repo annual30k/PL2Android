@@ -15,6 +15,7 @@ import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.edge.CerebellumReportRequestDto
 import com.patrollink.data.edge.OkHttpCerebellumApi
 import com.patrollink.data.local.UiSettingsStore
+import com.patrollink.data.local.normalizeAccountKey
 import com.patrollink.data.remote.AlertDraftRequestDto
 import com.patrollink.data.remote.CerebellumSettingsDto
 import com.patrollink.data.remote.DailyReportContentUpdateDto
@@ -125,7 +126,9 @@ class PatrolViewModel(
     private val backendBaseUrl: String = "",
     private val offlineSyncEngine: OfflineSyncEngine? = null,
     private val onSessionChanged: (AuthSession?) -> Unit = {},
-    private val onPairingUsernameChanged: (String?) -> Unit = {}
+    private val onPairingUsernameChanged: (String?) -> Unit = {},
+    private val currentLocalAccountProvider: () -> String? = { null },
+    private val clearLocalMediaCache: suspend () -> Unit = {}
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
         EmptyAppState.create().copy(
@@ -164,6 +167,7 @@ class PatrolViewModel(
         runCatching { coordinator.connectRealtime(session.accessToken) }
         runCatching { coordinator.currentUser() }
             .onSuccess { user ->
+                clearLocalMediaCacheIfAccountChanged(user.badgeNo)
                 onPairingUsernameChanged(user.badgeNo)
                 _uiState.update { state ->
                     state.copy(
@@ -209,6 +213,7 @@ class PatrolViewModel(
             _uiState.update { it.copy(loginLoading = true) }
             runCatching { coordinator.loginAndStartSession(account, password) }
                 .onSuccess { session ->
+                    clearLocalMediaCacheIfAccountChanged(account)
                     onSessionChanged(session)
                     onPairingUsernameChanged(account)
                     secureStore?.let { store -> withContext(Dispatchers.IO) { store.saveSession(session) } }
@@ -229,6 +234,23 @@ class PatrolViewModel(
         }
     }
 
+    private suspend fun clearLocalMediaCacheIfAccountChanged(nextAccount: String?) {
+        val previous = normalizeAccountKey(currentLocalAccountProvider())
+        val next = normalizeAccountKey(nextAccount)
+        if (previous != next) {
+            clearLocalMediaCache()
+            _uiState.update {
+                it.copy(
+                    mediaFiles = emptyList(),
+                    selectedMediaFileId = null,
+                    previewMediaFile = null,
+                    mediaLoading = false,
+                    deviceMediaSync = DeviceMediaSyncUiState()
+                )
+            }
+        }
+    }
+
     fun logout() = viewModelScope.launch {
         scannedDevicesJob?.cancel()
         scannedDevicesJob = null
@@ -240,6 +262,11 @@ class PatrolViewModel(
                 isLoggedIn = false,
                 sessionRestoring = false,
                 scannedDevices = emptyList(),
+                mediaFiles = emptyList(),
+                selectedMediaFileId = null,
+                previewMediaFile = null,
+                mediaLoading = false,
+                deviceMediaSync = DeviceMediaSyncUiState(),
                 cerebellumSettings = com.patrollink.domain.CerebellumSettingsUiState(),
                 operationMessage = operationMessage("已退出登录", OperationMessageType.Info)
             )
@@ -1034,7 +1061,8 @@ class PatrolViewModel(
                         state.copy(
                             deviceEvents = (listOf(newDeviceEvent("拍照命令已下发", device.name, DeviceEventLevel.Info)) + state.deviceEvents).take(MaxDeviceEvents),
                             device = next,
-                            connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it }
+                            connectedDevices = state.connectedDevices.map { if (it.id == next.id) next else it },
+                            operationMessage = operationMessage("拍照命令已下发；若媒体列表仍为空，请在设备文件页通过 Wi-Fi 同步", OperationMessageType.Info)
                         )
                     }
                 }
@@ -1574,6 +1602,7 @@ class PatrolViewModel(
 
     fun syncDeviceMediaToPhone(fileIds: Set<String> = emptySet(), refreshFirst: Boolean = false) {
         if (deviceMediaSyncJob?.isActive == true) {
+            showOperationMessage("正在同步设备文件，请稍候", OperationMessageType.Info)
             return
         }
         deviceMediaSyncJob = viewModelScope.launch {
@@ -1677,6 +1706,7 @@ class PatrolViewModel(
                     )
                 )
             }
+            finishDeviceMediaSync(successCount = successCount, failedCount = failedCount)
         }
     }
 
@@ -2102,6 +2132,12 @@ class PatrolViewModel(
 
     private fun finishDeviceMediaSync(successCount: Int, failedCount: Int) {
         _uiState.update { state ->
+            val message = when {
+                successCount > 0 && failedCount == 0 -> "已同步 $successCount 个设备文件到手机本地媒体文件，设备热点保持连接"
+                successCount > 0 -> "已同步 $successCount 个设备文件，$failedCount 个文件同步失败，设备热点保持连接"
+                failedCount > 0 -> "$failedCount 个设备文件同步失败，设备热点保持连接"
+                else -> "设备端文件已在手机端，无需重复同步"
+            }
             state.copy(
                 deviceMediaSync = state.deviceMediaSync.copy(
                     active = false,
@@ -2109,6 +2145,10 @@ class PatrolViewModel(
                     progress = if (successCount > 0 || failedCount == 0) 1f else state.deviceMediaSync.progress,
                     completedCount = successCount,
                     totalCount = state.deviceMediaSync.totalCount.coerceAtLeast(successCount + failedCount)
+                ),
+                operationMessage = operationMessage(
+                    message,
+                    if (failedCount > 0 && successCount == 0) OperationMessageType.Error else OperationMessageType.Success
                 )
             )
         }
@@ -2231,7 +2271,7 @@ class PatrolViewModel(
         val target = _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local == local }
             ?: return@launch showOperationMessage("媒体文件不存在", OperationMessageType.Error)
         val preview = runCatching { materializeMediaForPreview(target) }.getOrNull()
-            ?: target.takeIf { it.local && it.contentUri.hasUsableValue() }
+            ?: target.takeIf { it.local }?.withInternalLocalUri(allowRemote = false)
         _uiState.update { state ->
             state.copy(
                 previewMediaFile = preview,
@@ -2260,11 +2300,7 @@ class PatrolViewModel(
             uri?.scheme == null && value.startsWith("/") -> File(value).exists()
             else -> false
         }
-        val resolved = when {
-            value.startsWith("http://") || value.startsWith("https://") -> value
-            value.startsWith("/") && backendBaseUrl.isNotBlank() && !localFileExists -> backendBaseUrl.trimEnd('/') + value
-            else -> value
-        }
+        val resolved = if (!localFileExists) value.toRemoteMediaUrl(backendBaseUrl) ?: value else value
         val authorization = if (resolved.startsWith("http://") || resolved.startsWith("https://")) {
             secureStore?.readSession()?.accessToken?.takeIf { it.isNotBlank() }?.let { "Bearer $it" }
         } else {
@@ -2603,8 +2639,15 @@ class PatrolViewModel(
         }
         val existing = file.withInternalLocalUri(allowRemote = false)
         if (existing != null) return existing
+        val needsCloudDownload = file.requiresCloudDownloadBeforeLocalPreview(backendBaseUrl)
+        if (needsCloudDownload) {
+            showOperationMessage("正在从云端下载 ${file.name}，完成后播放", OperationMessageType.Info)
+        }
         localFileForCerebellumUpload(file, appContext, backendBaseUrl, secureStore)?.let { cached ->
             return rememberPreviewCache(file, cached)
+        }
+        if (needsCloudDownload) {
+            return null
         }
         showOperationMessage("正在下载 ${file.name} 到手机沙盒后播放", OperationMessageType.Info)
         val downloaded = ensureMediaFileForCerebellum(file) ?: return null
@@ -2670,14 +2713,11 @@ private fun MediaFile.withShareableLocalUri(context: Context?, allowRemote: Bool
     val uri = runCatching { Uri.parse(value) }.getOrNull()
     val localFile = value.toExistingLocalFile()
     if (localFile == null) {
-        if (uri?.scheme == "file" || (uri?.scheme == null && value.startsWith("/"))) {
-            return this
-        }
         return this.takeIf {
             uri?.scheme == "content" || (allowRemote && (value.startsWith("http://") || value.startsWith("https://")))
         }
     }
-    if (context == null) return copy(contentUri = Uri.fromFile(localFile).toString())
+    if (context == null) return copy(contentUri = localFile.toURI().toString())
     val shareUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", localFile)
     return copy(local = true, contentUri = shareUri.toString())
 }
@@ -2686,8 +2726,7 @@ private fun MediaFile.withInternalLocalUri(allowRemote: Boolean = true): MediaFi
     val value = contentUri?.takeIf { it.isNotBlank() } ?: return null
     val uri = runCatching { Uri.parse(value) }.getOrNull()
     val localFile = value.toExistingLocalFile()
-    if (localFile != null) return copy(local = true, contentUri = Uri.fromFile(localFile).toString())
-    if (uri?.scheme == "file" || (uri?.scheme == null && value.startsWith("/"))) return this
+    if (localFile != null) return copy(local = true, contentUri = localFile.toURI().toString())
     return this.takeIf {
         uri?.scheme == "content" || (allowRemote && (value.startsWith("http://") || value.startsWith("https://")))
     }
@@ -2697,6 +2736,24 @@ private fun MediaFile.localContentFile(): File? {
     val value = contentUri?.takeIf { it.isNotBlank() } ?: return null
     return value.toExistingLocalFile()
 }
+
+internal fun MediaFile.requiresCloudDownloadBeforeLocalPreview(backendBaseUrl: String): Boolean =
+    local &&
+        localContentFile() == null &&
+        contentUri?.toRemoteMediaUrl(backendBaseUrl) != null
+
+private fun String.toRemoteMediaUrl(backendBaseUrl: String): String? {
+    val value = trim().takeIf { it.isNotBlank() } ?: return null
+    return when {
+        value.startsWith("http://") || value.startsWith("https://") -> value
+        value.isBackendRelativeMediaUri() && backendBaseUrl.isNotBlank() ->
+            backendBaseUrl.trimEnd('/') + value
+        else -> null
+    }
+}
+
+private fun String.isBackendRelativeMediaUri(): Boolean =
+    startsWith("/files/") || startsWith("/api/")
 
 private fun String.toExistingLocalFile(): File? {
     val uri = runCatching { Uri.parse(this) }.getOrNull()
@@ -2776,7 +2833,7 @@ private suspend fun localFileForCerebellumUpload(
     val direct = if (value.startsWith("/") && backendBaseUrl.isBlank()) File(value) else null
     if (direct?.exists() == true && direct.isFile) return@withContext direct
     value.toExistingLocalFile()?.let { return@withContext it }
-    val targetDir = context?.cacheDir?.let { File(it, "media_preview_cache").also { dir -> dir.mkdirs() } }
+    val targetDir = context?.filesDir?.let { File(it, "patrol_media_cache/media_preview").also { dir -> dir.mkdirs() } }
         ?: return@withContext null
     val safeName = file.name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "${file.id}.bin" }
     val target = File(targetDir, "${file.id}-$safeName")
@@ -2787,11 +2844,7 @@ private suspend fun localFileForCerebellumUpload(
         } ?: return@withContext null
         return@withContext target.takeIf { it.exists() && it.isFile }
     }
-    val remoteUrl = when {
-        value.startsWith("http://") || value.startsWith("https://") -> value
-        value.startsWith("/") && backendBaseUrl.isNotBlank() -> backendBaseUrl.trimEnd('/') + value
-        else -> null
-    } ?: return@withContext null
+    val remoteUrl = value.toRemoteMediaUrl(backendBaseUrl) ?: return@withContext null
     val connection = (URL(remoteUrl).openConnection() as HttpURLConnection).apply {
         requestMethod = "GET"
         connectTimeout = 10_000

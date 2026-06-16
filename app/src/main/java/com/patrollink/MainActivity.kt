@@ -124,7 +124,9 @@ private class PatrolViewModelFactory(
             backendBaseUrl = dependencies.config.restBaseUrl,
             offlineSyncEngine = dependencies.offlineSyncEngine,
             onSessionChanged = dependencies.tokenStore::update,
-            onPairingUsernameChanged = dependencies.tokenStore::updatePairingUsername
+            onPairingUsernameChanged = dependencies.tokenStore::updatePairingUsername,
+            currentLocalAccountProvider = dependencies.tokenStore::pairingAccountId,
+            clearLocalMediaCache = dependencies.localMediaCacheCleaner::clearAll
         ) as T
     }
 }

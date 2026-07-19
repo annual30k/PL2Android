@@ -14,6 +14,7 @@ import android.net.wifi.WifiNetworkSpecifier
 import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -102,6 +103,7 @@ class DeviceWifiNetworkConnector(
     }
 
     @SuppressLint("MissingPermission")
+    @RequiresApi(Build.VERSION_CODES.Q)
     private suspend fun connectWithSuggestion(
         ssid: String,
         password: String,
@@ -165,6 +167,7 @@ class DeviceWifiNetworkConnector(
     }
 
     @SuppressLint("MissingPermission")
+    @RequiresApi(Build.VERSION_CODES.Q)
     private suspend fun connectWithSpecifier(
         ssid: String,
         password: String,

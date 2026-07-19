@@ -9,6 +9,7 @@ import com.patrollink.domain.EvidenceIntegrityGateway
 import com.patrollink.domain.PermissionGateway
 import com.patrollink.domain.SecureStore
 import java.security.MessageDigest
+import java.io.File
 
 class InMemorySecureStore : SecureStore {
     private var session: AuthSession? = null
@@ -73,5 +74,26 @@ class DefaultEvidenceIntegrityGateway : EvidenceIntegrityGateway {
 
     override fun watermarkToken(fileId: String, officerBadgeNo: String, timestamp: Long): String {
         return sha256("$fileId|$officerBadgeNo|$timestamp".encodeToByteArray()).take(16)
+    }
+
+    override fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                if (read > 0) digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    fun matchesSha256(file: File, expected: String?): Boolean {
+        val normalized = expected?.trim()?.takeIf { it.matches(Regex("[A-Fa-f0-9]{64}")) } ?: return false
+        return MessageDigest.isEqual(
+            sha256(file).lowercase().encodeToByteArray(),
+            normalized.lowercase().encodeToByteArray()
+        )
     }
 }

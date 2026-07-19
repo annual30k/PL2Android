@@ -1,6 +1,12 @@
 # 执法耳机 Wi-Fi 媒体传输调研记录
 
-更新时间：2026-06-14 01:49
+更新时间：2026-06-17 14:06
+
+## 2026-06-17 账号与后端地址记录
+
+- 当前 App debug 包后端地址为 `http://172.20.10.4:8080`，WebSocket 地址为 `ws://172.20.10.4:8080/resource/websocket`。
+- 当前 9527 警员登录账号已改回 `test / 123456`；`POLICE_9527` 仅保留为历史调试记录中的旧账号口径，不再作为当前登录账号使用。
+- 已同步更新当前数据库、`docker/mysql/init/04-patrollink.sql`、`PLBackend/script/sql/patrol/05-patrol.sql` 和 Android README 示例，避免后续初始化或按文档操作时再改回 `POLICE_9527`。
 
 ## 结论
 

@@ -113,7 +113,7 @@ class UteSdkMediaGateway(
                 }
                 emit(remote.copy(transferStatus = TransferStatus.Hashing, progress = 0.82f, lastTransferTarget = TransferTarget.PhoneSandbox))
                 val (sha256, token) = withContext(Dispatchers.IO) {
-                    val hash = integrityGateway.sha256(downloaded.readBytes())
+                    val hash = integrityGateway.sha256(downloaded)
                     val watermark = integrityGateway.watermarkToken(fileId, officerBadgeNo, downloaded.lastModified())
                     File(mediaDirectory, "${downloaded.nameWithoutExtension}.integrity").writeText("sha256=$hash\nwatermark=$watermark\n")
                     hash to watermark
@@ -196,7 +196,7 @@ class UteSdkMediaGateway(
                         }
                     }
                     emit(remote.copy(transferStatus = TransferStatus.Hashing, progress = 0.62f, lastTransferTarget = TransferTarget.Cloud))
-                    val sha256 = integrityGateway.sha256(localFile.readBytes())
+                    val sha256 = integrityGateway.sha256(localFile)
                     val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, localFile.lastModified())
                     File(mediaDirectory, "$sessionId.integrity").writeText("sha256=$sha256\nwatermark=$token\n")
                     emit(
@@ -235,7 +235,7 @@ class UteSdkMediaGateway(
                     contentUri = Uri.fromFile(localFile).toString(),
                     lastTransferTarget = TransferTarget.Cloud
                 )
-                val sha256 = runCatching { integrityGateway.sha256(localFile.readBytes()) }.getOrNull()
+                val sha256 = runCatching { integrityGateway.sha256(localFile) }.getOrNull()
                 mediaIndex?.upsert(completed, localPath = completed.contentUri, sha256 = sha256)
                 emit(completed)
             }
@@ -256,7 +256,7 @@ class UteSdkMediaGateway(
                 }
             }
             emit(remote.copy(transferStatus = TransferStatus.Hashing, progress = 0.88f))
-            val sha256 = integrityGateway.sha256(targetFile.readBytes())
+            val sha256 = integrityGateway.sha256(targetFile)
             val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, targetFile.lastModified())
             File(mediaDirectory, "$sessionId.integrity").writeText("sha256=$sha256\nwatermark=$token\n")
             emit(remote.copy(transferStatus = TransferStatus.Verifying, progress = 0.95f))
@@ -344,17 +344,16 @@ class UteSdkMediaGateway(
                 ?.let { Uri.parse(it).path }
                 ?.let(::File)
                 ?.takeIf { it.exists() } ?: return false
-            val hash = integrityGateway.sha256(localFile.readBytes())
-            File(mediaDirectory, "${localFile.nameWithoutExtension}.integrity").writeText("sha256=$hash\n")
-            return true
+            val expected = mediaIndex?.expectedSha256(fileId, local = true)
+                ?: readStoredSha256(File(mediaDirectory, "${localFile.nameWithoutExtension}.integrity"))
+            return withContext(Dispatchers.IO) { integrityGateway.matchesSha256(localFile, expected) }
         }
         if (!fileId.startsWith(AudioPrefix)) return fallbackGateway.verifySha256(fileId)
         val localFile = File(mediaDirectory, "${fileId.removePrefix(AudioPrefix)}.opus")
         if (!localFile.exists()) return false
-        val hash = integrityGateway.sha256(localFile.readBytes())
-        val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, localFile.lastModified())
-        File(mediaDirectory, "${fileId.removePrefix(AudioPrefix)}.integrity").writeText("sha256=$hash\nwatermark=$token\n")
-        return true
+        val expected = mediaIndex?.expectedSha256(fileId, local = true)
+            ?: readStoredSha256(File(mediaDirectory, "${fileId.removePrefix(AudioPrefix)}.integrity"))
+        return withContext(Dispatchers.IO) { integrityGateway.matchesSha256(localFile, expected) }
     }
 
     private suspend fun queryAudioRecordFiles(): List<MediaFile> {
@@ -749,3 +748,9 @@ private fun File.isSupportedLocalMediaFile(): Boolean =
             extension.equals("png", ignoreCase = true) ||
             extension.equals("mp4", ignoreCase = true) ||
             extension.equals("mov", ignoreCase = true))
+
+private fun readStoredSha256(file: File): String? =
+    file.takeIf { it.isFile }
+        ?.useLines { lines -> lines.firstOrNull { it.startsWith("sha256=") } }
+        ?.substringAfter('=')
+        ?.trim()

@@ -21,14 +21,21 @@ class AndroidKeystoreSecureStore(context: Context) : SecureStore {
         prefs.edit()
             .putString("access", encrypt(session.accessToken))
             .putString("refresh", encrypt(session.refreshToken))
-            .putLong("expires", session.expiresInSeconds)
+            .putLong("expires_at", System.currentTimeMillis() / 1000L + session.expiresInSeconds.coerceAtLeast(0L))
+            .remove("expires")
             .apply()
     }
 
     override suspend fun readSession(): AuthSession? {
         val access = prefs.getString("access", null)?.let(::decrypt) ?: return null
         val refresh = prefs.getString("refresh", null)?.let(::decrypt) ?: return null
-        val expires = prefs.getLong("expires", 0)
+        val expiresAt = prefs.getLong("expires_at", 0L)
+        val expires = if (expiresAt > 0L) {
+            (expiresAt - System.currentTimeMillis() / 1000L).coerceAtLeast(0L)
+        } else {
+            // Legacy values stored a duration and could otherwise appear valid forever.
+            0L
+        }
         return AuthSession(access, refresh, expires)
     }
 

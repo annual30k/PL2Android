@@ -23,6 +23,12 @@ import com.patrollink.data.ute.UteSdkMediaGateway
 import com.patrollink.data.ute.UteSdkStreamRelayGateway
 import com.patrollink.data.ute.UteWifiMediaClient
 import com.patrollink.data.ute.requireUteCloudUploadResult
+import com.patrollink.data.sourcenex.RoutingDeviceControlGateway
+import com.patrollink.data.sourcenex.RoutingDeviceGateway
+import com.patrollink.data.sourcenex.RoutingMediaGateway
+import com.patrollink.data.sourcenex.SourceNexBridge
+import com.patrollink.data.sourcenex.SourceNexDeviceGateway
+import com.patrollink.data.sourcenex.SourceNexMediaGateway
 import com.patrollink.data.update.AndroidVersionInstaller
 import com.patrollink.data.voip.AndroidWebRtcIntercomClient
 import com.patrollink.data.voip.BluetoothVoipAudioRouter
@@ -39,10 +45,12 @@ import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.FirmwareGateway
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 
 object ServiceFactory {
     fun createCoordinator(): PatrolCoordinator = PatrolCoordinator(
@@ -83,12 +91,14 @@ object ServiceFactory {
         operatorIdProvider: () -> String = { "UNKNOWN_OPERATOR" },
         pairingAccountIdProvider: () -> String = operatorIdProvider,
         fallbackState: AppUiState,
-        sharedUteBridge: UteSdkBridge? = null
+        sharedUteBridge: UteSdkBridge? = null,
+        sharedSourceNexBridge: SourceNexBridge? = null
     ): PatrolCoordinator {
         val restApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let {
             OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)
         }
         val uteBridge = if (config.useRealBle) sharedUteBridge ?: UteSdkBridge(context) else null
+        val sourceNexBridge = if (config.useRealBle) sharedSourceNexBridge ?: SourceNexBridge(context) else null
         val restMediaGateway = restApi?.let(::RestMediaGateway)
         val emptyMediaGateway = EmptyMediaGateway()
         val mediaIndex = RoomMediaIndex(
@@ -123,7 +133,7 @@ object ServiceFactory {
                         command = config.bleCommandUuid,
                         status = config.bleStatusUuid
                     )
-                    if (gattProfile.readyForGatt) {
+                    val existingGateway = if (gattProfile.readyForGatt) {
                         AndroidBleDeviceGateway(
                             context = context,
                             fallbackStatus = fallbackState.device,
@@ -138,6 +148,13 @@ object ServiceFactory {
                             photoLocationProvider = { photoLocationGateway.currentLocation() }
                         )
                     }
+                    RoutingDeviceGateway(
+                        ute = existingGateway,
+                        sourceNex = SourceNexDeviceGateway(
+                            bridge = sourceNexBridge ?: SourceNexBridge(context),
+                            fallback = fallbackState.device
+                        )
+                    )
                 }
                 restApi != null -> RestDeviceGateway(restApi, operatorIdProvider)
                 else -> EmptyDeviceGateway()
@@ -145,14 +162,29 @@ object ServiceFactory {
             alertGateway = restApi?.let { RestAlertGateway(it, operatorIdProvider) } ?: EmptyAlertGateway(),
             mediaGateway = when {
                 wifiMediaGateway != null -> wifiMediaGateway
-                uteBridge != null -> UteSdkMediaGateway(
-                    bridge = uteBridge,
-                    fallbackGateway = restMediaGateway ?: emptyMediaGateway,
-                    mediaDirectory = uteMediaDirectory,
-                    officerBadgeNo = fallbackState.user.badgeNo,
-                    mediaIndex = mediaIndex,
-                    wifiMediaClient = uteWifiMediaClient
-                )
+                uteBridge != null -> {
+                    val uteMedia = UteSdkMediaGateway(
+                        bridge = uteBridge,
+                        fallbackGateway = restMediaGateway ?: emptyMediaGateway,
+                        mediaDirectory = uteMediaDirectory,
+                        officerBadgeNo = fallbackState.user.badgeNo,
+                        mediaIndex = mediaIndex,
+                        wifiMediaClient = uteWifiMediaClient
+                    )
+                    if (sourceNexBridge != null) {
+                        RoutingMediaGateway(
+                            bridge = sourceNexBridge,
+                            ute = uteMedia,
+                            sourceNex = SourceNexMediaGateway(
+                                bridge = sourceNexBridge,
+                                fallback = restMediaGateway ?: emptyMediaGateway,
+                                mediaDirectory = File(context.filesDir, "patrol_media/sourcenex"),
+                                officerBadgeNo = fallbackState.user.badgeNo,
+                                mediaIndex = mediaIndex
+                            )
+                        )
+                    } else uteMedia
+                }
                 restMediaGateway != null -> restMediaGateway
                 else -> emptyMediaGateway
             },
@@ -184,16 +216,23 @@ object ServiceFactory {
         context: Context,
         config: RuntimeConfig,
         sharedUteBridge: UteSdkBridge? = null,
+        sharedSourceNexBridge: SourceNexBridge? = null,
         tokenProvider: () -> String? = { null },
         deviceIdProvider: () -> String = { "" },
         pairingAccountIdProvider: () -> String = { "UNKNOWN_OPERATOR" }
     ): DeviceControlGateway =
         when {
-            config.useRealBle -> UteSdkDeviceControlGateway(
-                bridge = sharedUteBridge ?: UteSdkBridge(context),
-                mediaDirectory = File(context.filesDir, "patrol_media/ute"),
-                pairingAccountIdProvider = pairingAccountIdProvider
-            )
+            config.useRealBle -> {
+                val ute = UteSdkDeviceControlGateway(
+                    bridge = sharedUteBridge ?: UteSdkBridge(context),
+                    mediaDirectory = File(context.filesDir, "patrol_media/ute"),
+                    pairingAccountIdProvider = pairingAccountIdProvider
+                )
+                RoutingDeviceControlGateway(
+                    bridge = sharedSourceNexBridge ?: SourceNexBridge(context),
+                    ute = ute
+                )
+            }
             config.restBaseUrl.isNotBlank() -> RestDeviceControlGateway(
                 OkHttpPatrolRestApi(baseUrl = config.restBaseUrl, tokenProvider = tokenProvider),
                 deviceIdProvider
@@ -309,7 +348,7 @@ private class WifiBackedMediaGateway(
                     emit(start)
                     val downloaded = wifiClient.download(fileId, localFile.also { it.parentFile?.mkdirs() })
                     emit(start.copy(transferStatus = TransferStatus.Hashing, progress = 0.45f))
-                    val sha256 = integrityGateway.sha256(downloaded.readBytes())
+                    val sha256 = integrityGateway.sha256(downloaded)
                     val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, downloaded.lastModified())
                     File(mediaDirectory, "$fileId.integrity").writeText("sha256=$sha256\nwatermark=$token\n")
                     val completed = start.copy(
@@ -341,7 +380,7 @@ private class WifiBackedMediaGateway(
                     contentUri = Uri.fromFile(localFile).toString(),
                     lastTransferTarget = target
                 )
-                val sha256 = runCatching { integrityGateway.sha256(localFile.readBytes()) }.getOrNull()
+                val sha256 = runCatching { integrityGateway.sha256(localFile) }.getOrNull()
                 mediaIndex?.upsert(completed, localPath = completed.contentUri, sha256 = sha256)
                 emit(completed)
             }
@@ -352,7 +391,7 @@ private class WifiBackedMediaGateway(
             val targetFile = File(mediaDirectory, "$fileId.bin")
             val downloaded = wifiClient.download(fileId, targetFile)
             emit(start.copy(transferStatus = TransferStatus.Hashing, progress = 0.82f))
-            val sha256 = integrityGateway.sha256(downloaded.readBytes())
+            val sha256 = integrityGateway.sha256(downloaded)
             val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, downloaded.lastModified())
             File(mediaDirectory, "$fileId.integrity").writeText("sha256=$sha256\nwatermark=$token\n")
             emit(start.copy(transferStatus = TransferStatus.Verifying, progress = 0.94f))
@@ -406,11 +445,9 @@ private class WifiBackedMediaGateway(
     override suspend fun verifySha256(fileId: String): Boolean {
         val localFile = File(mediaDirectory, "$fileId.bin")
         if (localFile.exists()) {
-            val hash = integrityGateway.sha256(localFile.readBytes())
-            val token = integrityGateway.watermarkToken(fileId, officerBadgeNo, localFile.lastModified())
-            File(mediaDirectory, "$fileId.integrity").writeText("sha256=$hash\nwatermark=$token\n")
-            mediaIndex?.find(fileId, local = true)?.let { mediaIndex.upsert(it.copy(verified = true), sha256 = hash, watermarkToken = token) }
-            return true
+            val expected = mediaIndex?.expectedSha256(fileId, local = true)
+                ?: readIntegritySha256(File(mediaDirectory, "$fileId.integrity"))
+            return withContext(Dispatchers.IO) { integrityGateway.matchesSha256(localFile, expected) }
         }
         return fallbackGateway.verifySha256(fileId)
     }
@@ -420,3 +457,9 @@ private class WifiBackedMediaGateway(
             ?: fallbackGateway.listFiles(local = false).firstOrNull { it.id == fileId }
             ?: error("media file not found: $fileId")
 }
+
+private fun readIntegritySha256(file: File): String? =
+    file.takeIf { it.isFile }
+        ?.useLines { lines -> lines.firstOrNull { it.startsWith("sha256=") } }
+        ?.substringAfter('=')
+        ?.trim()

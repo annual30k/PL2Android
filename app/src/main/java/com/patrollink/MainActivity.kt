@@ -125,6 +125,7 @@ private class PatrolViewModelFactory(
             offlineSyncEngine = dependencies.offlineSyncEngine,
             onSessionChanged = dependencies.tokenStore::update,
             onPairingUsernameChanged = dependencies.tokenStore::updatePairingUsername,
+            onSelectedDeviceChanged = dependencies.onSelectedDeviceChanged,
             currentLocalAccountProvider = dependencies.tokenStore::pairingAccountId,
             clearLocalMediaCache = dependencies.localMediaCacheCleaner::clearAll
         ) as T

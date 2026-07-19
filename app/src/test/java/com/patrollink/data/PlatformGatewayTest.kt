@@ -10,6 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class PlatformGatewayTest {
     @Test
@@ -121,5 +122,22 @@ class PlatformGatewayTest {
         assertEquals(token1, token2)
         assertTrue(token1.all { it in '0'..'9' || it in 'a'..'f' })
         assertFalse(token1 == token3)
+    }
+
+    @Test
+    fun evidenceIntegrityComparesAgainstImmutableExpectedHash() {
+        val gateway = DefaultEvidenceIntegrityGateway()
+        val file = File.createTempFile("patrol-integrity-", ".bin")
+        try {
+            file.writeText("original")
+            val expected = gateway.sha256(file)
+
+            assertTrue(gateway.matchesSha256(file, expected))
+            file.writeText("tampered")
+            assertFalse(gateway.matchesSha256(file, expected))
+            assertFalse(gateway.matchesSha256(file, null))
+        } finally {
+            file.delete()
+        }
     }
 }

@@ -1,7 +1,7 @@
 package com.patrollink.domain
 
-import kotlinx.coroutines.flow.Flow
 import java.io.File
+import kotlinx.coroutines.flow.Flow
 
 interface AuthGateway {
     suspend fun login(account: String, password: String): AuthSession
@@ -96,6 +96,7 @@ interface BackgroundTaskGateway {
 
 interface EvidenceIntegrityGateway {
     fun sha256(bytes: ByteArray): String
+    fun sha256(file: File): String
     fun watermarkToken(fileId: String, officerBadgeNo: String, timestamp: Long): String
 }
 

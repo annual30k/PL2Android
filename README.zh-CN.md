@@ -104,7 +104,7 @@ POST /api/v1/llm/report
 Content-Type: application/json
 
 {
-  "mission_id": "mission-20260515-POLICE_9527",
+  "mission_id": "mission-20260515-test",
   "report_type": "daily",
   "prefer_quality": true,
   "operator_note": "今日重点巡逻商业街区域",

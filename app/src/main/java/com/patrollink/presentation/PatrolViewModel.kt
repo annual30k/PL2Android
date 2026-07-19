@@ -79,6 +79,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -103,6 +105,9 @@ private const val DeviceMediaRetryDelayMillis = 1_500L
 private const val DeviceWifiRestartSettleMillis = 1_500L
 private const val DeviceMediaTransferTimeoutMillis = 30_000L
 private const val MaxDeviceEvents = 30
+private const val SessionRefreshThresholdSeconds = 60L
+private const val SessionRefreshRetryMillis = 60_000L
+private const val MaxSessionRefreshDelaySeconds = 24L * 60L * 60L
 
 class PatrolViewModel(
     private val appContext: Context? = null,
@@ -127,6 +132,7 @@ class PatrolViewModel(
     private val offlineSyncEngine: OfflineSyncEngine? = null,
     private val onSessionChanged: (AuthSession?) -> Unit = {},
     private val onPairingUsernameChanged: (String?) -> Unit = {},
+    private val onSelectedDeviceChanged: (String?) -> Unit = {},
     private val currentLocalAccountProvider: () -> String? = { null },
     private val clearLocalMediaCache: suspend () -> Unit = {}
 ) : ViewModel() {
@@ -140,6 +146,7 @@ class PatrolViewModel(
     private var scannedDevicesJob: Job? = null
     private var photoCaptureJob: Job? = null
     private var deviceMediaSyncJob: Job? = null
+    private var sessionRefreshJob: Job? = null
     private val deviceMediaTransferJobs = mutableMapOf<String, Job>()
     private var lastPhotoCaptureRequestAt: Long = 0L
     private val autoBindingDeviceIds = mutableSetOf<String>()
@@ -150,6 +157,12 @@ class PatrolViewModel(
         observeIntercomState()
         viewModelScope.launch {
             restoreSavedSession()
+        }
+        viewModelScope.launch {
+            uiState
+                .map { state -> state.selectedDeviceId ?: state.device.id.takeIf { it.isNotBlank() } }
+                .distinctUntilChanged()
+                .collect(onSelectedDeviceChanged)
         }
     }
 
@@ -163,9 +176,27 @@ class PatrolViewModel(
             return
         }
 
-        onSessionChanged(session)
-        runCatching { coordinator.connectRealtime(session.accessToken) }
-        runCatching { coordinator.currentUser() }
+        var activeSession = session
+        if (activeSession.expiresInSeconds <= SessionRefreshThresholdSeconds) {
+            activeSession = runCatching { coordinator.refreshSession(activeSession.refreshToken) }.getOrElse { activeSession }
+            if (activeSession != session) {
+                withContext(Dispatchers.IO) { store.saveSession(activeSession) }
+            }
+        }
+        onSessionChanged(activeSession)
+        runCatching { coordinator.connectRealtime(activeSession.accessToken) }
+        var userResult = runCatching { coordinator.currentUser() }
+        if (userResult.isFailure) {
+            val refreshed = runCatching { coordinator.refreshSession(activeSession.refreshToken) }.getOrNull()
+            if (refreshed != null) {
+                activeSession = refreshed
+                onSessionChanged(refreshed)
+                withContext(Dispatchers.IO) { store?.saveSession(refreshed) }
+                runCatching { coordinator.connectRealtime(refreshed.accessToken) }
+                userResult = runCatching { coordinator.currentUser() }
+            }
+        }
+        userResult
             .onSuccess { user ->
                 clearLocalMediaCacheIfAccountChanged(user.badgeNo)
                 onPairingUsernameChanged(user.badgeNo)
@@ -177,6 +208,7 @@ class PatrolViewModel(
                         user = user
                     )
                 }
+                scheduleSessionRefresh(activeSession)
                 startAuthenticatedRefreshes()
                 runCatching { coordinator.currentRealtimeState() }
             }
@@ -218,6 +250,7 @@ class PatrolViewModel(
                     onPairingUsernameChanged(account)
                     secureStore?.let { store -> withContext(Dispatchers.IO) { store.saveSession(session) } }
                     _uiState.update { it.copy(isLoggedIn = true, sessionRestoring = false, loginLoading = false, networkOnline = true, operationMessage = operationMessage("登录成功", OperationMessageType.Success)) }
+                    scheduleSessionRefresh(session)
                     startAuthenticatedRefreshes()
                 }
                 .onFailure { throwable ->
@@ -254,6 +287,8 @@ class PatrolViewModel(
     fun logout() = viewModelScope.launch {
         scannedDevicesJob?.cancel()
         scannedDevicesJob = null
+        sessionRefreshJob?.cancel()
+        sessionRefreshJob = null
         onSessionChanged(null)
         secureStore?.let { store -> withContext(Dispatchers.IO) { store.clearSession() } }
         cerebellumApi = null
@@ -282,6 +317,32 @@ class PatrolViewModel(
         refreshPatrolArea()
         refreshCerebellumSettings()
     }
+
+    private fun scheduleSessionRefresh(session: AuthSession) {
+        if (appContext == null) return
+        sessionRefreshJob?.cancel()
+        sessionRefreshJob = viewModelScope.launch {
+            var activeSession = session
+            var waitMillis = sessionRefreshDelayMillis(activeSession)
+            while (true) {
+                delay(waitMillis)
+                val refreshed = runCatching { coordinator.refreshSession(activeSession.refreshToken) }.getOrNull()
+                if (refreshed == null) {
+                    waitMillis = SessionRefreshRetryMillis
+                    continue
+                }
+                activeSession = refreshed
+                onSessionChanged(refreshed)
+                secureStore?.let { store -> withContext(Dispatchers.IO) { store.saveSession(refreshed) } }
+                runCatching { coordinator.connectRealtime(refreshed.accessToken) }
+                waitMillis = sessionRefreshDelayMillis(refreshed)
+            }
+        }
+    }
+
+    private fun sessionRefreshDelayMillis(session: AuthSession): Long =
+        (session.expiresInSeconds - SessionRefreshThresholdSeconds)
+            .coerceIn(1L, MaxSessionRefreshDelaySeconds) * 1_000L
 
     private fun refreshAlerts() = viewModelScope.launch {
         runCatching { coordinator.observeAlerts().first() }

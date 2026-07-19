@@ -59,6 +59,10 @@ android {
         getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/patrolRuntime/debug/assets"))
         getByName("release").assets.srcDir(layout.buildDirectory.dir("generated/patrolRuntime/release/assets"))
     }
+
+    packaging {
+        resources.excludes += setOf("META-INF/INDEX.LIST", "META-INF/io.netty.versions.properties")
+    }
 }
 
 kotlin {
@@ -66,6 +70,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(files("libs/sourcenex-aig-sdk-v2-recovered.jar"))
     implementation(files("libs/uteWatchSdk_Android_v1.3.5.aar"))
     implementation(files("libs/ActionsIbluz_v1.0.8.1.aar"))
     implementation(files("libs/ActionsOta_v1.0.8.aar"))
@@ -86,6 +91,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("com.google.protobuf:protobuf-java:4.31.1")
+    implementation("io.netty:netty-codec-http:4.1.115.Final")
     implementation("io.github.webrtc-sdk:android:144.7559.05")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
@@ -125,5 +132,11 @@ tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
 }
 
 tasks.matching { it.name == "mergeReleaseAssets" }.configureEach {
+    dependsOn(syncReleasePatrolRuntimeConfig)
+}
+
+tasks.matching {
+    it.name in setOf("generateReleaseLintVitalReportModel", "lintVitalAnalyzeRelease", "lintVitalReportRelease")
+}.configureEach {
     dependsOn(syncReleasePatrolRuntimeConfig)
 }

@@ -24,6 +24,8 @@ class PatrolCoordinator(
         realtimeGateway.connect(accessToken)
     }
 
+    suspend fun refreshSession(refreshToken: String): AuthSession = authGateway.refresh(refreshToken)
+
     suspend fun currentUser(): UserProfile = authGateway.currentUser()
 
     fun scanDevices(): Flow<List<ScannedDevice>> = deviceGateway.scan()

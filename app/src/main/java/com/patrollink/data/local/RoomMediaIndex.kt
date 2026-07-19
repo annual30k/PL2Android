@@ -23,6 +23,9 @@ class RoomMediaIndex(
     suspend fun find(fileId: String, local: Boolean): MediaFile? =
         dao.find(accountKey, fileId, local)?.toDomain()
 
+    suspend fun expectedSha256(fileId: String, local: Boolean): String? =
+        dao.find(accountKey, fileId, local)?.sha256
+
     suspend fun delete(fileId: String, local: Boolean): Boolean =
         dao.delete(accountKey, fileId, local) > 0
 

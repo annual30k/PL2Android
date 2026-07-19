@@ -30,7 +30,7 @@ class AndroidVersionInstaller(
                 response.body?.byteStream()?.copyTo(output)
             }
         }
-        val sha256 = integrity.sha256(file.readBytes())
+        val sha256 = integrity.sha256(file)
         val expected = expectedSha256 ?: update.sha256
         val verified = expected.isNullOrBlank() || expected.equals(sha256, ignoreCase = true)
         check(verified) { "update package sha256 mismatch" }

@@ -221,10 +221,14 @@ class RuntimeTokenStore(context: Context) {
     private var accessToken: String? = null
     @Volatile
     private var pairingAccountId: String = savedPairingAccountId() ?: DefaultPairingAccountId
+    @Volatile
+    private var selectedDeviceId: String = ""
 
     fun token(): String? = accessToken
 
     fun pairingAccountId(): String = pairingAccountId
+
+    fun selectedDeviceId(): String = selectedDeviceId
 
     fun update(session: AuthSession?) {
         accessToken = session?.accessToken
@@ -243,6 +247,10 @@ class RuntimeTokenStore(context: Context) {
         pairingAccountId = normalized.also { accountId ->
             pairingPrefs.edit().putString(PairingAccountKey, accountId).apply()
         }
+    }
+
+    fun updateSelectedDeviceId(deviceId: String?) {
+        selectedDeviceId = deviceId?.trim().orEmpty()
     }
 
     private companion object {

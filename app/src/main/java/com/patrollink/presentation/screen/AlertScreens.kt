@@ -164,7 +164,17 @@ fun AlertDetailScreen(
 ) {
     val colors = PatrolDisplay.colors
     SystemBars(statusBarColor = colors.topBar, navigationBarColor = colors.bottomBar, lightStatusBar = !colors.dark, lightNavigationBar = !colors.dark)
-    val alert = uiState.alerts.firstOrNull { it.id == alertId } ?: uiState.alerts.first()
+    val alert = uiState.alerts.firstOrNull { it.id == alertId }
+    if (alert == null) {
+        BackHandler(onBack = onBack)
+        Column(Modifier.fillMaxSize().background(colors.page)) {
+            AlertDetailTopBar(onBack = onBack)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("预警记录不存在或已刷新", color = colors.textMuted, fontSize = 15.sp)
+            }
+        }
+        return
+    }
     val context = LocalContext.current
     var selectedResult by remember { mutableStateOf("已盘问") }
     var note by remember { mutableStateOf("") }

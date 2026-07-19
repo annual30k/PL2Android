@@ -86,9 +86,10 @@ class AndroidLocationGateway(
 
         val handler = Handler(Looper.getMainLooper())
         lateinit var listener: LocationListener
+        var timeoutRunnable: Runnable? = null
         val finish: (Location?) -> Unit = { location ->
             runCatching { locationManager.removeUpdates(listener) }
-            handler.removeCallbacksAndMessages(listener)
+            timeoutRunnable?.let(handler::removeCallbacks)
             if (location != null && location.hasUsableCoordinate()) {
                 continuation.resumeIfActive(location.toGpsLocation())
             } else {
@@ -103,23 +104,21 @@ class AndroidLocationGateway(
         }
         registerPlatformCleanup {
             runCatching { locationManager.removeUpdates(listener) }
-            handler.removeCallbacksAndMessages(listener)
+            timeoutRunnable?.let(handler::removeCallbacks)
         }
         providers.forEach { provider ->
             runCatching {
                 locationManager.requestLocationUpdates(provider, 1000L, 0f, listener, Looper.getMainLooper())
             }
         }
-        handler.postDelayed(
-            {
-                val lastKnown = providers
-                    .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
-                    .firstOrNull { it.hasUsableCoordinate() }
-                finish(lastKnown)
-            },
-            listener,
-            FreshLocationTimeoutMillis
-        )
+        val timeout = Runnable {
+            val lastKnown = providers
+                .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
+                .firstOrNull { it.hasUsableCoordinate() }
+            finish(lastKnown)
+        }
+        timeoutRunnable = timeout
+        handler.postDelayed(timeout, FreshLocationTimeoutMillis)
     }
 
     private fun Location.toGpsLocation(): GpsLocation =

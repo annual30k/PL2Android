@@ -9,6 +9,7 @@ import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.remote.OkHttpPatrolRestApi
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.ute.UteSdkBridge
+import com.patrollink.data.sourcenex.SourceNexBridge
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.DeviceControlGateway
@@ -37,6 +38,7 @@ data class RuntimeDependencies(
     val cerebellumApi: CerebellumApi?,
     val patrolRestApi: PatrolRestApi?,
     val tokenStore: RuntimeTokenStore,
+    val onSelectedDeviceChanged: (String?) -> Unit,
     val configStore: RuntimeConfigStore,
     val offlineSyncEngine: OfflineSyncEngine,
     val localMediaCacheCleaner: LocalMediaCacheCleaner,
@@ -51,21 +53,24 @@ object RuntimeDependencyFactory {
         val secureStore = AndroidKeystoreSecureStore(appContext)
         val emptyState = EmptyAppState.create()
         val uteBridge = if (config.useRealBle) UteSdkBridge(appContext) else null
+        val sourceNexBridge = if (config.useRealBle) SourceNexBridge(appContext) else null
         val coordinator = ServiceFactory.createRuntimeCoordinator(
             context = appContext,
             config = config,
             tokenProvider = tokenStore::token,
-            operatorIdProvider = { emptyState.user.badgeNo },
+            operatorIdProvider = tokenStore::pairingAccountId,
             pairingAccountIdProvider = tokenStore::pairingAccountId,
             fallbackState = emptyState,
-            sharedUteBridge = uteBridge
+            sharedUteBridge = uteBridge,
+            sharedSourceNexBridge = sourceNexBridge
         )
         val deviceControlGateway = ServiceFactory.createDeviceControlGateway(
             context = appContext,
             config = config,
             sharedUteBridge = uteBridge,
+            sharedSourceNexBridge = sourceNexBridge,
             tokenProvider = tokenStore::token,
-            deviceIdProvider = { emptyState.device.id },
+            deviceIdProvider = tokenStore::selectedDeviceId,
             pairingAccountIdProvider = tokenStore::pairingAccountId
         )
         return RuntimeDependencies(
@@ -78,11 +83,15 @@ object RuntimeDependencyFactory {
             emergencyContactGateway = ServiceFactory.createEmergencyContactGateway(),
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
             versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
-            firmwareGateway = ServiceFactory.createFirmwareGateway(appContext, config, uteBridge, tokenStore::token) { emptyState.user.badgeNo },
+            firmwareGateway = ServiceFactory.createFirmwareGateway(appContext, config, uteBridge, tokenStore::token, tokenStore::pairingAccountId),
             versionInstaller = ServiceFactory.createVersionInstaller(appContext),
             cerebellumApi = ServiceFactory.createCerebellumApi(config),
             patrolRestApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let { OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenStore::token) },
             tokenStore = tokenStore,
+            onSelectedDeviceChanged = { deviceId ->
+                tokenStore.updateSelectedDeviceId(deviceId)
+                sourceNexBridge?.selectDevice(deviceId)
+            },
             configStore = RuntimeConfigStore(appContext),
             offlineSyncEngine = OfflineSyncEngine(WorkManagerBackgroundTaskGateway(appContext)),
             localMediaCacheCleaner = LocalMediaCacheCleaner(appContext),

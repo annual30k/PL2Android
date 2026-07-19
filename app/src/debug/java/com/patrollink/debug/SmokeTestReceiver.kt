@@ -18,6 +18,8 @@ import com.patrollink.data.ServiceFactory
 import com.patrollink.data.local.WorkManagerBackgroundTaskGateway
 import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.data.ute.UteWifiMediaClient
+import com.patrollink.data.sourcenex.SourceNexBridge
+import com.patrollink.data.sourcenex.SourceNexDeviceGateway
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.EmptyAppState
 import com.patrollink.domain.FirmwareDeviceMetadata
@@ -279,6 +281,7 @@ private object SmokeTestRunner {
             return
         }
         val bridge = UteSdkBridge(context)
+        val sourceNexBridge = SourceNexBridge(context)
         val tokenStore = RuntimeTokenStore(context.applicationContext)
         val emptyState = EmptyAppState.create()
         val coordinator = ServiceFactory.createRuntimeCoordinator(
@@ -288,7 +291,8 @@ private object SmokeTestRunner {
             operatorIdProvider = { account.ifBlank { "SMOKE_OPERATOR" } },
             pairingAccountIdProvider = tokenStore::pairingAccountId,
             fallbackState = emptyState,
-            sharedUteBridge = bridge
+            sharedUteBridge = bridge,
+            sharedSourceNexBridge = sourceNexBridge
         )
         val firmwareGateway = ServiceFactory.createFirmwareGateway(
             context = context,
@@ -345,6 +349,10 @@ private object SmokeTestRunner {
         }
         report.step("DEVICE_STATUS", bound.summary())
         if (!bound.online) return
+        if (bound.id.startsWith(SourceNexDeviceGateway.IdPrefix)) {
+            runSourceNexSmoke(report, coordinator, bound, runCommands, commandHoldMillis, wifiMediaSyncOptions.downloadFirst)
+            return
+        }
         runDeviceIdentityDiagnostics(report, bridge)
         if (runDangerousDeviceAccountActions(report, bridge, clearDeviceAccount, clearDeviceAccountConfirm, factoryResetTarget, factoryResetConfirm)) {
             return
@@ -1022,6 +1030,44 @@ private object SmokeTestRunner {
             delay(commandHoldMillis)
             runStep(report, "STOP_HEADSET_AUDIO") { coordinator.setDeviceTalk(device, false).also { device = it } }
         }
+    }
+
+    private suspend fun runSourceNexSmoke(
+        report: SmokeReport,
+        coordinator: PatrolCoordinator,
+        initial: DeviceStatus,
+        runCommands: Boolean,
+        commandHoldMillis: Long,
+        downloadFirst: Boolean
+    ) {
+        var device = initial
+        if (runCommands) {
+            runStep(report, "SOURCENEX_TAKE_PHOTO") { coordinator.takePhoto(device).also { device = it } }
+            runStep(report, "SOURCENEX_START_VIDEO") { coordinator.setRecording(device, true).also { device = it } }
+            delay(commandHoldMillis)
+            runStep(report, "SOURCENEX_STOP_VIDEO") { coordinator.setRecording(device, false).also { device = it } }
+            runStep(report, "SOURCENEX_START_AUDIO") { coordinator.setDeviceTalk(device, true).also { device = it } }
+            delay(commandHoldMillis)
+            runStep(report, "SOURCENEX_STOP_AUDIO") { coordinator.setDeviceTalk(device, false).also { device = it } }
+            delay(2_000L)
+        }
+        val files = runStep(report, "SOURCENEX_MEDIA_DEVICE") {
+            withTimeoutOrNull(MediaCheckTimeoutMillis) { coordinator.mediaFiles(local = false) }
+                ?: error("SourceNex device media list timeout")
+        }.orEmpty()
+        report.step("SOURCENEX_MEDIA_COUNT", "count=${files.size}; ${files.joinToString { "${it.name}:${it.kind}:${it.size}" }}")
+        if (downloadFirst && files.isNotEmpty()) {
+            runStep(report, "SOURCENEX_DOWNLOAD_FIRST") {
+                val states = mutableListOf<String>()
+                coordinator.transferMedia(files.first().id, TransferTarget.PhoneSandbox).collect {
+                    states += "${it.transferStatus}:${"%.0f".format(it.progress * 100)}%:${it.contentUri.orEmpty()}"
+                }
+                states.joinToString(" -> ")
+            }
+        } else {
+            report.step("SOURCENEX_DOWNLOAD_FIRST", "skipped; pass --ez wifiDownloadFirst true")
+        }
+        runStep(report, "SOURCENEX_MEDIA_LOCAL") { coordinator.mediaFiles(local = true).filter { it.id.startsWith("sourcenex-media:") } }
     }
 
     private suspend fun runDirectMediaCommandMatrix(report: SmokeReport, bridge: UteSdkBridge, runAudio: Boolean) {

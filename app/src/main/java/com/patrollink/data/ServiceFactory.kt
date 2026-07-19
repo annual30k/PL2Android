@@ -20,7 +20,6 @@ import com.patrollink.data.ute.UteSdkDeviceControlGateway
 import com.patrollink.data.ute.UteSdkDeviceGateway
 import com.patrollink.data.ute.UteSdkFirmwareGateway
 import com.patrollink.data.ute.UteSdkMediaGateway
-import com.patrollink.data.ute.UteSdkStreamRelayGateway
 import com.patrollink.data.ute.UteWifiMediaClient
 import com.patrollink.data.ute.requireUteCloudUploadResult
 import com.patrollink.data.sourcenex.RoutingDeviceControlGateway
@@ -37,9 +36,6 @@ import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.MediaFile
 import com.patrollink.domain.MediaGateway
 import com.patrollink.domain.PatrolCoordinator
-import com.patrollink.domain.StreamMode
-import com.patrollink.domain.StreamRelayGateway
-import com.patrollink.domain.StreamRelayState
 import com.patrollink.domain.TransferStatus
 import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.VersionGateway
@@ -47,8 +43,6 @@ import com.patrollink.domain.FirmwareGateway
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 
@@ -90,6 +84,7 @@ object ServiceFactory {
         tokenProvider: () -> String?,
         operatorIdProvider: () -> String = { "UNKNOWN_OPERATOR" },
         pairingAccountIdProvider: () -> String = operatorIdProvider,
+        selectedDeviceIdProvider: () -> String = { "" },
         fallbackState: AppUiState,
         sharedUteBridge: UteSdkBridge? = null,
         sharedSourceNexBridge: SourceNexBridge? = null
@@ -148,13 +143,14 @@ object ServiceFactory {
                             photoLocationProvider = { photoLocationGateway.currentLocation() }
                         )
                     }
-                    RoutingDeviceGateway(
+                    val localGateway = RoutingDeviceGateway(
                         ute = existingGateway,
                         sourceNex = SourceNexDeviceGateway(
                             bridge = sourceNexBridge ?: SourceNexBridge(context),
                             fallback = fallbackState.device
                         )
                     )
+                    if (restApi != null) CloudRegisteredDeviceGateway(localGateway, restApi) else localGateway
                 }
                 restApi != null -> RestDeviceGateway(restApi, operatorIdProvider)
                 else -> EmptyDeviceGateway()
@@ -195,11 +191,9 @@ object ServiceFactory {
             },
             streamRelayGateway = when {
                 restApi != null -> RestStreamRelayGateway(restApi)
-                config.streamRelayUrl.isNotBlank() -> ConfiguredStreamRelayGateway(config.streamRelayUrl)
-                uteBridge != null -> UteSdkStreamRelayGateway(uteBridge)
                 else -> EmptyStreamRelayGateway()
             },
-            sosGateway = restApi?.let(::RestSosGateway) ?: EmptySosGateway(),
+            sosGateway = restApi?.let { RestSosGateway(it, deviceIdProvider = selectedDeviceIdProvider) } ?: EmptySosGateway(),
             patrolAreaGateway = restApi?.let(::RestPatrolAreaGateway) ?: EmptyPatrolAreaGateway(),
             intercomGateway = restApi?.let {
                 val audioRouter = BluetoothVoipAudioRouter(context)
@@ -245,8 +239,6 @@ object ServiceFactory {
 
     fun createSosEvidenceRecorder(context: Context) = AndroidSosEvidenceRecorder(context)
 
-    fun createEmergencyContactGateway() = EmptyEmergencyContactGateway()
-
     fun createNotificationGateway(context: Context) = AndroidPatrolNotificationGateway(context)
 
     fun createVersionInstaller(context: Context) = AndroidVersionInstaller(context)
@@ -290,25 +282,6 @@ object ServiceFactory {
                 apiKeyProvider = { config.cerebellumApiKey }
             )
         }
-}
-
-private class ConfiguredStreamRelayGateway(
-    private val relayUrl: String
-) : StreamRelayGateway {
-    private val state = MutableStateFlow(StreamRelayState.Idle)
-
-    override fun state(): Flow<StreamRelayState> = state.asStateFlow()
-
-    override suspend fun start(deviceId: String, mode: StreamMode) {
-        require(relayUrl.isNotBlank()) { "stream relay url required" }
-        require(deviceId.isNotBlank()) { "device required" }
-        state.value = StreamRelayState.Connecting
-        state.value = StreamRelayState.Relaying
-    }
-
-    override suspend fun stop() {
-        state.value = StreamRelayState.Idle
-    }
 }
 
 private class WifiBackedMediaGateway(

@@ -13,6 +13,22 @@
 - 文件通过 `AigClient.download()` 保存到 `files/patrol_media/sourcenex/`，写入 SHA-256 和水印完整性侧车文件，并加入 Room 媒体索引。
 - 支持本地删除、设备端 `ReqFileDel` 删除和后续云端上传路由。
 
+## 实时对讲接口核查结论
+
+对“秒时”0.27.2 APK 中恢复的官方 SDK 做了 JAR 类清单和公开方法反编译核查，结论是：**当前 SDK 支持文件型麦克风录音，不支持实时双向对讲**。
+
+| 核查项 | SDK 实际能力 | 结论 |
+| --- | --- | --- |
+| 麦克风 | `ReqMicRecord`、`ReqMicRecordStop`，任务类型为 `AUDIO_RECORD` | 录音文件能力 |
+| 相机直播 | 仅发现 `ReqCamLiveStop`，未发现配套的公开音频流/双向对讲启动协议 | 不能组成实时对讲 |
+| `AigClient` | 公开连接、下载、状态流、消息发送与回调方法 | 没有 PCM/Opus 实时收发或扬声器播放接口 |
+| `AigMessage.MessageCase` | 包含录音开始/停止消息 | 没有 intercom、talk、speaker、voice-call 或 WebRTC 消息 |
+| `Hmd` | 有音频路由状态和音量等属性 | 仅是设备状态，不是双向音频数据通道 |
+
+JAR 内部虽然包含通用的 `connect.duplex` Socket 收发封装和 `PCMUtils` 压缩工具，但依赖关系显示它们服务于 `ProtocolClient/Reader/Sender` 的通用消息传输；公开 `AigClient`、`Hmd` 和完整 `AigMessage.MessageCase` 均没有建立、接收、播放实时音频流的控制方法或协议消息，不能据此推断设备开放了实时对讲。
+
+因此 PatrolLink 已将“设备录音”和“实时对讲”拆开：录音继续通过真实 SDK 指令执行；平台和移动端不再把录音成功显示成实时对讲成功。待厂商提供双向音频采集、播放、编码、传输及 ACK 协议后，再开放实时对讲入口。手机标准蓝牙 HFP 路由即便可以承载手机 App 的 VoIP，也不等同于 SourceNex SDK 提供硬件实时对讲接口。
+
 ## 固件兼容处理
 
 当前 `SourceNex-6240` 固件会执行拍照和停止类命令，但部分命令不返回开发指南中的 `RES_*` ACK。实现将 ACK 作为可选确认，以 `Hmd.tasks` 状态和后续 `MediaFile` 产出为最终结果，避免把已经执行成功的命令误报为失败。

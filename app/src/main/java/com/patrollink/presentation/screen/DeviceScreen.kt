@@ -35,11 +35,10 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Stop
@@ -76,9 +75,8 @@ import com.patrollink.domain.DeviceEventLevel
 import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
+import com.patrollink.domain.PatrolCommandMessage
 import com.patrollink.domain.ScannedDevice
-import com.patrollink.domain.StreamMode
-import com.patrollink.domain.StreamRelayState
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.ActionTile
 import com.patrollink.presentation.component.DeviceStatPill
@@ -96,8 +94,6 @@ import com.patrollink.presentation.theme.Success
 import com.patrollink.presentation.theme.PatrolTextStyle
 import com.patrollink.presentation.theme.TechBlue
 import com.patrollink.presentation.theme.Warning
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -126,6 +122,9 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                         onAddDevice = onAddDevice
                     )
                 }
+                if (uiState.platformMessages.isNotEmpty()) {
+                    item { PlatformMessagesPanel(uiState.platformMessages, viewModel::markPlatformMessageRead) }
+                }
                 if (hasConnectedDevice) {
                     item { CurrentDevicePanel(device) }
                     item { DevicePrimaryPanel(uiState, viewModel, device) }
@@ -133,7 +132,6 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                         DeviceControlConsole(
                             device = device,
                             capabilities = uiState.deviceCapabilities,
-                            recording = uiState.realtimeAudioSyncing,
                             photoBusy = uiState.photoCaptureInProgress,
                             onPhoto = viewModel::takePhoto,
                             onToggleRecord = viewModel::toggleRecord,
@@ -142,7 +140,7 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                             onMore = { confirmClearAccount.value = true }
                         )
                     }
-                    item { DeviceStatusPanel(device, uiState.deviceCapabilities, uiState.realtimeAudioSyncing) }
+                    item { DeviceStatusPanel(device, uiState.deviceCapabilities) }
                     item { DeviceEventsPanel(uiState.deviceEvents) }
                 } else {
                     item { EmptyDeviceConsole(onAddDevice) }
@@ -169,6 +167,55 @@ fun DeviceScreen(uiState: AppUiState, viewModel: PatrolViewModel, onAddDevice: (
                 viewModel.factoryResetConnectedDevice(DeviceFactoryResetTarget.Glasses)
             }
         )
+    }
+}
+
+@Composable
+private fun PlatformMessagesPanel(
+    messages: List<PatrolCommandMessage>,
+    onRead: (String) -> Unit
+) {
+    val colors = PatrolDisplay.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.border, RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("指挥消息", color = colors.text, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.Black)
+            val unread = messages.count { !it.read }
+            if (unread > 0) StatusTag("$unread 条未读", TechBlue, filled = true)
+        }
+        messages.take(3).forEach { message ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (message.read) colors.control.copy(alpha = 0.45f) else TechBlue.copy(alpha = 0.08f))
+                    .then(if (message.read) Modifier else Modifier.clickable { onRead(message.id) })
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    Icons.Filled.MarkEmailUnread,
+                    contentDescription = null,
+                    tint = if (message.read) colors.textSubtle else TechBlue,
+                    modifier = Modifier.size(19.dp)
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(message.title, color = colors.text, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Text(message.sentAt, color = colors.textSubtle, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1)
+                    }
+                    Text(message.content, color = colors.textMuted, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
     }
 }
 
@@ -364,7 +411,7 @@ private fun DeviceMetricDivider() {
 private fun DevicePrimaryPanel(uiState: AppUiState, viewModel: PatrolViewModel, device: DeviceStatus) {
     when (device.type) {
         DeviceType.Sensor -> SensorStatusHero(device)
-        else -> RecorderLiveFeed(uiState, viewModel, device)
+        else -> RecorderLiveFeed(device)
     }
 }
 
@@ -409,7 +456,6 @@ private fun SensorMetricTile(label: String, value: String, accent: Color, modifi
 private fun DeviceControlConsole(
     device: DeviceStatus,
     capabilities: DeviceCapabilities,
-    recording: Boolean,
     photoBusy: Boolean,
     onPhoto: () -> Unit,
     onToggleRecord: () -> Unit,
@@ -418,9 +464,9 @@ private fun DeviceControlConsole(
     onMore: () -> Unit
 ) {
     val enabled = device.canUseSdkControls()
-    val photoEnabled = enabled && device.type != DeviceType.Sensor && (device.type != DeviceType.Headset || capabilities.supportsPhoto) && !photoBusy
-    val videoEnabled = enabled && device.type != DeviceType.Sensor && (device.type != DeviceType.Headset || capabilities.supportsVideo)
-    val audioEnabled = enabled && device.type == DeviceType.Headset && capabilities.supportsAudioRecord
+    val photoEnabled = enabled && device.type != DeviceType.Sensor && capabilities.supportsPhoto && !photoBusy
+    val videoEnabled = enabled && device.type != DeviceType.Sensor && capabilities.supportsVideo
+    val audioEnabled = enabled && device.type != DeviceType.Sensor && capabilities.supportsAudioRecord
     val colors = PatrolDisplay.colors
     Column(
         Modifier
@@ -455,14 +501,14 @@ private fun DeviceControlConsole(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 DeviceControlButton(
                     label = if (audioEnabled) {
-                        if (recording || device.isTalking) "停止录音" else "录音"
+                        if (device.isTalking) "停止录音" else "录音"
                     } else {
                         "设备自检"
                     },
                     icon = if (audioEnabled) Icons.Filled.Mic else Icons.Filled.CheckCircle,
-                    accent = if (audioEnabled && (recording || device.isTalking)) Danger else TechBlue,
+                    accent = if (audioEnabled && device.isTalking) Danger else TechBlue,
                     enabled = if (audioEnabled) true else enabled,
-                    active = audioEnabled && (recording || device.isTalking),
+                    active = audioEnabled && device.isTalking,
                     onClick = if (audioEnabled) onToggleTalk else onSelfCheck,
                     modifier = Modifier.weight(1f)
                 )
@@ -519,7 +565,7 @@ private fun DeviceControlButton(
 }
 
 @Composable
-private fun DeviceStatusPanel(device: DeviceStatus, capabilities: DeviceCapabilities, recording: Boolean) {
+private fun DeviceStatusPanel(device: DeviceStatus, capabilities: DeviceCapabilities) {
     val colors = PatrolDisplay.colors
     Column(
         Modifier
@@ -533,7 +579,7 @@ private fun DeviceStatusPanel(device: DeviceStatus, capabilities: DeviceCapabili
         Text("设备状态", color = colors.text, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.Black)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             DeviceStatusTile("摄像头", cameraStatus(device, capabilities), Icons.Filled.CameraAlt, TechBlue, Modifier.weight(1f))
-            DeviceStatusTile("录音", audioStatus(device, capabilities, recording), Icons.Filled.Mic, Success, Modifier.weight(1f))
+            DeviceStatusTile("录音", audioStatus(device, capabilities), Icons.Filled.Mic, Success, Modifier.weight(1f))
             DeviceStatusTile("蓝牙", if (device.online) "已连接" else "未连接", Icons.Filled.Bluetooth, TechBlue, Modifier.weight(1f))
             DeviceStatusTile("存储", storageStatus(device), Icons.Filled.Storage, Success, Modifier.weight(1f))
         }
@@ -790,7 +836,7 @@ private fun ConnectedDevicesPanel(
             }
             if (devices.isEmpty()) {
                 Text(
-                    "当前没有设备在线，请添加或连接设备后再使用拍照、录像、对讲和实时画面。",
+                    "当前没有设备在线，请添加或连接设备后再使用拍照、录像和设备录音。",
                     color = colors.textMuted,
                     style = PatrolTextStyle.BodySmall.copy(fontWeight = FontWeight.Bold)
                 )
@@ -838,51 +884,11 @@ private fun ConnectedDeviceChip(device: DeviceStatus, selected: Boolean, onClick
 }
 
 @Composable
-private fun RecorderLiveFeed(uiState: AppUiState, viewModel: PatrolViewModel, device: DeviceStatus) {
-    val enabled = device.isControllableDevice()
-    val fullScreen = remember(device.id) { mutableStateOf(false) }
-    val onToggleStream = {
-        if (uiState.streamState == StreamRelayState.Relaying) {
-            viewModel.stopStream()
-        } else {
-            viewModel.startStream(StreamMode.LowLatency)
-        }
-        Unit
-    }
-    StreamPlayerSurface(
-        uiState = uiState,
-        device = device,
-        enabled = enabled,
-        onToggleStream = onToggleStream,
-        onFullscreen = { fullScreen.value = true },
-        modifier = Modifier
+private fun RecorderLiveFeed(device: DeviceStatus) {
+    Box(
+        Modifier
             .fillMaxWidth()
             .aspectRatio(2.1f)
-    )
-    if (fullScreen.value) {
-        StreamPlayerFullScreen(
-            uiState = uiState,
-            device = device,
-            enabled = enabled,
-            onToggleStream = onToggleStream,
-            onDismiss = { fullScreen.value = false }
-        )
-    }
-}
-
-@Composable
-private fun StreamPlayerSurface(
-    uiState: AppUiState,
-    device: DeviceStatus,
-    enabled: Boolean,
-    onToggleStream: () -> Unit,
-    onFullscreen: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val isRelaying = uiState.streamState == StreamRelayState.Relaying
-    val isConnecting = uiState.streamState == StreamRelayState.Connecting
-    Box(
-        modifier
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
             .border(1.dp, Color(0xFF0F172A), RoundedCornerShape(8.dp))
@@ -904,18 +910,18 @@ private fun StreamPlayerSurface(
                 Modifier
                     .size(84.dp)
                     .clip(RoundedCornerShape(99.dp))
-                    .background(TechBlue.copy(alpha = if (isRelaying) 0.18f else 0.09f)),
+                    .background(TechBlue.copy(alpha = 0.09f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     Icons.Filled.Videocam,
                     contentDescription = null,
-                    tint = if (isRelaying) TechBlue else Color.White.copy(alpha = 0.42f),
+                    tint = Color.White.copy(alpha = 0.42f),
                     modifier = Modifier.size(38.dp)
                 )
             }
             Text(
-                if (enabled) streamHint(uiState.streamState) else "设备未连接",
+                "实时画面暂未开放",
                 color = Color.White,
                 fontSize = 14.sp,
                 lineHeight = 18.sp,
@@ -924,7 +930,7 @@ private fun StreamPlayerSurface(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                device.name,
+                "当前设备 SDK 未提供可用的视频推流接口",
                 color = Color.White.copy(alpha = 0.56f),
                 fontSize = 11.sp,
                 lineHeight = 14.sp,
@@ -938,89 +944,8 @@ private fun StreamPlayerSurface(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Box(Modifier.size(7.dp).clip(RoundedCornerShape(99.dp)).background(if (isRelaying) Danger else Warning))
-            Text(streamTag(uiState.streamState, device.isRecording), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        }
-        Box(
-            Modifier.align(Alignment.BottomStart).padding(10.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            StreamControlButton(
-                icon = if (isRelaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                label = when {
-                    isConnecting -> "连接中"
-                    isRelaying -> "停止"
-                    else -> "播放"
-                },
-                enabled = enabled && !isConnecting,
-                active = isRelaying,
-                onClick = onToggleStream
-            )
-        }
-        Box(
-            Modifier.align(Alignment.BottomEnd).padding(10.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            StreamControlButton(
-                icon = Icons.Filled.Fullscreen,
-                label = "全屏",
-                enabled = enabled,
-                active = false,
-                onClick = onFullscreen
-            )
-        }
-    }
-}
-
-@Composable
-private fun StreamControlButton(icon: ImageVector, label: String, enabled: Boolean, active: Boolean, onClick: () -> Unit) {
-    val clickModifier = if (enabled) Modifier.clickable(onClick = onClick) else Modifier
-    Row(
-        Modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(7.dp))
-            .background(
-                when {
-                    active -> Danger
-                    enabled -> Color.White.copy(alpha = 0.14f)
-                    else -> Color.White.copy(alpha = 0.07f)
-                }
-            )
-            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(7.dp))
-            .then(clickModifier)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Icon(icon, contentDescription = label, tint = Color.White.copy(alpha = if (enabled) 1f else 0.38f), modifier = Modifier.size(16.dp))
-        Text(label, color = Color.White.copy(alpha = if (enabled) 1f else 0.38f), fontSize = 12.sp, fontWeight = FontWeight.Black)
-    }
-}
-
-@Composable
-private fun StreamPlayerFullScreen(
-    uiState: AppUiState,
-    device: DeviceStatus,
-    enabled: Boolean,
-    onToggleStream: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black).padding(10.dp)) {
-            StreamPlayerSurface(
-                uiState = uiState,
-                device = device,
-                enabled = enabled,
-                onToggleStream = onToggleStream,
-                onFullscreen = onDismiss,
-                modifier = Modifier.fillMaxSize()
-            )
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-            ) {
-                Text("关闭", color = Color.White, fontWeight = FontWeight.Black)
-            }
+            Box(Modifier.size(7.dp).clip(RoundedCornerShape(99.dp)).background(Warning))
+            Text(if (device.isRecording) "设备录像中" else device.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
         }
     }
 }
@@ -1400,10 +1325,10 @@ private fun cameraStatus(device: DeviceStatus, capabilities: DeviceCapabilities)
         else -> "待机"
     }
 
-private fun audioStatus(device: DeviceStatus, capabilities: DeviceCapabilities, recording: Boolean): String =
+private fun audioStatus(device: DeviceStatus, capabilities: DeviceCapabilities): String =
     when {
         device.type == DeviceType.Headset && !capabilities.supportsAudioRecord -> "等待控制通道"
-        recording || device.isTalking -> "录制中"
+        device.isTalking -> "录制中"
         device.type == DeviceType.Sensor -> "不适用"
         else -> "待机"
     }
@@ -2141,17 +2066,3 @@ private fun Long.toEventFullTimeText(): String =
     runCatching {
         Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).format(eventFullTimeFormatter)
     }.getOrDefault("时间未知")
-
-private fun streamHint(state: StreamRelayState): String = when (state) {
-    StreamRelayState.Idle -> "点击播放接入实时画面"
-    StreamRelayState.Connecting -> "正在连接安全视频通道"
-    StreamRelayState.Relaying -> "实时画面传输中"
-    StreamRelayState.Failed -> "连接失败，可重新播放"
-}
-
-private fun streamTag(state: StreamRelayState, recording: Boolean): String = when (state) {
-    StreamRelayState.Idle -> if (recording) "录像中" else "待接入"
-    StreamRelayState.Connecting -> "连接中"
-    StreamRelayState.Relaying -> "低延迟直播中"
-    StreamRelayState.Failed -> "连接失败"
-}

@@ -90,7 +90,7 @@ class RestDeviceGateway(
     override suspend fun bind(deviceId: String): DeviceStatus = api.bindDevice(deviceId).data.toDomain()
 
     override suspend fun unbind(deviceId: String): DeviceStatus? =
-        runCatching { api.unbindDevice(deviceId).data.toDomain() }.getOrNull()
+        api.unbindDevice(deviceId).data.toDomain()
 
     override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus {
         val commandValue = when (command) {
@@ -102,6 +102,32 @@ class RestDeviceGateway(
         }
         return api.sendDeviceCommand(deviceId, DeviceCommandRequestDto(commandValue, operatorIdProvider(), "REQ-${System.currentTimeMillis()}")).data.toDomain()
     }
+}
+
+/**
+ * 真机控制仍由本地 SDK 执行，同时把绑定生命周期同步到平台。
+ * 平台指令的执行结果通过独立 ACK 接口回传，避免把“请求已入库”误当作硬件成功。
+ */
+class CloudRegisteredDeviceGateway(
+    private val local: DeviceGateway,
+    private val api: PatrolRestApi
+) : DeviceGateway {
+    override fun scan(): Flow<List<ScannedDevice>> = local.scan()
+
+    override suspend fun bind(deviceId: String): DeviceStatus {
+        val localStatus = local.bind(deviceId)
+        val cloudRegistered = runCatching { api.bindDevice(localStatus.id).success }.getOrDefault(false)
+        return localStatus.copy(cloudConnected = cloudRegistered)
+    }
+
+    override suspend fun unbind(deviceId: String): DeviceStatus? {
+        val localStatus = local.unbind(deviceId)
+        api.unbindDevice(deviceId)
+        return localStatus?.copy(cloudConnected = false)
+    }
+
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus =
+        local.sendCommand(deviceId, command)
 }
 
 class RestAlertGateway(
@@ -336,13 +362,16 @@ class RestIntercomGateway(
     }
 }
 
-class RestSosGateway(private val api: PatrolRestApi) : SosGateway {
+class RestSosGateway(
+    private val api: PatrolRestApi,
+    private val deviceIdProvider: () -> String = { "" }
+) : SosGateway {
     private val state = MutableStateFlow(SosState(SosPhase.Idle, null, recordingAudio = false, backupEtaMinutes = null))
 
     override fun state(): Flow<SosState> = state.asStateFlow()
 
-    override suspend fun activate(location: GpsLocation): SosEvent {
-        val response = api.activateSos(location.toDto()).data
+    override suspend fun activate(location: GpsLocation, clientEventId: String): SosEvent {
+        val response = api.activateSos(location.toDto(deviceIdProvider().takeIf { it.isNotBlank() }, clientEventId.takeIf { it.isNotBlank() })).data
         state.value = response.toDomainState()
         return response.toDomainEvent()
     }

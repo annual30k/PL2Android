@@ -43,6 +43,15 @@ class OkHttpCerebellumApi(
     override suspend fun analyzeObject(request: CerebellumObjectAnalyzeRequestDto): CerebellumObjectAnalyzeResponseDto =
         post("api/v1/analyze/object", request)
 
+    override suspend fun analyzePlate(request: CerebellumPlateAnalyzeRequestDto): CerebellumVisionAnalyzeResponseDto =
+        post("api/v1/analyze/plate", request)
+
+    override suspend fun analyzeFace(request: CerebellumFaceAnalyzeRequestDto): CerebellumVisionAnalyzeResponseDto =
+        post("api/v1/analyze/face", request)
+
+    override suspend fun analyzeVision(request: CerebellumCombinedVisionAnalyzeRequestDto): CerebellumCombinedVisionAnalyzeResponseDto =
+        post("api/v1/analyze/vision", request)
+
     override suspend fun transcribeAudio(request: CerebellumAsrTranscribeRequestDto): CerebellumAsrTranscribeResponseDto =
         post("api/v1/asr/transcribe", request)
 

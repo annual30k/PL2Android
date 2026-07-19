@@ -84,6 +84,21 @@ data class DeviceCommandRequestDto(
     val requestId: String
 )
 
+data class PendingDeviceCommandDto(
+    val commandId: String,
+    val deviceId: String,
+    val command: String,
+    val requestId: String? = null,
+    val operatorId: String? = null,
+    val sentAt: Long = 0L
+)
+
+data class DeviceCommandAckRequestDto(
+    val deviceId: String,
+    val status: String,
+    val message: String
+)
+
 data class DeviceCapabilitiesDto(
     val supportsGlasses: Boolean,
     val supportsEarphone: Boolean,
@@ -283,7 +298,9 @@ data class GpsLocationDto(
     val latitude: Double,
     val longitude: Double,
     val accuracyMeters: Float,
-    val address: String
+    val address: String,
+    val deviceId: String? = null,
+    val clientEventId: String? = null
 )
 
 data class PatrolGeoPointDto(

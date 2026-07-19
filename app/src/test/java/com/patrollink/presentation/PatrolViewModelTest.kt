@@ -144,6 +144,39 @@ class PatrolViewModelTest {
     }
 
     @Test
+    fun supportedGlassAudioUsesDeviceRecordingInsteadOfAppIntercom() = runTest {
+        val gateway = RecordingGlassDeviceGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithDeviceGatewayAndUnsupportedIntercom(gateway),
+            deviceControlGateway = FixedCapabilitiesControlGateway(
+                DeviceCapabilities(
+                    supportsGlasses = true,
+                    supportsPhoto = true,
+                    supportsVideo = true,
+                    supportsAudioRecord = true,
+                    supportsRealtimeAudio = false
+                )
+            )
+        )
+        loginForTest(viewModel)
+        viewModel.connectDiscoveredDevice(
+            id = "22:22:CC:60:9C:E6",
+            name = "SourceNex-6240",
+            mac = "22:22:CC:60:9C:E6",
+            signalBars = 5,
+            type = DeviceType.Glasses
+        )
+        advanceUntilIdle()
+
+        viewModel.toggleTalk()
+        advanceUntilIdle()
+
+        assertEquals(listOf(DeviceCommand.StartTalk), gateway.commands)
+        assertTrue(viewModel.uiState.value.device.isTalking)
+        assertEquals("录音已开始", viewModel.uiState.value.deviceEvents.first().title)
+    }
+
+    @Test
     fun photoCommandWithoutImmediateFilePromptsWifiMediaSync() = runTest {
         val viewModel = testViewModel()
         loginAndConnect(viewModel)
@@ -1203,6 +1236,25 @@ class PatrolViewModelTest {
     }
 
     @Test
+    fun platformUnbindFailureIsQueuedInsteadOfReportedAsDelivered() = runTest {
+        val taskGateway = InMemoryBackgroundTaskGateway()
+        val viewModel = testViewModel(
+            coordinator = coordinatorWithDeviceGateway(FailingUnbindDeviceGateway()),
+            offlineSyncEngine = OfflineSyncEngine(taskGateway)
+        )
+        loginAndConnect(viewModel)
+
+        viewModel.unbindDevice("HEADSET_001")
+        advanceUntilIdle()
+
+        val queued = taskGateway.pending().single().task
+        assertEquals(BackgroundTaskType.SyncDeviceUnbind, queued.type)
+        assertEquals("HEADSET_001", queued.payloadId)
+        assertEquals(OperationMessageType.Warning, viewModel.uiState.value.operationMessage?.type)
+        assertTrue(viewModel.uiState.value.operationMessage?.text?.contains("平台解绑正在自动补传") == true)
+    }
+
+    @Test
     fun unbindDiscoveredDeviceResolvesConnectedHeadsetByScannedNameWhenIdsDiffer() = runTest {
         val gateway = ResetControlGateway(clearSuccess = true)
         val viewModel = testViewModel(deviceControlGateway = gateway)
@@ -1328,6 +1380,21 @@ class PatrolViewModelTest {
         viewModel.cancelSos()
         advanceUntilIdle()
         assertFalse(viewModel.uiState.value.sosActive)
+    }
+
+    @Test
+    fun activeSosPreventsLogoutUntilCancellationIsRecorded() = runTest {
+        val viewModel = testViewModel()
+        loginForTest(viewModel)
+
+        viewModel.activateSos()
+        advanceUntilIdle()
+        viewModel.logout()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isLoggedIn)
+        assertTrue(viewModel.uiState.value.sosActive)
+        assertEquals("SOS 仍处于活动或待补传状态，请先完成取消再退出账号", viewModel.uiState.value.operationMessage?.text)
     }
 
     @Test
@@ -1500,6 +1567,22 @@ private fun coordinatorWithDeviceGateway(deviceGateway: DeviceGateway) = PatrolC
     streamRelayGateway = com.patrollink.data.MockStreamRelayGateway(),
     sosGateway = com.patrollink.data.MockSosGateway(),
     patrolAreaGateway = com.patrollink.data.MockPatrolAreaGateway()
+)
+
+private fun coordinatorWithDeviceGatewayAndUnsupportedIntercom(deviceGateway: DeviceGateway) = PatrolCoordinator(
+    authGateway = com.patrollink.data.MockAuthGateway(),
+    deviceGateway = deviceGateway,
+    alertGateway = com.patrollink.data.MockAlertGateway(),
+    mediaGateway = com.patrollink.data.MockMediaGateway(),
+    realtimeGateway = com.patrollink.data.MockRealtimeGateway(),
+    streamRelayGateway = com.patrollink.data.MockStreamRelayGateway(),
+    sosGateway = com.patrollink.data.MockSosGateway(),
+    patrolAreaGateway = com.patrollink.data.MockPatrolAreaGateway(),
+    intercomGateway = object : com.patrollink.domain.IntercomGateway {
+        override fun state(): Flow<com.patrollink.domain.IntercomState> = emptyFlow()
+        override suspend fun start(deviceId: String): com.patrollink.domain.IntercomSession = error("硬件实时对讲未开放")
+        override suspend fun stop() = error("硬件实时对讲未开放")
+    }
 )
 
 private class FailingCloudMediaGateway(private val localMedia: MediaFile) : MediaGateway {
@@ -1752,6 +1835,18 @@ private class TwoDeviceGateway : DeviceGateway {
 
     override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus =
         devices.getValue(deviceId)
+}
+
+private class FailingUnbindDeviceGateway : DeviceGateway {
+    override fun scan(): Flow<List<ScannedDevice>> = emptyFlow()
+
+    override suspend fun bind(deviceId: String): DeviceStatus =
+        testDevice(deviceId, "ForceLink-H1", DeviceType.Headset)
+
+    override suspend fun unbind(deviceId: String): DeviceStatus? = error("platform offline")
+
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus =
+        testDevice(deviceId, "ForceLink-H1", DeviceType.Headset)
 }
 
 private class SystemBluetoothScanGateway : DeviceGateway {

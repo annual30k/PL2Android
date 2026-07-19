@@ -210,7 +210,8 @@ fun IntercomSessionDto.toDomain() = IntercomSession(
     message = message
 )
 
-fun GpsLocation.toDto() = GpsLocationDto(latitude, longitude, accuracyMeters, address)
+fun GpsLocation.toDto(deviceId: String? = null, clientEventId: String? = null) =
+    GpsLocationDto(latitude, longitude, accuracyMeters, address, deviceId, clientEventId)
 
 fun GpsLocationDto.toDomain() = GpsLocation(latitude, longitude, accuracyMeters, address)
 

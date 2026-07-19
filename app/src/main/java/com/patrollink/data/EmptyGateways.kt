@@ -15,8 +15,6 @@ import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceGateway
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceWifiState
-import com.patrollink.domain.EmergencyContact
-import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.EmptyAppState
 import com.patrollink.domain.FirmwareCheckResult
 import com.patrollink.domain.FirmwareDeviceMetadata
@@ -68,21 +66,19 @@ class EmptyAuthGateway : AuthGateway {
 class EmptyDeviceGateway : DeviceGateway {
     override fun scan(): Flow<List<ScannedDevice>> = flowOf(emptyList())
 
-    override suspend fun bind(deviceId: String): DeviceStatus =
-        EmptyAppState.create().device.copy(id = deviceId)
+    override suspend fun bind(deviceId: String): DeviceStatus = error("设备连接通道未配置")
 
-    override suspend fun unbind(deviceId: String): DeviceStatus? = null
+    override suspend fun unbind(deviceId: String): DeviceStatus? = error("设备解绑通道未配置")
 
-    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus =
-        EmptyAppState.create().device.copy(id = deviceId)
+    override suspend fun sendCommand(deviceId: String, command: DeviceCommand): DeviceStatus = error("设备指令通道未配置")
 }
 
 class EmptyDeviceControlGateway : DeviceControlGateway {
     override fun events(): Flow<DeviceEvent> = emptyFlow()
     override suspend fun capabilities(device: DeviceStatus): DeviceCapabilities = DeviceCapabilities()
     override suspend fun readWifi(): DeviceWifiState = DeviceWifiState()
-    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState = DeviceWifiState()
-    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = settings
+    override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState = error("设备 Wi-Fi 通道未配置")
+    override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings): DeviceAdvancedSettings = error("设备设置通道未配置")
     override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
     override suspend fun stopRealtimeAudioSync(): Boolean = false
     override suspend fun notifyMediaSyncCompleted(): Boolean = false
@@ -98,22 +94,22 @@ class EmptyAlertGateway : AlertGateway {
 
 class EmptyMediaGateway : MediaGateway {
     override suspend fun listFiles(local: Boolean): List<MediaFile> = emptyList()
-    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = emptyFlow()
-    override suspend fun uploadLocalFile(file: File, storageSide: String, bizType: String, bizId: String): MediaFile? = null
+    override fun transfer(fileId: String, target: TransferTarget): Flow<MediaFile> = kotlinx.coroutines.flow.flow { error("媒体传输通道未配置") }
+    override suspend fun uploadLocalFile(file: File, storageSide: String, bizType: String, bizId: String): MediaFile? = error("媒体上传通道未配置")
     override suspend fun delete(fileId: String, local: Boolean): Boolean = false
     override suspend fun verifySha256(fileId: String): Boolean = false
 }
 
 class EmptyRealtimeGateway : RealtimeGateway {
     override fun connection(): Flow<RealtimeConnection> = flowOf(RealtimeConnection.Disconnected)
-    override suspend fun connect(token: String) = Unit
+    override suspend fun connect(token: String) = error("平台实时连接未配置")
     override suspend fun disconnect() = Unit
     override suspend fun sendHeartbeat(device: DeviceStatus): HeartbeatAck = HeartbeatAck(false, System.currentTimeMillis())
 }
 
 class EmptyStreamRelayGateway : StreamRelayGateway {
     override fun state(): Flow<StreamRelayState> = flowOf(StreamRelayState.Idle)
-    override suspend fun start(deviceId: String, mode: StreamMode) = Unit
+    override suspend fun start(deviceId: String, mode: StreamMode) = error("实时画面通道未配置")
     override suspend fun stop() = Unit
 }
 
@@ -125,17 +121,12 @@ class EmptyIntercomGateway : IntercomGateway {
 
 class EmptySosGateway : SosGateway {
     override fun state(): Flow<SosState> = flowOf(SosState(SosPhase.Idle, null, recordingAudio = false, backupEtaMinutes = null))
-    override suspend fun activate(location: GpsLocation): SosEvent = SosEvent("", SosPhase.Active, "SOS 后端未配置")
-    override suspend fun cancel(): SosEvent = SosEvent("", SosPhase.Cancelled, "SOS 已取消")
+    override suspend fun activate(location: GpsLocation, clientEventId: String): SosEvent = error("SOS 平台通道未配置")
+    override suspend fun cancel(): SosEvent = error("SOS 平台通道未配置")
 }
 
 class EmptyPatrolAreaGateway : PatrolAreaGateway {
     override suspend fun currentArea(): PatrolArea = EmptyAppState.create().patrolArea
-}
-
-class EmptyEmergencyContactGateway : EmergencyContactGateway {
-    override suspend fun contacts(): List<EmergencyContact> = emptyList()
-    override suspend fun notifyContacts(sosId: String, location: GpsLocation): Boolean = false
 }
 
 class EmptyVersionGateway : VersionGateway {

@@ -69,7 +69,7 @@ enum class DeviceFactoryResetTarget {
 
 interface SosGateway {
     fun state(): Flow<SosState>
-    suspend fun activate(location: GpsLocation): SosEvent
+    suspend fun activate(location: GpsLocation, clientEventId: String = ""): SosEvent
     suspend fun cancel(): SosEvent
 }
 
@@ -123,11 +123,6 @@ interface SosEvidenceRecorder {
 interface VersionInstaller {
     suspend fun prepare(update: VersionCheckResult, expectedSha256: String? = null): VersionInstallPackage
     fun launchInstall(packageInfo: VersionInstallPackage): Boolean
-}
-
-interface EmergencyContactGateway {
-    suspend fun contacts(): List<EmergencyContact>
-    suspend fun notifyContacts(sosId: String, location: GpsLocation): Boolean
 }
 
 interface PatrolNotificationGateway {

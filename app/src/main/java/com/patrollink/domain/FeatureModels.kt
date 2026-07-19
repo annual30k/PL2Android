@@ -9,7 +9,16 @@ enum class StreamRelayState { Idle, Connecting, Relaying, Failed }
 enum class IntercomState { Idle, WaitingApp, Signaling, Active, Closed, Failed }
 enum class SosPhase { Idle, Activating, Active, Cancelled }
 enum class AppPermission { Internet, NetworkState, FineLocation, NearbyWifiDevices, BluetoothScan, BluetoothConnect, BluetoothAdvertise, Camera, RecordAudio, PostNotifications, ForegroundService }
-enum class BackgroundTaskType { Heartbeat, UploadEvidence, SyncAlertDisposition, VersionCheck }
+enum class BackgroundTaskType {
+    Heartbeat,
+    UploadEvidence,
+    UploadSosEvidence,
+    SyncAlertDisposition,
+    SyncDeviceCommandAck,
+    SyncMessageRead,
+    SyncSosState,
+    SyncDeviceUnbind
+}
 enum class DeviceEventLevel { Info, Warning, Error }
 
 data class DeviceCapabilities(
@@ -187,11 +196,4 @@ data class FirmwareUpgradeTask(
     val errorMessage: String,
     val startedAt: String,
     val finishedAt: String
-)
-
-data class EmergencyContact(
-    val id: String,
-    val name: String,
-    val role: String,
-    val phone: String
 )

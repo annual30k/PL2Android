@@ -101,6 +101,72 @@ class OkHttpCerebellumApiTest {
     }
 
     @Test
+    fun cloudWatchlistRecognitionPostsOneCombinedRequestAndParsesDirectResult() = runTest {
+        val server = MockWebServer()
+        val response = """
+            {
+              "request_id":"IMG-1",
+              "frame_id":"IMG-1",
+              "elapsed_ms":681,
+              "plate":{
+                "backend":"hyperlpr3",
+                "candidates":[{"plate_number":"闽A12345","confidence":0.93}],
+                "candidate_count":1
+              },
+              "face":{
+                "backend":"opencv-zoo-yunet+sface",
+                "faces":[{"candidate":{"person_id":"PERSON-1","display_name":"测试人员","similarity":0.88}}],
+                "face_count":1,
+                "candidate_count":1
+              },
+              "alerts":[{
+                "alert_id":"FACE-IMG-1-PERSON-1",
+                "device_id":"HEADSET_001",
+                "person_id":"PERSON-1",
+                "display_name":"测试人员",
+                "backend_delivery_status":"QUEUED",
+                "backend_outbox_id":"face:FACE-IMG-1-PERSON-1"
+              }],
+              "platform_delivery":"QUEUED",
+              "requires_human_confirmation":true,
+              "event":{
+                "event_id":"evt-vision-1",
+                "event_type":"vision_analysis_completed",
+                "created_at":"2026-07-19T08:00:00Z",
+                "payload":{},
+                "human_status":"unconfirmed"
+              }
+            }
+        """.trimIndent()
+        server.use {
+            server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(response))
+            val api = OkHttpCerebellumApi(server.url("/").toString(), apiKeyProvider = { "cloud-key" })
+
+            val parsed = api.analyzeVision(
+                CerebellumCombinedVisionAnalyzeRequestDto(
+                    frameId = "IMG-1",
+                    cameraId = "HEADSET_001",
+                    imageUri = "/cloud/IMG-1.jpg",
+                    deviceId = "HEADSET_001"
+                )
+            )
+
+            val request = server.takeRequest()
+            val body = request.body.readUtf8()
+            assertEquals("/api/v1/analyze/vision", request.path)
+            assertTrue(body.contains("\"image_uri\":\"/cloud/IMG-1.jpg\""))
+            assertTrue(body.contains("\"candidate_library\":\"backend-authorized-watchlist\""))
+            assertTrue(body.contains("\"device_id\":\"HEADSET_001\""))
+            assertEquals("cloud-key", request.getHeader("X-API-Key"))
+            assertEquals("闽A12345", parsed.plate.candidates.single().plateNumber)
+            assertEquals("测试人员", parsed.face.faces.single().candidate?.displayName)
+            assertEquals("QUEUED", parsed.platformDelivery)
+            assertEquals("QUEUED", parsed.alerts.single().backendDeliveryStatus)
+            assertEquals(681, parsed.elapsedMs)
+        }
+    }
+
+    @Test
     fun createReportPostsDailyReportRequestAndParsesContent() = runTest {
         val server = MockWebServer()
         server.use {

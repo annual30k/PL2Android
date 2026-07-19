@@ -153,17 +153,6 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
                         Text("${location.accuracyMeters}m 精度", color = Color(0xFF60A5FA), fontSize = 12.sp, fontWeight = FontWeight.Black)
                     }
                 }
-                if (uiState.emergencyContacts.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("紧急联系人", color = Color.White.copy(alpha = 0.60f), fontSize = 10.sp, fontWeight = FontWeight.Black)
-                        uiState.emergencyContacts.take(2).forEach { contact ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("${contact.name} · ${contact.role}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text(contact.phone, color = Color(0xFFFFCDD2), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
             }
         }
     }

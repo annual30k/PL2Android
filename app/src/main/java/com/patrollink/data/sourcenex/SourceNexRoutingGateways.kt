@@ -64,8 +64,8 @@ class RoutingDeviceControlGateway(
     override suspend fun configureWifi(enabled: Boolean, ssid: String, password: String): DeviceWifiState =
         if (bridge.isActive()) DeviceWifiState(enabled = false) else ute.configureWifi(enabled, ssid, password)
     override suspend fun applySettings(device: DeviceStatus, settings: DeviceAdvancedSettings) = if (bridge.isActive()) settings else ute.applySettings(device, settings)
-    override suspend fun startRealtimeAudioSync(sessionId: String) = if (bridge.isActive()) false else ute.startRealtimeAudioSync(sessionId)
-    override suspend fun stopRealtimeAudioSync() = if (bridge.isActive()) false else ute.stopRealtimeAudioSync()
+    override suspend fun startRealtimeAudioSync(sessionId: String) = false
+    override suspend fun stopRealtimeAudioSync() = false
     override suspend fun notifyMediaSyncCompleted() = if (bridge.isActive()) true else ute.notifyMediaSyncCompleted()
     override suspend fun clearDeviceAccount() = if (bridge.isActive()) false else ute.clearDeviceAccount()
     override suspend fun factoryResetDevice(target: DeviceFactoryResetTarget) = if (bridge.isActive()) false else ute.factoryResetDevice(target)

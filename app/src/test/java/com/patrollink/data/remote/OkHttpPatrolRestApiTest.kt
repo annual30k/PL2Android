@@ -62,6 +62,39 @@ class OkHttpPatrolRestApiTest {
     }
 
     @Test
+    fun platformCommandsArePulledAndAcknowledgedThroughDedicatedEndpoints() = runTest {
+        val server = MockWebServer()
+        server.use {
+            server.enqueue(
+                MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(
+                    envelope(
+                        """[{"commandId":"CMD-1","deviceId":"HEADSET_001","command":"TAKE_PHOTO","requestId":"REQ-1","operatorId":"admin","sentAt":123}]"""
+                    )
+                )
+            )
+            server.enqueue(
+                MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(
+                    envelope("""{"success":true,"state":"ACKED","message":"设备已执行并确认"}""")
+                )
+            )
+            val api = OkHttpPatrolRestApi(server.url("/").toString(), tokenProvider = { "access-token" })
+
+            val commands = api.pendingDeviceCommands("HEADSET_001", limit = 99).data
+            api.acknowledgeDeviceCommand(
+                commands.single().commandId,
+                DeviceCommandAckRequestDto("HEADSET_001", "ACKED", "设备已执行并确认")
+            )
+
+            val pull = server.takeRequest()
+            val ack = server.takeRequest()
+            assertEquals("/api/v1/devices/HEADSET_001/commands/pending?limit=50", pull.path)
+            assertEquals("/api/v1/devices/commands/CMD-1/ack", ack.path)
+            assertTrue(ack.body.readUtf8().contains("\"status\":\"ACKED\""))
+            assertEquals("Bearer access-token", ack.getHeader("Authorization"))
+        }
+    }
+
+    @Test
     fun resumableUploadCreatesTaskSkipsUploadedChunksAndCompletes() = runTest {
         val server = MockWebServer()
         val media = File.createTempFile("patrol-media", ".bin").apply {

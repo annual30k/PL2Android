@@ -63,6 +63,12 @@ class OkHttpPatrolRestApi(
     override suspend fun sendDeviceCommand(deviceId: String, request: DeviceCommandRequestDto): ApiEnvelope<DeviceStatusDto> =
         post("api/v1/devices/${deviceId.pathId()}/commands", request)
 
+    override suspend fun pendingDeviceCommands(deviceId: String, limit: Int): ApiEnvelope<List<PendingDeviceCommandDto>> =
+        get("api/v1/devices/${deviceId.pathId()}/commands/pending?limit=${limit.coerceIn(1, 50)}")
+
+    override suspend fun acknowledgeDeviceCommand(commandId: String, request: DeviceCommandAckRequestDto): ApiEnvelope<DeviceControlResultDto> =
+        post("api/v1/devices/commands/${commandId.pathId()}/ack", request)
+
     override suspend fun deviceCapabilities(deviceId: String): ApiEnvelope<DeviceCapabilitiesDto> =
         get("api/v1/devices/${deviceId.pathId()}/capabilities")
 

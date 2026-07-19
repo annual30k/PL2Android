@@ -72,6 +72,14 @@ data class AlertItem(
     val confidence: String
 )
 
+data class PatrolCommandMessage(
+    val id: String,
+    val title: String,
+    val content: String,
+    val sentAt: String,
+    val read: Boolean
+)
+
 data class MediaFile(
     val id: String,
     val name: String,
@@ -206,8 +214,8 @@ data class AppUiState(
     val selectedDeviceId: String? = null,
     val sosLocation: GpsLocation,
     val patrolArea: PatrolArea,
-    val emergencyContacts: List<EmergencyContact> = emptyList(),
     val alerts: List<AlertItem>,
+    val platformMessages: List<PatrolCommandMessage> = emptyList(),
     val mediaFiles: List<MediaFile>,
     val user: UserProfile
 )

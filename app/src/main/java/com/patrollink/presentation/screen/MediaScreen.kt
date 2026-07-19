@@ -542,7 +542,7 @@ private fun StorageSummaryCard(title: String, usedGb: Float, totalGb: Float, onH
                         .size(24.dp)
                         .clip(CircleShape)
                         .background(colors.control)
-                        .combinedClickable(onClick = {}, onLongClick = onHelp),
+                        .combinedClickable(onClick = onHelp, onLongClick = onHelp),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(15.dp))
@@ -1618,7 +1618,9 @@ private fun PhotoPreview(
     var image by remember(file.id, file.contentUri) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(file.id, file.contentUri) {
         val request = contentRequest(file)
-        image = withContext(Dispatchers.IO) { loadImageBitmap(context, request?.value ?: file.contentUri, request?.authorization) }
+        image = withContext(Dispatchers.IO) {
+            loadImageBitmap(context, request?.value ?: file.contentUri, request?.authorization, clientId = request?.clientId)
+        }
     }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         if (image != null) {
@@ -1651,7 +1653,8 @@ private fun NativeVideoPreview(
             loadVideoCoverFrame(
                 context,
                 request?.value ?: file.contentUri,
-                request?.authorization
+                request?.authorization,
+                clientId = request?.clientId
             )
         }
     }
@@ -2148,8 +2151,8 @@ private val ChineseMediaDateTimeFormatter: DateTimeFormatter =
 
 private fun loadMediaThumbnail(context: Context, kind: MediaKind, request: MediaContentRequest?, maxPx: Int = MediaThumbnailMaxPx): Bitmap? =
     when (kind) {
-        MediaKind.Photo -> loadImageBitmap(context, request?.value, request?.authorization, maxPx)
-        MediaKind.Video -> loadVideoFrame(context, request?.value, request?.authorization, maxPx)
+        MediaKind.Photo -> loadImageBitmap(context, request?.value, request?.authorization, maxPx, request?.clientId)
+        MediaKind.Video -> loadVideoFrame(context, request?.value, request?.authorization, maxPx, request?.clientId)
         MediaKind.Audio -> null
     }
 
@@ -2194,7 +2197,7 @@ private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, 
                 putMediaThumbnailInMemory(cacheKey, cached)
                 return@withPermit cached
             }
-            loadRemoteDeviceThumbnail(context, kind, value, request.authorization, targetSize)?.also { loaded ->
+            loadRemoteDeviceThumbnail(context, kind, value, request.authorization, request.clientId, targetSize)?.also { loaded ->
                 putMediaThumbnailInMemory(cacheKey, loaded)
                 runCatching {
                     cachedFile.parentFile?.mkdirs()
@@ -2207,10 +2210,17 @@ private suspend fun loadDeviceMediaThumbnail(context: Context, kind: MediaKind, 
     }
 }
 
-private fun loadRemoteDeviceThumbnail(context: Context, kind: MediaKind, value: String, authorization: String?, maxPx: Int = MediaThumbnailMaxPx): Bitmap? =
+private fun loadRemoteDeviceThumbnail(
+    context: Context,
+    kind: MediaKind,
+    value: String,
+    authorization: String?,
+    clientId: String?,
+    maxPx: Int = MediaThumbnailMaxPx
+): Bitmap? =
     when (kind) {
-        MediaKind.Photo -> loadImageBitmap(context, value, authorization, maxPx)
-        MediaKind.Video -> loadVideoCoverFrame(context, value, authorization, maxPx)
+        MediaKind.Photo -> loadImageBitmap(context, value, authorization, maxPx, clientId)
+        MediaKind.Video -> loadVideoCoverFrame(context, value, authorization, maxPx, clientId)
         MediaKind.Audio -> null
     }
 
@@ -2222,7 +2232,13 @@ private fun String.sha256Key(): String {
     return digest.joinToString("") { "%02x".format(it) }
 }
 
-internal fun loadImageBitmap(context: Context, value: String?, authorization: String? = null, maxPx: Int = MediaThumbnailMaxPx): Bitmap? {
+internal fun loadImageBitmap(
+    context: Context,
+    value: String?,
+    authorization: String? = null,
+    maxPx: Int = MediaThumbnailMaxPx,
+    clientId: String? = null
+): Bitmap? {
     val uri = value?.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: return null
     return runCatching {
         when {
@@ -2233,6 +2249,7 @@ internal fun loadImageBitmap(context: Context, value: String?, authorization: St
                     connectTimeout = 4_000
                     readTimeout = 6_000
                     authorization?.let { setRequestProperty("Authorization", it) }
+                    clientId?.let { setRequestProperty("clientid", it) }
                 }
                 try {
                     val bytes = connection.inputStream.use { input ->
@@ -2332,14 +2349,20 @@ private fun BitmapFactory.Options.thumbnailSampleSize(maxPx: Int = MediaThumbnai
     return sampleSize
 }
 
-private fun loadVideoFrame(context: Context, value: String?, authorization: String? = null, maxPx: Int = MediaThumbnailMaxPx): Bitmap? =
-    loadVideoCoverFrame(context, value, authorization, maxPx)
+private fun loadVideoFrame(
+    context: Context,
+    value: String?,
+    authorization: String? = null,
+    maxPx: Int = MediaThumbnailMaxPx,
+    clientId: String? = null
+): Bitmap? = loadVideoCoverFrame(context, value, authorization, maxPx, clientId)
 
 private fun loadVideoCoverFrame(
     context: Context,
     value: String?,
     authorization: String? = null,
-    maxPx: Int = MediaThumbnailMaxPx
+    maxPx: Int = MediaThumbnailMaxPx,
+    clientId: String? = null
 ): Bitmap? {
     val raw = value?.takeIf { it.isNotBlank() } ?: return null
     return runCatching {
@@ -2349,7 +2372,10 @@ private fun loadVideoCoverFrame(
             when {
                 uri.scheme == "content" || uri.scheme == "file" -> retriever.setDataSource(context, uri)
                 raw.startsWith("http://") || raw.startsWith("https://") -> {
-                    val headers = authorization?.let { mapOf("Authorization" to it) }.orEmpty()
+                    val headers = buildMap {
+                        authorization?.let { put("Authorization", it) }
+                        clientId?.let { put("clientid", it) }
+                    }
                     retriever.setDataSource(raw, headers)
                 }
                 raw.startsWith("/") -> retriever.setDataSource(raw)

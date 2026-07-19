@@ -9,6 +9,9 @@ interface CerebellumApi {
     suspend fun deviceStatus(): CerebellumDeviceStatusDto
     suspend fun certificateStatus(): CerebellumCertificateStatusDto
     suspend fun analyzeObject(request: CerebellumObjectAnalyzeRequestDto): CerebellumObjectAnalyzeResponseDto
+    suspend fun analyzePlate(request: CerebellumPlateAnalyzeRequestDto): CerebellumVisionAnalyzeResponseDto = unsupportedCerebellumMethod()
+    suspend fun analyzeFace(request: CerebellumFaceAnalyzeRequestDto): CerebellumVisionAnalyzeResponseDto = unsupportedCerebellumMethod()
+    suspend fun analyzeVision(request: CerebellumCombinedVisionAnalyzeRequestDto): CerebellumCombinedVisionAnalyzeResponseDto = unsupportedCerebellumMethod()
     suspend fun transcribeAudio(request: CerebellumAsrTranscribeRequestDto): CerebellumAsrTranscribeResponseDto
     suspend fun registerEvidence(request: CerebellumEvidenceRegisterRequestDto): CerebellumEvidenceRegisterResponseDto
     suspend fun listEvidence(): CerebellumEvidenceListResponseDto
@@ -76,6 +79,93 @@ data class CerebellumObjectAnalyzeRequestDto(
 data class CerebellumObjectAnalyzeResponseDto(
     val result: CerebellumObjectResultDto,
     val event: CerebellumEventDto
+)
+
+data class CerebellumPlateAnalyzeRequestDto(
+    @SerializedName("frame_id") val frameId: String,
+    @SerializedName("camera_id") val cameraId: String = "patrol-mobile",
+    @SerializedName("image_uri") val imageUri: String,
+    @SerializedName("device_id") val deviceId: String? = null
+)
+
+data class CerebellumFaceAnalyzeRequestDto(
+    @SerializedName("frame_id") val frameId: String,
+    @SerializedName("camera_id") val cameraId: String = "patrol-mobile",
+    @SerializedName("candidate_library") val candidateLibrary: String = "backend-authorized-watchlist",
+    @SerializedName("image_uri") val imageUri: String,
+    @SerializedName("device_id") val deviceId: String? = null
+)
+
+data class CerebellumVisionAnalyzeResponseDto(
+    val result: JsonElement,
+    val event: CerebellumEventDto,
+    val alerts: List<CerebellumWatchlistAlertDto> = emptyList()
+)
+
+data class CerebellumCombinedVisionAnalyzeRequestDto(
+    @SerializedName("frame_id") val frameId: String,
+    @SerializedName("camera_id") val cameraId: String = "patrol-mobile",
+    @SerializedName("device_id") val deviceId: String? = null,
+    @SerializedName("candidate_library") val candidateLibrary: String = "backend-authorized-watchlist",
+    @SerializedName("image_uri") val imageUri: String
+)
+
+data class CerebellumCombinedVisionAnalyzeResponseDto(
+    @SerializedName("request_id") val requestId: String,
+    @SerializedName("frame_id") val frameId: String,
+    @SerializedName("elapsed_ms") val elapsedMs: Long = 0,
+    val plate: CerebellumPlateRecognitionResultDto,
+    val face: CerebellumFaceRecognitionResultDto,
+    val alerts: List<CerebellumWatchlistAlertDto> = emptyList(),
+    @SerializedName("platform_delivery") val platformDelivery: String = "NOT_REQUIRED",
+    @SerializedName("requires_human_confirmation") val requiresHumanConfirmation: Boolean = true,
+    val event: CerebellumEventDto
+)
+
+data class CerebellumPlateRecognitionResultDto(
+    val backend: String,
+    val candidates: List<CerebellumPlateCandidateDto> = emptyList(),
+    @SerializedName("candidate_count") val candidateCount: Int = candidates.size
+)
+
+data class CerebellumPlateCandidateDto(
+    @SerializedName("plate_number") val plateNumber: String? = null,
+    val confidence: Double? = null,
+    @SerializedName("plate_type") val plateType: String? = null,
+    @SerializedName("vehicle_type") val vehicleType: String? = null
+)
+
+data class CerebellumFaceRecognitionResultDto(
+    val backend: String,
+    val faces: List<CerebellumFaceDetectionDto> = emptyList(),
+    @SerializedName("face_count") val faceCount: Int = faces.size,
+    @SerializedName("candidate_count") val candidateCount: Int = 0
+)
+
+data class CerebellumFaceDetectionDto(
+    val candidate: CerebellumFaceCandidateDto? = null,
+    @SerializedName("quality_score") val qualityScore: Double? = null
+)
+
+data class CerebellumFaceCandidateDto(
+    @SerializedName("person_id") val personId: String? = null,
+    @SerializedName("candidate_id") val candidateId: String? = null,
+    @SerializedName("display_name") val displayName: String? = null,
+    @SerializedName("risk_level") val riskLevel: String? = null,
+    val category: String? = null,
+    val similarity: Double? = null
+)
+
+data class CerebellumWatchlistAlertDto(
+    @SerializedName("alert_id") val alertId: String = "",
+    @SerializedName("backend_delivery_status") val backendDeliveryStatus: String? = null,
+    @SerializedName("backend_outbox_id") val backendOutboxId: String? = null,
+    @SerializedName("device_id") val deviceId: String? = null,
+    @SerializedName("person_id") val personId: String? = null,
+    @SerializedName("display_name") val displayName: String? = null,
+    @SerializedName("plate_number") val plateNumber: String? = null,
+    val confidence: Double? = null,
+    @SerializedName("risk_level") val riskLevel: String? = null
 )
 
 data class CerebellumObjectResultDto(

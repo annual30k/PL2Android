@@ -7,21 +7,21 @@ PL2Android 是 PatrolLink 执法耳机 App 的 Android 原生实现版本，用�
 - Kotlin
 - Jetpack Compose + Material 3
 - MVVM 风格状态管理
-- 面向未来 REST、WebSocket、BLE、Wi-Fi 文件传输接口的 Mock 数据层
+- 真实后端 REST、小脑 REST、SourceNex/UTE/BLE 与 Wi-Fi 文件传输实现
 
 使用方式：用 Android Studio 打开当前目录，选择 `app` 配置运行即可。
 
 ## 已实现功能范围
 
-- 登录和会话启动流程，当前使用接近真实 token 响应结构的 Mock 数据。
+- 登录、刷新令牌、会话恢复和安全退出流程，连接 PatrolLink 后端真实接口。
 - 设备扫描、绑定、拍照指令、录音开关和对讲开关。
 - 告警监听、确认、关闭、误报和请求增援处理路径。
 - 媒体列表、SHA-256 校验状态、下载/上传进度状态机和删除操作。
 - 日报模块，已通过小脑直连接口 `POST /api/v1/llm/report` 生成执勤日报草稿。
-- 类 WebSocket 连接与心跳确认流程。
-- 低延迟、均衡、证据质量三种模式的流转发状态机。
+- 15 秒设备心跳、定位、平台指令拉取/ACK、消息和告警补拉流程。
+- 低延迟、均衡、证据质量三种模式的流转发状态机；真实耳机视频等待厂家 SDK 能力。
 - SOS 激活和取消流程，包含位置、录音和增援 ETA 状态。
-- Spring Boot 风格 REST Mock 契约，统一使用 `code/message/data/traceId/timestamp`。
+- Spring Boot REST 契约，统一使用 `code/message/data/traceId/timestamp`。
 - 分页列表契约，统一使用 `items/page/pageSize/total/hasMore`。
 - 安全 token 存储、Android 权限规划、后台任务队列、证据完整性哈希等平台边界。
 - 基于 OkHttp 的真实 REST 客户端和 REST-backed gateway 实现。
@@ -34,11 +34,11 @@ PL2Android 是 PatrolLink 执法耳机 App 的 Android 原生实现版本，用�
 - 基于 `ConnectivityManager` 的网络监测。
 - 版本检查 gateway 和离线同步引擎。
 
-硬件和网络边界定义在 `domain/Contracts.kt` 中。当前实现以确定性 Mock 为主，因此在没有执法耳机硬件、没有真实后端服务的情况下也可以运行和测试。
+硬件和网络边界定义在 `domain/Contracts.kt` 中。正式运行使用 `RuntimeDependencyFactory` 创建真实依赖；Mock 仅保留在单元测试源码中。未配置后端或硬件通道时会返回明确失败，不会伪造业务成功。
 
-## Mock REST 数据契约
+## REST 数据契约
 
-Android Mock 层按照未来 Spring Boot 后端接口形态设计。Redis、MySQL、国产数据库等后端存储选型属于服务端内部实现细节，App 侧只依赖稳定的 REST DTO。
+Android 客户端按照 Spring Boot 后端接口契约工作。Redis、MySQL、国产数据库等后端存储选型属于服务端内部实现细节，App 侧只依赖稳定的 REST DTO。测试目录中的 Mock 使用相同契约验证断网、重试和映射行为。
 
 统一响应结构：
 
@@ -47,7 +47,7 @@ Android Mock 层按照未来 Spring Boot 后端接口形态设计。Redis、MySQ
   "code": 200,
   "message": "OK",
   "data": {},
-  "traceId": "mock-trace-0001",
+  "traceId": "trace-example-0001",
   "timestamp": 1715832000
 }
 ```

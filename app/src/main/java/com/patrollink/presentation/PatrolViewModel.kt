@@ -12,13 +12,29 @@ import com.patrollink.data.RuntimeConfigStore
 import com.patrollink.data.RuntimeConfigGateway
 import com.patrollink.data.ServiceFactory
 import com.patrollink.data.edge.CerebellumApi
+import com.patrollink.data.edge.CerebellumCombinedVisionAnalyzeRequestDto
+import com.patrollink.data.edge.CerebellumCombinedVisionAnalyzeResponseDto
 import com.patrollink.data.edge.CerebellumReportRequestDto
 import com.patrollink.data.edge.OkHttpCerebellumApi
 import com.patrollink.data.local.UiSettingsStore
+import com.patrollink.data.local.QueuedAlertDisposition
+import com.patrollink.data.local.QueuedAlertDispositionCodec
+import com.patrollink.data.local.QueuedDeviceCommandAck
+import com.patrollink.data.local.QueuedDeviceCommandAckCodec
+import com.patrollink.data.local.QueuedHeartbeat
+import com.patrollink.data.local.QueuedHeartbeatCodec
+import com.patrollink.data.local.QueuedSosEvidence
+import com.patrollink.data.local.QueuedSosEvidenceCodec
+import com.patrollink.data.local.QueuedSosSync
+import com.patrollink.data.local.QueuedSosSyncCodec
 import com.patrollink.data.local.normalizeAccountKey
 import com.patrollink.data.remote.AlertDraftRequestDto
 import com.patrollink.data.remote.CerebellumSettingsDto
 import com.patrollink.data.remote.DailyReportContentUpdateDto
+import com.patrollink.data.remote.DeviceCommandAckRequestDto
+import com.patrollink.data.remote.HeartbeatRequestDto
+import com.patrollink.data.remote.GpsLocationDto
+import com.patrollink.data.remote.OkHttpPatrolRestApi
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.remote.UploadAttachmentDto
 import com.patrollink.domain.AlertAttachment
@@ -29,6 +45,7 @@ import com.patrollink.domain.DailyReport
 import com.patrollink.domain.DisplayThemeMode
 import com.patrollink.domain.DeviceAdvancedSettings
 import com.patrollink.domain.DeviceCapabilities
+import com.patrollink.domain.DeviceCommand
 import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.DeviceEvent
 import com.patrollink.domain.DeviceEventLevel
@@ -37,7 +54,6 @@ import com.patrollink.domain.DeviceMediaSyncUiState
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
-import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.EmptyAppState
 import com.patrollink.domain.FontSizeMode
 import com.patrollink.domain.FirmwareCheckResult
@@ -55,6 +71,7 @@ import com.patrollink.domain.OperationMessage
 import com.patrollink.domain.OperationMessageType
 import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.PatrolCoordinator
+import com.patrollink.domain.PatrolCommandMessage
 import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SecureStore
 import com.patrollink.domain.ScannedDevice
@@ -74,6 +91,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -93,7 +111,8 @@ import kotlinx.coroutines.withTimeout
 
 data class MediaContentRequest(
     val value: String,
-    val authorization: String? = null
+    val authorization: String? = null,
+    val clientId: String? = null
 )
 
 private const val ControlReadyPollAttempts = 8
@@ -108,6 +127,8 @@ private const val MaxDeviceEvents = 30
 private const val SessionRefreshThresholdSeconds = 60L
 private const val SessionRefreshRetryMillis = 60_000L
 private const val MaxSessionRefreshDelaySeconds = 24L * 60L * 60L
+private const val CloudSyncPollMillis = 5_000L
+private const val HeartbeatEveryPolls = 3
 
 class PatrolViewModel(
     private val appContext: Context? = null,
@@ -118,7 +139,6 @@ class PatrolViewModel(
     private val versionGateway: VersionGateway = EmptyVersionGateway(),
     private val locationGateway: LocationGateway? = null,
     private val sosEvidenceRecorder: SosEvidenceRecorder? = null,
-    private val emergencyContactGateway: EmergencyContactGateway? = null,
     private val notificationGateway: PatrolNotificationGateway? = null,
     private val versionInstaller: VersionInstaller? = null,
     private val firmwareGateway: FirmwareGateway = EmptyFirmwareGateway(),
@@ -147,12 +167,17 @@ class PatrolViewModel(
     private var photoCaptureJob: Job? = null
     private var deviceMediaSyncJob: Job? = null
     private var sessionRefreshJob: Job? = null
+    private var cloudSyncJob: Job? = null
     private val deviceMediaTransferJobs = mutableMapOf<String, Job>()
     private var lastPhotoCaptureRequestAt: Long = 0L
     private val autoBindingDeviceIds = mutableSetOf<String>()
+    private var activeSosId: String? = null
+    private var activeSosActivationQueued: Boolean = false
+    private val knownCloudAlertIds = mutableSetOf<String>()
+    private val knownCloudMessageIds = mutableSetOf<String>()
+    private val cloudRecognitionSubmittedMediaIds = mutableSetOf<String>()
 
     init {
-        refreshEmergencyContacts()
         observeDeviceEvents()
         observeIntercomState()
         viewModelScope.launch {
@@ -285,11 +310,20 @@ class PatrolViewModel(
     }
 
     fun logout() = viewModelScope.launch {
+        if (_uiState.value.sosActive) {
+            showOperationMessage("SOS 仍处于活动或待补传状态，请先完成取消再退出账号", OperationMessageType.Warning)
+            return@launch
+        }
         scannedDevicesJob?.cancel()
         scannedDevicesJob = null
         sessionRefreshJob?.cancel()
         sessionRefreshJob = null
+        cloudSyncJob?.cancel()
+        cloudSyncJob = null
         onSessionChanged(null)
+        knownCloudAlertIds.clear()
+        knownCloudMessageIds.clear()
+        cloudRecognitionSubmittedMediaIds.clear()
         secureStore?.let { store -> withContext(Dispatchers.IO) { store.clearSession() } }
         cerebellumApi = null
         _uiState.update {
@@ -302,6 +336,7 @@ class PatrolViewModel(
                 previewMediaFile = null,
                 mediaLoading = false,
                 deviceMediaSync = DeviceMediaSyncUiState(),
+                platformMessages = emptyList(),
                 cerebellumSettings = com.patrollink.domain.CerebellumSettingsUiState(),
                 operationMessage = operationMessage("已退出登录", OperationMessageType.Info)
             )
@@ -316,6 +351,197 @@ class PatrolViewModel(
         refreshDeviceCapabilities()
         refreshPatrolArea()
         refreshCerebellumSettings()
+        startCloudSyncLoop()
+    }
+
+    private fun startCloudSyncLoop() {
+        val api = patrolRestApi ?: return
+        cloudSyncJob?.cancel()
+        cloudSyncJob = viewModelScope.launch {
+            var pollCount = 0
+            while (_uiState.value.isLoggedIn) {
+                val state = _uiState.value
+                val device = state.device.takeIf { it.id.isNotBlank() && it.online }
+                if (device != null) {
+                    if (pollCount % HeartbeatEveryPolls == 0) {
+                        syncDeviceHeartbeat(api, device)
+                    }
+                    syncPendingPlatformCommands(api, device)
+                }
+                syncCloudAlerts()
+                syncCloudMessages(api)
+                pollCount += 1
+                delay(CloudSyncPollMillis)
+            }
+        }
+    }
+
+    private suspend fun syncDeviceHeartbeat(api: PatrolRestApi, device: DeviceStatus) {
+        val location = runCatching { locationGateway?.currentLocation() }.getOrNull()
+        val request = HeartbeatRequestDto(
+            deviceId = device.id,
+            online = device.online,
+            batteryPercent = device.battery,
+            signalBars = device.signalBars,
+            recordingStatus = if (device.isRecording) "RECORDING" else "IDLE",
+            clientTimestamp = System.currentTimeMillis(),
+            latitude = location?.latitude,
+            longitude = location?.longitude,
+            accuracyMeters = location?.accuracyMeters,
+            address = location?.address
+        )
+        runCatching {
+            api.heartbeat(request)
+        }.onSuccess {
+            _uiState.update { state ->
+                state.copy(
+                    networkOnline = true,
+                    sosLocation = location ?: state.sosLocation,
+                    device = if (state.device.id == device.id) state.device.copy(cloudConnected = true) else state.device,
+                    connectedDevices = state.connectedDevices.map { if (it.id == device.id) it.copy(cloudConnected = true) else it }
+                )
+            }
+        }.onFailure {
+            offlineSyncEngine?.let { engine ->
+                runCatching {
+                    engine.enqueueHeartbeat(
+                        deviceId = device.id,
+                        payloadJson = QueuedHeartbeatCodec.encode(QueuedHeartbeat(request)),
+                        createdAt = System.currentTimeMillis()
+                    )
+                }
+            }
+            _uiState.update { state ->
+                state.copy(
+                    networkOnline = false,
+                    device = if (state.device.id == device.id) state.device.copy(cloudConnected = false) else state.device,
+                    connectedDevices = state.connectedDevices.map { if (it.id == device.id) it.copy(cloudConnected = false) else it }
+                )
+            }
+        }
+    }
+
+    private suspend fun syncPendingPlatformCommands(api: PatrolRestApi, device: DeviceStatus) {
+        val commands = runCatching { api.pendingDeviceCommands(device.id).data }.getOrElse { return }
+        commands.forEach { pending ->
+            val ackAlreadyQueued = runCatching {
+                offlineSyncEngine?.hasPendingDeviceCommandAck(pending.commandId) == true
+            }.getOrDefault(false)
+            if (ackAlreadyQueued) return@forEach
+            val command = pending.command.toDeviceCommandOrNull()
+            val result = if (command == null) {
+                Result.failure(IllegalArgumentException("当前设备不支持平台指令：${pending.command}"))
+            } else {
+                runCatching { coordinator.executeRemoteDeviceCommand(_uiState.value.device, command) }
+            }
+            result.onSuccess { next ->
+                updateCurrentDevice(next)
+                addDeviceEvent("平台指令执行成功", pending.command, DeviceEventLevel.Info)
+            }.onFailure { throwable ->
+                addDeviceEvent("平台指令执行失败", "${pending.command}：${throwable.message.orEmpty()}", DeviceEventLevel.Error)
+            }
+            val succeeded = result.isSuccess
+            val ackRequest = DeviceCommandAckRequestDto(
+                deviceId = device.id,
+                status = if (succeeded) "ACKED" else "FAILED",
+                message = result.exceptionOrNull()?.message ?: "设备已执行并确认"
+            )
+            runCatching {
+                api.acknowledgeDeviceCommand(
+                    pending.commandId,
+                    ackRequest
+                )
+            }.onFailure {
+                val engine = offlineSyncEngine ?: return@onFailure
+                val queued = QueuedDeviceCommandAck(pending.commandId, ackRequest)
+                runCatching {
+                    engine.enqueueDeviceCommandAck(
+                        commandId = pending.commandId,
+                        payloadJson = QueuedDeviceCommandAckCodec.encode(queued),
+                        createdAt = System.currentTimeMillis()
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun syncCloudAlerts() {
+        val alerts = runCatching { coordinator.observeAlerts().first() }.getOrElse { return }
+        val newAlerts = alerts.filter { it.id !in knownCloudAlertIds }
+        if (knownCloudAlertIds.isNotEmpty()) {
+            newAlerts.filter { it.status != AlertStatus.Closed }.forEach { alert ->
+                notificationGateway?.notifyAlert(alert.title, "${alert.location} · ${alert.description}")
+            }
+        }
+        knownCloudAlertIds += alerts.map { it.id }
+        _uiState.update { it.copy(alerts = alerts, networkOnline = true) }
+    }
+
+    private suspend fun syncCloudMessages(api: PatrolRestApi) {
+        val targetId = _uiState.value.user.badgeNo.takeIf { it.isNotBlank() } ?: return
+        val messages = runCatching { api.messages(targetId, 1, 50).data.items }.getOrElse { return }
+        val pendingReadIds = runCatching { offlineSyncEngine?.pendingMessageReadIds().orEmpty() }.getOrDefault(emptySet())
+        val newMessages = messages.filter { it.messageId !in knownCloudMessageIds }
+        if (knownCloudMessageIds.isNotEmpty()) {
+            newMessages.forEach { message ->
+                notificationGateway?.notifyAlert("指挥消息：${message.title}", message.content)
+            }
+        }
+        knownCloudMessageIds += messages.map { it.messageId }
+        _uiState.update { state ->
+            state.copy(
+                platformMessages = messages.map { message ->
+                    PatrolCommandMessage(
+                        id = message.messageId,
+                        title = message.title,
+                        content = message.content,
+                        sentAt = message.sentAt,
+                        read = message.readAt.isNotBlank() || message.status.equals("READ", ignoreCase = true) || message.messageId in pendingReadIds
+                    )
+                }
+            )
+        }
+    }
+
+    fun markPlatformMessageRead(messageId: String) = viewModelScope.launch {
+        val api = patrolRestApi ?: return@launch
+        runCatching { api.readMessage(messageId) }
+            .onSuccess {
+                _uiState.update { state ->
+                    state.copy(platformMessages = state.platformMessages.map { message ->
+                        if (message.id == messageId) message.copy(read = true) else message
+                    })
+                }
+            }
+            .onFailure { throwable ->
+                val engine = offlineSyncEngine
+                if (engine == null) {
+                    showOperationMessage(throwable.message ?: "消息已读回执失败", OperationMessageType.Error)
+                    return@onFailure
+                }
+                runCatching { engine.enqueueMessageRead(messageId, System.currentTimeMillis()) }
+                    .onSuccess {
+                        _uiState.update { state ->
+                            state.copy(
+                                platformMessages = state.platformMessages.map { message ->
+                                    if (message.id == messageId) message.copy(read = true) else message
+                                },
+                                operationMessage = operationMessage("网络不可用，消息已读回执已进入补传队列", OperationMessageType.Warning)
+                            )
+                        }
+                    }
+                    .onFailure { queueError ->
+                        showOperationMessage(queueError.message ?: "消息已读回执保存失败", OperationMessageType.Error)
+                    }
+            }
+    }
+
+    private fun String.toDeviceCommandOrNull(): DeviceCommand? = when (uppercase()) {
+        "TAKE_PHOTO" -> DeviceCommand.TakePhoto
+        "START_RECORD" -> DeviceCommand.StartRecord
+        "STOP_RECORD" -> DeviceCommand.StopRecord
+        // 当前硬件 SDK 没有双向实时音频接口，不把 START_TALK/STOP_TALK 伪装成成功。
+        else -> null
     }
 
     private fun scheduleSessionRefresh(session: AuthSession) {
@@ -386,11 +612,8 @@ class PatrolViewModel(
         ) ?: return@runDeviceCommandWithOverlay
         val enabled = !device.isTalking
         runCatching {
-            if (device.type == DeviceType.Headset) {
-                coordinator.setDeviceTalk(device, enabled)
-            } else {
-                coordinator.setTalk(device, enabled)
-            }
+            // 这里是设备端录音，不是 App/WebRTC 实时对讲。所有硬件类型都必须走设备真实指令。
+            coordinator.setDeviceTalk(device, enabled)
         }
             .onSuccess { next ->
                 updateCurrentDevice(next.copy(isTalking = enabled))
@@ -518,29 +741,6 @@ class PatrolViewModel(
         runCatching { gateway.applySettings(device, settings) }
             .onSuccess { next -> _uiState.update { it.copy(deviceSettings = next, operationMessage = operationMessage("设备参数已下发", OperationMessageType.Success)) } }
             .onFailure { _uiState.update { it.copy(operationMessage = operationMessage("设备参数下发失败", OperationMessageType.Error)) } }
-    }
-
-    fun toggleRealtimeAudioSync() = viewModelScope.launch {
-        val gateway = deviceControlGateway ?: return@launch showOperationMessage("实时音频通道未启用", OperationMessageType.Warning)
-        val active = _uiState.value.realtimeAudioSyncing
-        val ok = runCatching {
-            if (active) gateway.stopRealtimeAudioSync() else gateway.startRealtimeAudioSync("session-${System.currentTimeMillis()}")
-        }.getOrDefault(false)
-        _uiState.update {
-            val nextActive = if (ok) !active else active
-            it.copy(
-                device = it.device.copy(isTalking = nextActive),
-                connectedDevices = it.connectedDevices.map { connected ->
-                    if (connected.id == it.device.id) connected.copy(isTalking = nextActive) else connected
-                },
-                realtimeAudioSyncing = nextActive,
-                operationMessage = when {
-                    ok && active -> operationMessage("实时音频同传已停止，后续走离线续传", OperationMessageType.Info)
-                    ok -> operationMessage("实时音频同传已启动", OperationMessageType.Success)
-                    else -> operationMessage("实时音频同传操作失败", OperationMessageType.Error)
-                }
-            )
-        }
     }
 
     fun notifyDeviceMediaSyncCompleted() = viewModelScope.launch {
@@ -983,11 +1183,45 @@ class PatrolViewModel(
         attachments: List<UploadAttachmentDto> = emptyList()
     ) = viewModelScope.launch {
         val payload = alertSubmitPayload(alertId, result, note, attachments)
-        coordinator.handleAlert(alertId, result, note, payload.attachments.map { it.toDomainAttachment() })
-        _uiState.update {
-            it.copy(alerts = it.alerts.map { alert ->
-                if (alert.id == alertId) alert.copy(status = AlertStatus.Closed) else alert
-            }, operationMessage = operationMessage("处置结果已上传：${payload.attachments.size} 个附件", OperationMessageType.Success))
+        runCatching {
+            coordinator.handleAlert(alertId, result, note, payload.attachments.map { it.toDomainAttachment() })
+        }.onSuccess {
+            _uiState.update {
+                it.copy(alerts = it.alerts.map { alert ->
+                    if (alert.id == alertId) alert.copy(status = AlertStatus.Closed) else alert
+                }, operationMessage = operationMessage("处置结果已上传：${payload.attachments.size} 个附件", OperationMessageType.Success))
+            }
+        }.onFailure { throwable ->
+            val engine = offlineSyncEngine
+            if (engine == null) {
+                showOperationMessage(throwable.message ?: "处置结果上传失败", OperationMessageType.Error)
+                return@onFailure
+            }
+            val queued = QueuedAlertDisposition(
+                alertId = alertId,
+                result = payload.result,
+                note = payload.note,
+                operatorId = payload.operatorId,
+                attachments = payload.attachments
+            )
+            runCatching {
+                engine.enqueueAlertDisposition(
+                    alertId = alertId,
+                    payloadJson = QueuedAlertDispositionCodec.encode(queued),
+                    createdAt = System.currentTimeMillis()
+                )
+            }.onSuccess {
+                _uiState.update { state ->
+                    state.copy(
+                        alerts = state.alerts.map { alert ->
+                            if (alert.id == alertId) alert.copy(status = AlertStatus.Handling) else alert
+                        },
+                        operationMessage = operationMessage("网络不可用，处置结果已进入离线补传队列", OperationMessageType.Warning)
+                    )
+                }
+            }.onFailure { queueError ->
+                showOperationMessage(queueError.message ?: "处置结果保存失败", OperationMessageType.Error)
+            }
         }
     }
 
@@ -1054,18 +1288,117 @@ class PatrolViewModel(
 
     fun activateSos() = viewModelScope.launch {
         val location = locationGateway?.currentLocation() ?: _uiState.value.sosLocation
+        val clientSosId = "SOS-APP-${UUID.randomUUID()}"
         _uiState.update { it.copy(sosLocation = location) }
-        val event = coordinator.activateSos(location)
-        runCatching { sosEvidenceRecorder?.start(event.id) }
-        runCatching { emergencyContactGateway?.notifyContacts(event.id, location) }
+        val activation = runCatching { coordinator.activateSos(location, clientSosId) }
+        val queued = activation.exceptionOrNull()?.let {
+            val engine = offlineSyncEngine ?: return@let false
+            val deviceId = _uiState.value.device.id.takeIf { id -> id.isNotBlank() }
+            val payload = QueuedSosSync(
+                clientSosId = clientSosId,
+                action = "ACTIVATE",
+                location = GpsLocationDto(
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    accuracyMeters = location.accuracyMeters,
+                    address = location.address,
+                    deviceId = deviceId,
+                    clientEventId = clientSosId
+                )
+            )
+            runCatching {
+                engine.enqueueSosState(
+                    clientSosId = clientSosId,
+                    payloadJson = QueuedSosSyncCodec.encode(payload),
+                    action = payload.action,
+                    createdAt = System.currentTimeMillis()
+                )
+            }.isSuccess
+        } ?: false
+        activeSosId = activation.getOrNull()?.id?.takeIf { it.isNotBlank() } ?: clientSosId
+        activeSosActivationQueued = activation.isFailure && queued
+        val recordingStarted = sosEvidenceRecorder?.let { recorder ->
+            runCatching { recorder.start(activeSosId!!) }.isSuccess
+        } ?: false
         runCatching { notificationGateway?.notifySosActive(location) }
-        _uiState.update { it.copy(sosActive = true) }
+        _uiState.update { state ->
+            state.copy(
+                sosActive = true,
+                networkOnline = activation.isSuccess || state.networkOnline,
+                operationMessage = when {
+                    activation.isSuccess && recordingStarted -> operationMessage("SOS 已送达平台，现场录音已开始", OperationMessageType.Success)
+                    activation.isSuccess -> operationMessage("SOS 已送达平台，但现场录音启动失败", OperationMessageType.Warning)
+                    queued && recordingStarted -> operationMessage("网络不可用，SOS 已进入补传队列并开始本地录音", OperationMessageType.Warning)
+                    queued -> operationMessage("网络不可用，SOS 已进入补传队列，但现场录音启动失败", OperationMessageType.Warning)
+                    else -> operationMessage("SOS 平台上报和本地补传均失败，请保持安全并立即重试", OperationMessageType.Error)
+                }
+            )
+        }
     }
 
     fun cancelSos() = viewModelScope.launch {
-        runCatching { sosEvidenceRecorder?.stop() }
-        coordinator.cancelSos()
-        _uiState.update { it.copy(sosActive = false) }
+        val sosId = activeSosId
+        val recording = runCatching { sosEvidenceRecorder?.stop() }.getOrNull()
+        val cancelResult = runCatching { coordinator.cancelSos() }
+        val requiresOrderedCancel = activeSosActivationQueued
+        val cancelQueued = if ((cancelResult.isFailure || requiresOrderedCancel) && !sosId.isNullOrBlank()) {
+            val engine = offlineSyncEngine
+            val payload = QueuedSosSync(clientSosId = sosId, action = "CANCEL")
+            engine != null && runCatching {
+                engine.enqueueSosState(
+                    clientSosId = sosId,
+                    payloadJson = QueuedSosSyncCodec.encode(payload),
+                    action = payload.action,
+                    createdAt = System.currentTimeMillis() + 1L
+                )
+            }.isSuccess
+        } else {
+            false
+        }
+        if ((cancelResult.isFailure || requiresOrderedCancel) && !cancelQueued) {
+            _uiState.update {
+                it.copy(
+                    sosActive = true,
+                    operationMessage = operationMessage("SOS 取消未送达平台且无法加入补传，请重试", OperationMessageType.Error)
+                )
+            }
+            return@launch
+        }
+        val recordingFile = recording?.filePath
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?.takeIf { it.exists() && it.length() > 0L }
+        val uploaded = recordingFile
+            ?.let { file -> runCatching { coordinator.uploadLocalEvidence(file, "SOS_AUDIO", sosId.orEmpty()) }.getOrNull() }
+        val recordingQueued = if (recordingFile != null && uploaded == null && !sosId.isNullOrBlank()) {
+            val engine = offlineSyncEngine
+            val payload = QueuedSosEvidence(sosId, recordingFile.absolutePath)
+            engine != null && runCatching {
+                engine.enqueueSosEvidence(
+                    clientSosId = sosId,
+                    payloadJson = QueuedSosEvidenceCodec.encode(payload),
+                    createdAt = System.currentTimeMillis() + 2L
+                )
+            }.isSuccess
+        } else {
+            false
+        }
+        activeSosId = null
+        activeSosActivationQueued = false
+        _uiState.update {
+            it.copy(
+                sosActive = false,
+                operationMessage = when {
+                    cancelQueued && recordingQueued -> operationMessage("SOS 取消与现场录音均已进入补传队列", OperationMessageType.Warning)
+                    cancelQueued && uploaded != null -> operationMessage("SOS 取消已进入补传队列，现场录音已上传", OperationMessageType.Warning)
+                    cancelQueued -> operationMessage("SOS 取消已进入补传队列，未取得可上传录音", OperationMessageType.Warning)
+                    recording == null -> operationMessage("SOS 已取消，但未取得现场录音", OperationMessageType.Warning)
+                    uploaded == null && recordingQueued -> operationMessage("SOS 已取消，现场录音已进入补传队列", OperationMessageType.Warning)
+                    uploaded == null -> operationMessage("SOS 已取消，现场录音保留在本机但补传入队失败", OperationMessageType.Warning)
+                    else -> operationMessage("SOS 已取消，现场录音已关联上传", OperationMessageType.Success)
+                }
+            )
+        }
     }
 
     fun takePhoto() {
@@ -1117,6 +1450,7 @@ class PatrolViewModel(
                             selectedMediaLocal = true
                         )
                     }
+                    submitPhotoForCloudRecognition(captured)
                 } else {
                     _uiState.update { state ->
                         state.copy(
@@ -1281,7 +1615,7 @@ class PatrolViewModel(
     }
 
     private suspend fun markDeviceRequiresRepairing(device: DeviceStatus, message: String) {
-        runCatching { coordinator.unbindDevice(device.id) }
+        val unbindQueued = unbindDeviceOrQueue(device.id)
         _uiState.update { state ->
             val remaining = state.connectedDevices.filterNot { it.id == device.id }
             val next = if (state.device.id == device.id) {
@@ -1298,7 +1632,10 @@ class PatrolViewModel(
                 deviceWifiState = DeviceWifiState(),
                 realtimeAudioSyncing = false,
                 unbindingDeviceIds = state.unbindingDeviceIds - device.id,
-                operationMessage = operationMessage(message, OperationMessageType.Warning)
+                operationMessage = operationMessage(
+                    if (unbindQueued) "$message；平台解绑正在自动补传" else message,
+                    OperationMessageType.Warning
+                )
             )
         }
     }
@@ -1323,7 +1660,8 @@ class PatrolViewModel(
         }
         val target = _uiState.value.connectedDevices.firstOrNull { it.id == deviceId }
             ?: _uiState.value.device.takeIf { it.id == deviceId }
-        runCatching { coordinator.unbindDevice(deviceId) }
+        val unbindResult = runCatching { coordinator.unbindDevice(deviceId) }
+        val unbindQueued = unbindResult.isFailure && enqueueDeviceUnbind(deviceId)
         _uiState.update { state ->
             val remaining = state.connectedDevices.filterNot { it.id == deviceId }
             val next = if (state.device.id == deviceId) {
@@ -1341,11 +1679,25 @@ class PatrolViewModel(
                 realtimeAudioSyncing = false,
                 unbindingDeviceIds = state.unbindingDeviceIds - deviceId,
                 operationMessage = operationMessage(
-                    message ?: "${target?.name?.ifBlank { "设备" } ?: "设备"} 已解绑",
-                    messageType
+                    when {
+                        unbindResult.isSuccess -> message ?: "${target?.name?.ifBlank { "设备" } ?: "设备"} 已解绑"
+                        unbindQueued -> "${message ?: "${target?.name?.ifBlank { "设备" } ?: "设备"} 已在本机解绑"}；平台解绑正在自动补传"
+                        else -> "${message ?: "${target?.name?.ifBlank { "设备" } ?: "设备"} 已在本机解绑"}；平台解绑失败，请联网后重试"
+                    },
+                    if (unbindResult.isSuccess) messageType else OperationMessageType.Warning
                 )
             )
         }
+    }
+
+    private suspend fun unbindDeviceOrQueue(deviceId: String): Boolean {
+        val result = runCatching { coordinator.unbindDevice(deviceId) }
+        return result.isFailure && enqueueDeviceUnbind(deviceId)
+    }
+
+    private suspend fun enqueueDeviceUnbind(deviceId: String): Boolean {
+        val engine = offlineSyncEngine ?: return false
+        return runCatching { engine.enqueueDeviceUnbind(deviceId, System.currentTimeMillis()) }.isSuccess
     }
 
     private fun setDeviceUnbinding(deviceId: String, loading: Boolean) {
@@ -1474,12 +1826,6 @@ class PatrolViewModel(
                     )
                 }
             }
-        }
-    }
-
-    private fun refreshEmergencyContacts() = viewModelScope.launch {
-        emergencyContactGateway?.contacts()?.let { contacts ->
-            _uiState.update { it.copy(emergencyContacts = contacts) }
         }
     }
 
@@ -1991,6 +2337,10 @@ class PatrolViewModel(
                         .takeIf { it.contentUri.hasUsableValue() }
                         ?: _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local }
                 )
+                val localCopy = updated.copy(id = fileId, local = true)
+                    .takeIf { it.contentUri.hasUsableValue() }
+                    ?: _uiState.value.mediaFiles.firstOrNull { it.id == fileId && it.local }
+                if (localCopy?.kind == MediaKind.Photo) submitPhotoForCloudRecognition(localCopy)
             }
             if (updated.transferStatus != TransferStatus.Done) delay(420)
         }
@@ -2037,6 +2387,47 @@ class PatrolViewModel(
         val engine = offlineSyncEngine ?: return
         if (!local || file?.contentUri.hasUsableValue().not()) return
         runCatching { engine.enqueueEvidenceUpload(fileId, System.currentTimeMillis()) }
+    }
+
+    private suspend fun submitPhotoForCloudRecognition(media: MediaFile) {
+        val api = cerebellumApi ?: return
+        if (media.kind != MediaKind.Photo || !cloudRecognitionSubmittedMediaIds.add(media.id)) return
+        val localFile = localFileForCerebellumUpload(media, appContext, backendBaseUrl, secureStore)
+        if (localFile == null) {
+            cloudRecognitionSubmittedMediaIds.remove(media.id)
+            return
+        }
+        val result = runCatching {
+            val missionId = _uiState.value.dailyReport.missionId.ifBlank {
+                defaultMissionId(_uiState.value.user.badgeNo)
+            }
+            val uploaded = api.uploadFile(
+                file = localFile,
+                missionId = missionId,
+                evidenceType = "image",
+                note = "云端人脸和车辆布控识别：${media.name}",
+                register = true
+            )
+            val imageUri = uploaded.file.fileUri
+            val originDeviceId = _uiState.value.device.id.trim().takeIf(String::isNotEmpty)
+            api.analyzeVision(
+                CerebellumCombinedVisionAnalyzeRequestDto(
+                    frameId = media.id,
+                    cameraId = originDeviceId ?: "patrol-mobile",
+                    imageUri = imageUri,
+                    deviceId = originDeviceId,
+                )
+            )
+        }
+        result.onSuccess { response ->
+            val display = response.toRecognitionDisplay(media.name)
+            addDeviceEvent(display.title, display.detail, display.level)
+            showOperationMessage(display.message, display.messageType)
+            syncCloudAlerts()
+        }.onFailure { throwable ->
+            cloudRecognitionSubmittedMediaIds.remove(media.id)
+            addDeviceEvent("云端识别提交失败", "${media.name}：${throwable.message.orEmpty()}", DeviceEventLevel.Warning)
+        }
     }
 
     private suspend fun ensureMediaFileForCerebellum(file: MediaFile): MediaFile? {
@@ -2362,12 +2753,17 @@ class PatrolViewModel(
             else -> false
         }
         val resolved = if (!localFileExists) value.toRemoteMediaUrl(backendBaseUrl) ?: value else value
-        val authorization = if (resolved.startsWith("http://") || resolved.startsWith("https://")) {
+        val backendRequest = resolved.isSameOriginAs(backendBaseUrl)
+        val authorization = if (backendRequest) {
             secureStore?.readSession()?.accessToken?.takeIf { it.isNotBlank() }?.let { "Bearer $it" }
         } else {
             null
         }
-        MediaContentRequest(resolved, authorization)
+        MediaContentRequest(
+            value = resolved,
+            authorization = authorization,
+            clientId = OkHttpPatrolRestApi.DEFAULT_CLIENT_ID.takeIf { backendRequest }
+        )
     }
 
     fun clearMessage() = _uiState.update { it.copy(operationMessage = null) }
@@ -2813,12 +3209,29 @@ private fun String.toRemoteMediaUrl(backendBaseUrl: String): String? {
     }
 }
 
+private fun String.isSameOriginAs(baseUrl: String): Boolean {
+    if (baseUrl.isBlank()) return false
+    val remote = runCatching { Uri.parse(this) }.getOrNull() ?: return false
+    val base = runCatching { Uri.parse(baseUrl) }.getOrNull() ?: return false
+    if (remote.host.isNullOrBlank() || base.host.isNullOrBlank()) return false
+    fun effectivePort(uri: Uri): Int = when {
+        uri.port >= 0 -> uri.port
+        uri.scheme.equals("https", ignoreCase = true) -> 443
+        uri.scheme.equals("http", ignoreCase = true) -> 80
+        else -> -1
+    }
+    return remote.scheme.equals(base.scheme, ignoreCase = true) &&
+        remote.host.equals(base.host, ignoreCase = true) &&
+        effectivePort(remote) == effectivePort(base)
+}
+
 private fun String.isBackendRelativeMediaUri(): Boolean =
     startsWith("/files/") || startsWith("/api/")
 
 private fun String.toExistingLocalFile(): File? {
     val uri = runCatching { Uri.parse(this) }.getOrNull()
     val file = when {
+        startsWith("file:", ignoreCase = true) -> runCatching { File(java.net.URI(this)) }.getOrNull()
         uri?.scheme == "file" -> {
             uri.path?.takeIf { it.isNotBlank() }?.let(::File)
                 ?: runCatching { File(java.net.URI(this)) }.getOrNull()
@@ -2906,13 +3319,17 @@ private suspend fun localFileForCerebellumUpload(
         return@withContext target.takeIf { it.exists() && it.isFile }
     }
     val remoteUrl = value.toRemoteMediaUrl(backendBaseUrl) ?: return@withContext null
+    val backendRequest = remoteUrl.isSameOriginAs(backendBaseUrl)
     val connection = (URL(remoteUrl).openConnection() as HttpURLConnection).apply {
         requestMethod = "GET"
         connectTimeout = 10_000
         readTimeout = 20_000
         setRequestProperty("Accept", "*/*")
-        secureStore?.readSession()?.accessToken?.takeIf { it.isNotBlank() }?.let {
-            setRequestProperty("Authorization", "Bearer $it")
+        if (backendRequest) {
+            setRequestProperty("clientid", OkHttpPatrolRestApi.DEFAULT_CLIENT_ID)
+            secureStore?.readSession()?.accessToken?.takeIf { it.isNotBlank() }?.let {
+                setRequestProperty("Authorization", "Bearer $it")
+            }
         }
     }
     try {
@@ -3121,3 +3538,86 @@ private fun MediaFile.inheritCompletedCloudState(current: MediaFile?): MediaFile
         lastTransferTarget = TransferTarget.Cloud
     )
 }
+
+internal data class CloudVisionRecognitionDisplay(
+    val title: String,
+    val detail: String,
+    val message: String,
+    val level: DeviceEventLevel,
+    val messageType: OperationMessageType,
+)
+
+internal fun CerebellumCombinedVisionAnalyzeResponseDto.toRecognitionDisplay(
+    mediaName: String,
+): CloudVisionRecognitionDisplay {
+    val plateAvailable = !plate.backend.equals("simulated-fallback", ignoreCase = true)
+    val faceAvailable = !face.backend.equals("simulated-fallback", ignoreCase = true)
+    val plateCandidates = if (plateAvailable) {
+        plate.candidates.mapNotNull { candidate ->
+            candidate.plateNumber?.trim()?.takeIf(String::isNotEmpty)?.let { number ->
+                candidate.confidence?.let { "$number（${it.asRecognitionPercent()}）" } ?: number
+            }
+        }.distinct()
+    } else {
+        emptyList()
+    }
+    val faceCandidates = if (faceAvailable) {
+        face.faces.mapNotNull { it.candidate }.mapNotNull { candidate ->
+            val identity = candidate.displayName?.trim()?.takeIf(String::isNotEmpty)
+                ?: candidate.personId?.trim()?.takeIf(String::isNotEmpty)
+                ?: candidate.candidateId?.trim()?.takeIf(String::isNotEmpty)
+            identity?.let { name ->
+                candidate.similarity?.let { "$name（${it.asRecognitionPercent()}）" } ?: name
+            }
+        }.distinct()
+    } else {
+        emptyList()
+    }
+
+    val recognitionParts = buildList {
+        add(
+            when {
+                !plateAvailable -> "车牌算法暂不可用"
+                plateCandidates.isNotEmpty() -> "车牌：${plateCandidates.take(3).joinToString("、")}"
+                else -> "未识别到车牌"
+            }
+        )
+        add(
+            when {
+                !faceAvailable -> "人脸算法暂不可用"
+                faceCandidates.isNotEmpty() -> "人脸候选：${faceCandidates.take(3).joinToString("、")}"
+                face.faceCount > 0 -> "检测到 ${face.faceCount} 张人脸，未命中布控"
+                else -> "未检测到人脸"
+            }
+        )
+    }
+    val alertCount = alerts.size
+    val degraded = !plateAvailable || !faceAvailable || platformDelivery.equals("QUEUE_FAILED", ignoreCase = true)
+    val deliveryText = when (platformDelivery.uppercase(Locale.ROOT)) {
+        "QUEUED" -> "命中告警已进入后台同步队列"
+        "QUEUE_FAILED" -> "平台告警入队失败，请立即重试"
+        "SKIPPED" -> "平台告警上报未启用"
+        else -> null
+    }
+    val confirmationText = if (alertCount > 0) "命中布控 $alertCount 条，需人工确认" else "未命中布控"
+    val elapsedText = "耗时 ${elapsedMs}ms"
+    val details = buildList {
+        add(mediaName)
+        addAll(recognitionParts)
+        add(confirmationText)
+        deliveryText?.let(::add)
+        add(elapsedText)
+    }.joinToString("；")
+    val level = if (alertCount > 0 || degraded) DeviceEventLevel.Warning else DeviceEventLevel.Info
+    val messageType = when {
+        platformDelivery.equals("QUEUE_FAILED", ignoreCase = true) -> OperationMessageType.Error
+        alertCount > 0 || degraded -> OperationMessageType.Warning
+        else -> OperationMessageType.Success
+    }
+    val title = if (alertCount > 0) "云端识别命中布控" else "云端识别已完成"
+    val message = (recognitionParts + confirmationText + elapsedText).joinToString("；")
+    return CloudVisionRecognitionDisplay(title, details, message, level, messageType)
+}
+
+private fun Double.asRecognitionPercent(): String =
+    String.format(Locale.CHINA, "%.0f%%", (this.coerceIn(0.0, 1.0) * 100.0))

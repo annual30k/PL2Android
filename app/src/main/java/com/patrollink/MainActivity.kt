@@ -113,7 +113,6 @@ private class PatrolViewModelFactory(
             settingsStore = dependencies.settingsStore,
             locationGateway = dependencies.locationGateway,
             sosEvidenceRecorder = dependencies.sosEvidenceRecorder,
-            emergencyContactGateway = dependencies.emergencyContactGateway,
             notificationGateway = dependencies.notificationGateway,
             versionGateway = dependencies.versionGateway,
             firmwareGateway = dependencies.firmwareGateway,

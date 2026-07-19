@@ -15,7 +15,6 @@ import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.DeviceControlGateway
 import com.patrollink.domain.SecureStore
 import com.patrollink.domain.LocationGateway
-import com.patrollink.domain.EmergencyContactGateway
 import com.patrollink.domain.PatrolNotificationGateway
 import com.patrollink.domain.SosEvidenceRecorder
 import com.patrollink.domain.VersionGateway
@@ -30,7 +29,6 @@ data class RuntimeDependencies(
     val settingsStore: UiSettingsStore,
     val locationGateway: LocationGateway,
     val sosEvidenceRecorder: SosEvidenceRecorder,
-    val emergencyContactGateway: EmergencyContactGateway,
     val notificationGateway: PatrolNotificationGateway,
     val versionGateway: VersionGateway,
     val firmwareGateway: FirmwareGateway,
@@ -60,6 +58,7 @@ object RuntimeDependencyFactory {
             tokenProvider = tokenStore::token,
             operatorIdProvider = tokenStore::pairingAccountId,
             pairingAccountIdProvider = tokenStore::pairingAccountId,
+            selectedDeviceIdProvider = tokenStore::selectedDeviceId,
             fallbackState = emptyState,
             sharedUteBridge = uteBridge,
             sharedSourceNexBridge = sourceNexBridge
@@ -80,7 +79,6 @@ object RuntimeDependencyFactory {
             settingsStore = UiSettingsStore(appContext),
             locationGateway = ServiceFactory.createLocationGateway(appContext, emptyState),
             sosEvidenceRecorder = ServiceFactory.createSosEvidenceRecorder(appContext),
-            emergencyContactGateway = ServiceFactory.createEmergencyContactGateway(),
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
             versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
             firmwareGateway = ServiceFactory.createFirmwareGateway(appContext, config, uteBridge, tokenStore::token, tokenStore::pairingAccountId),

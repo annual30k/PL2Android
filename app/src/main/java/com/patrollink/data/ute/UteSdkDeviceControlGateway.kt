@@ -10,9 +10,6 @@ import com.patrollink.domain.DeviceFactoryResetTarget
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.DeviceWifiState
-import com.yc.nadalsdk.bean.Response
-import com.yc.nadalsdk.bean.recorder.AudioRecordInfo
-import com.yc.nadalsdk.bean.recorder.AudioRecordStopInfo
 import com.yc.nadalsdk.bean.smart.DeviceResetConfig
 import com.yc.nadalsdk.bean.smart.GlassesInfo
 import com.yc.nadalsdk.bean.smart.SmartAudioDataInfo
@@ -22,8 +19,6 @@ import com.yc.nadalsdk.bean.smart.SmartRealAudioDataInfo
 import com.yc.nadalsdk.bean.smart.VideoParametersInfo
 import com.yc.nadalsdk.ble.open.DeviceModeJX
 import com.yc.nadalsdk.constants.NotifyType
-import com.yc.nadalsdk.constants.recorder.AudioRecordResult
-import com.yc.nadalsdk.constants.smart.GlassesHeadsetRecordingState
 import com.yc.nadalsdk.constants.smart.GlassesRecordDirection
 import com.yc.nadalsdk.constants.smart.HeadsetBrightnessLevel
 import com.yc.nadalsdk.constants.smart.HeadsetSoundMode
@@ -44,7 +39,6 @@ class UteSdkDeviceControlGateway(
     private val mediaDirectory: File? = null,
     private val pairingAccountIdProvider: () -> String = { "patrollink-local-operator" }
 ) : DeviceControlGateway {
-    private var aiRecorderSessionId: String? = null
     private val accountBinder by lazy { UteHeadsetAccountBinder(bridge, pairingAccountIdProvider) }
 
     override fun events(): Flow<DeviceEvent> =
@@ -163,7 +157,8 @@ class UteSdkDeviceControlGateway(
             supportsPhoto = cameraControl,
             supportsVideo = cameraControl,
             supportsAudioRecord = selectedHeadset && (supportsAiRecorder || cameraControl),
-            supportsRealtimeAudio = selectedHeadset && (supportsAiRecorder || cameraControl)
+            // SDK 的录音能力是文件型录制，不能冒充实时双向音频。
+            supportsRealtimeAudio = false
         )
     }
 
@@ -303,42 +298,9 @@ class UteSdkDeviceControlGateway(
             .onFailure { Log.w(Tag, "wifi warmup auth failed: ${it.message}") }
     }
 
-    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
-            bridge.client.openOrCloseNotify(true)
-            val aiRecorderStarted = if (supportsAiRecorder()) {
-                val response = bridge.connection.appStartAudioRecord()
-                if (response.isAudioStartAccepted()) {
-                    aiRecorderSessionId = response.data?.sessionId ?: sessionId
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-            aiRecorderStarted ||
-                bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_START).isSuccess
-        }.getOrDefault(false)
-    }
+    override suspend fun startRealtimeAudioSync(sessionId: String): Boolean = false
 
-    override suspend fun stopRealtimeAudioSync(): Boolean = withContext(Dispatchers.IO) {
-        runCatching {
-            val aiRecorderStopped = if (aiRecorderSessionId != null || supportsAiRecorder()) {
-                val response = bridge.connection.appStopAudioRecord()
-                if (response.isAudioStopAccepted()) {
-                    aiRecorderSessionId = null
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-            aiRecorderStopped ||
-                bridge.connection.toggleHeadsetAudioRecording(GlassesHeadsetRecordingState.RECORDING_STATE_STOP).isSuccess
-        }.getOrDefault(false)
-    }
+    override suspend fun stopRealtimeAudioSync(): Boolean = false
 
     override suspend fun notifyMediaSyncCompleted(): Boolean = withContext(Dispatchers.IO) {
         runCatching { bridge.connection.notifyMediaSyncCompleted().isSuccess }.getOrDefault(false)
@@ -401,17 +363,6 @@ class UteSdkDeviceControlGateway(
 
     private fun Long.toReadableGb(): String =
         if (this <= 0L) "未知" else "%.1fGB".format(this / 1024f / 1024f / 1024f)
-
-    private fun Response<AudioRecordInfo>.isAudioStartAccepted(): Boolean {
-        val result = data?.result ?: return false
-        return result == AudioRecordResult.RECORD_START_SUCCESS || result == AudioRecordResult.RECORD_ALREADY_IN_PROGRESS
-    }
-
-    private fun Response<AudioRecordStopInfo>.isAudioStopAccepted(): Boolean =
-        data != null || isSuccess
-
-    private fun supportsAiRecorder(): Boolean =
-        DeviceModeJX.isHasFunction_4(DeviceModeJX.IS_SUPPORT_AI_RECORDER_MEETING_RECORDING)
 
     private suspend fun waitForWifiEnabledNotify(): Int? =
         withTimeoutOrNull(WifiApReadyTimeoutMillis) {

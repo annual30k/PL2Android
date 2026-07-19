@@ -284,10 +284,10 @@ class MockSosGateway(private val api: MockRestApi = MockRestApi()) : SosGateway 
 
     override fun state(): Flow<SosState> = state.asStateFlow()
 
-    override suspend fun activate(location: GpsLocation): SosEvent {
+    override suspend fun activate(location: GpsLocation, clientEventId: String): SosEvent {
         state.value = SosState(SosPhase.Activating, location, recordingAudio = true, backupEtaMinutes = null)
         delay(10)
-        val response = api.activateSos(location.toDto()).data
+        val response = api.activateSos(location.toDto(clientEventId = clientEventId.takeIf { it.isNotBlank() })).data
         state.value = response.toDomainState()
         return response.toDomainEvent()
     }

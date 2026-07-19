@@ -10,6 +10,8 @@ interface PatrolRestApi {
     suspend fun bindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto>
     suspend fun unbindDevice(deviceId: String): ApiEnvelope<DeviceStatusDto>
     suspend fun sendDeviceCommand(deviceId: String, request: DeviceCommandRequestDto): ApiEnvelope<DeviceStatusDto>
+    suspend fun pendingDeviceCommands(deviceId: String, limit: Int = 20): ApiEnvelope<List<PendingDeviceCommandDto>>
+    suspend fun acknowledgeDeviceCommand(commandId: String, request: DeviceCommandAckRequestDto): ApiEnvelope<DeviceControlResultDto>
     suspend fun deviceCapabilities(deviceId: String): ApiEnvelope<DeviceCapabilitiesDto>
     suspend fun deviceWifi(deviceId: String): ApiEnvelope<DeviceWifiStateDto>
     suspend fun configureWifi(deviceId: String, request: DeviceWifiStateDto): ApiEnvelope<DeviceWifiStateDto>

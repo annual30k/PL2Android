@@ -1,5 +1,6 @@
 package com.patrollink.domain
 
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
@@ -56,6 +57,9 @@ class PatrolCoordinator(
     suspend fun setDeviceTalk(device: DeviceStatus, enabled: Boolean): DeviceStatus =
         deviceGateway.sendCommand(device.id, if (enabled) DeviceCommand.StartTalk else DeviceCommand.StopTalk)
 
+    suspend fun executeRemoteDeviceCommand(device: DeviceStatus, command: DeviceCommand): DeviceStatus =
+        deviceGateway.sendCommand(device.id, command)
+
     fun observeAlerts(): Flow<List<AlertItem>> = alertGateway.observeAlerts()
 
     suspend fun handleAlert(
@@ -84,6 +88,9 @@ class PatrolCoordinator(
 
     suspend fun verifyMedia(fileId: String): Boolean = mediaGateway.verifySha256(fileId)
 
+    suspend fun uploadLocalEvidence(file: File, bizType: String, bizId: String): MediaFile? =
+        mediaGateway.uploadLocalFile(file, storageSide = "PHONE", bizType = bizType, bizId = bizId)
+
     suspend fun sendHeartbeat(device: DeviceStatus): HeartbeatAck = realtimeGateway.sendHeartbeat(device)
 
     fun realtimeConnection(): Flow<RealtimeConnection> = realtimeGateway.connection()
@@ -98,7 +105,7 @@ class PatrolCoordinator(
 
     fun intercomState(): Flow<IntercomState>? = intercomGateway?.state()
 
-    suspend fun activateSos(location: GpsLocation): SosEvent = sosGateway.activate(location)
+    suspend fun activateSos(location: GpsLocation, clientEventId: String = ""): SosEvent = sosGateway.activate(location, clientEventId)
 
     suspend fun cancelSos(): SosEvent = sosGateway.cancel()
 

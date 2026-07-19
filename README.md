@@ -7,20 +7,20 @@ Stack:
 - Kotlin
 - Jetpack Compose + Material 3
 - MVVM style state holder
-- Mock repository shaped like the future REST/WebSocket/BLE data contracts
+- Production REST, Cerebellum REST, SourceNex/UTE/BLE, and Wi-Fi transfer integrations
 
 Open this folder in Android Studio and run the `app` configuration.
 
 ## Implemented Feature Scope
 
-- Login/session startup with token-shaped mock response.
+- Real backend login, token refresh, session restore, and secure logout.
 - Device scan, bind, photo command, recording toggle and intercom toggle.
 - Alert observe, acknowledge, close, false alarm and backup handling paths.
 - Media list, SHA-256 verification state, download/upload progress state machine and delete.
-- WebSocket-style connection and heartbeat acknowledgement.
-- Stream relay state machine for low-latency/balanced/evidence-quality modes.
+- 15-second heartbeat/location updates, command polling/ACK, and message/alert catch-up.
+- Stream relay state machine for low-latency/balanced/evidence-quality modes; live headset video still depends on vendor SDK support.
 - SOS activation/cancel flow with location, audio recording and backup ETA state.
-- Spring Boot style REST mock contracts using `code/message/data/traceId/timestamp`.
+- Spring Boot REST contracts using `code/message/data/traceId/timestamp`.
 - Paged list contracts using `items/page/pageSize/total/hasMore`.
 - Platform boundaries for secure token storage, Android permission planning, background task queueing and evidence integrity hashing.
 - OkHttp-based real REST client and REST-backed gateway implementations.
@@ -34,11 +34,11 @@ Open this folder in Android Studio and run the `app` configuration.
 - Version check gateway and offline sync engine.
 
 The hardware/network boundaries are defined as Kotlin interfaces in `domain/Contracts.kt`.
-Current implementations are deterministic mocks so the app can run without headset hardware or backend endpoints.
+Production uses real dependencies from `RuntimeDependencyFactory`; mocks live only in unit-test sources. Missing backend or hardware channels fail explicitly instead of reporting simulated success.
 
-## Mock REST Data Contract
+## REST Data Contract
 
-The Android mock layer is shaped to match a future Spring Boot backend. Backend storage choices such as Redis cache, MySQL, or a domestic database remain server-side implementation details; the app only depends on stable REST response DTOs.
+The Android client follows the Spring Boot backend contract. Backend storage choices such as Redis, MySQL, or a domestic database remain server-side details; the app depends only on stable REST DTOs. Test mocks use the same contract for retry and mapping tests.
 
 Response envelope:
 
@@ -47,7 +47,7 @@ Response envelope:
   "code": 200,
   "message": "OK",
   "data": {},
-  "traceId": "mock-trace-0001",
+  "traceId": "trace-example-0001",
   "timestamp": 1715832000
 }
 ```

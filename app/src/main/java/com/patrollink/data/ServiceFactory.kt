@@ -241,11 +241,15 @@ object ServiceFactory {
 
     fun createNotificationGateway(context: Context) = AndroidPatrolNotificationGateway(context)
 
-    fun createVersionInstaller(context: Context) = AndroidVersionInstaller(context)
+    fun createVersionInstaller(
+        context: Context,
+        tokenProvider: () -> String? = { null },
+        apiBaseUrl: String = ""
+    ) = AndroidVersionInstaller(context, tokenProvider = tokenProvider, apiBaseUrl = apiBaseUrl)
 
     fun createVersionGateway(config: RuntimeConfig, tokenProvider: () -> String? = { null }): VersionGateway =
         config.restBaseUrl.takeIf { it.isNotBlank() }
-            ?.let { RestVersionGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
+            ?.let { RestVersionGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider), it) }
             ?: EmptyVersionGateway()
 
     fun createFirmwareGateway(
@@ -253,10 +257,11 @@ object ServiceFactory {
         config: RuntimeConfig,
         sharedUteBridge: UteSdkBridge? = null,
         tokenProvider: () -> String? = { null },
-        operatorIdProvider: () -> String = { "" }
+        operatorIdProvider: () -> String = { "" },
+        onStatusSyncFailed: suspend (String, com.patrollink.domain.FirmwareUpgradeState) -> Unit = { _, _ -> }
     ): FirmwareGateway {
         val restGateway = config.restBaseUrl.takeIf { it.isNotBlank() }
-            ?.let { RestFirmwareGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider)) }
+            ?.let { RestFirmwareGateway(OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenProvider), it) }
         val uteBridge = when {
             !config.useRealBle -> null
             sharedUteBridge != null -> sharedUteBridge
@@ -268,7 +273,10 @@ object ServiceFactory {
                 bridge = uteBridge,
                 firmwareDirectory = File(context.filesDir, "patrol_firmware/ute"),
                 delegate = restGateway ?: EmptyFirmwareGateway(),
-                operatorIdProvider = operatorIdProvider
+                operatorIdProvider = operatorIdProvider,
+                tokenProvider = tokenProvider,
+                apiBaseUrl = config.restBaseUrl,
+                onStatusSyncFailed = onStatusSyncFailed
             )
         } else {
             restGateway ?: EmptyFirmwareGateway()

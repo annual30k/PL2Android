@@ -1,6 +1,9 @@
 package com.patrollink.data.ute
 
 import com.patrollink.data.EmptyFirmwareGateway
+import com.patrollink.data.resolveBackendDownloadUrl
+import com.patrollink.data.shouldAttachBackendAuthorization
+import com.patrollink.data.remote.OkHttpPatrolRestApi
 import com.patrollink.domain.DeviceStatus
 import com.patrollink.domain.FirmwareCheckResult
 import com.patrollink.domain.FirmwareDeviceMetadata
@@ -26,6 +29,9 @@ class UteSdkFirmwareGateway(
     private val firmwareDirectory: File,
     private val delegate: FirmwareGateway = EmptyFirmwareGateway(),
     private val operatorIdProvider: () -> String = { "" },
+    private val tokenProvider: () -> String? = { null },
+    private val apiBaseUrl: String = "",
+    private val onStatusSyncFailed: suspend (String, FirmwareUpgradeState) -> Unit = { _, _ -> },
     private val httpClient: OkHttpClient = OkHttpClient()
 ) : FirmwareGateway {
     override suspend fun check(device: DeviceStatus, metadata: FirmwareDeviceMetadata): FirmwareCheckResult {
@@ -36,12 +42,16 @@ class UteSdkFirmwareGateway(
 
     override fun install(device: DeviceStatus, firmware: FirmwareCheckResult): Flow<FirmwareUpgradeState> = flow {
         require(bridge.client.isConnected) { "UTE device is not connected" }
-        var task = runCatching { createUpgradeTask(device, firmware, operatorIdProvider()) }.getOrNull()
+        var task = createUpgradeTask(device, firmware, operatorIdProvider())
 
         suspend fun emitAndUpdate(state: FirmwareUpgradeState) {
-            emit(state)
-            val taskId = task?.taskId?.takeIf { it.isNotBlank() } ?: return
-            task = runCatching { updateUpgradeTask(taskId, state) }.getOrDefault(task)
+            val normalized = state.toBackendTerminalState()
+            emit(normalized)
+            task = runCatching { updateUpgradeTask(task.taskId, normalized) }
+                .getOrElse {
+                    onStatusSyncFailed(task.taskId, normalized)
+                    task
+                }
         }
 
         try {
@@ -116,7 +126,7 @@ class UteSdkFirmwareGateway(
         )
 
     private suspend fun downloadFirmwarePackage(firmware: FirmwareCheckResult): File? = withContext(Dispatchers.IO) {
-        val url = firmware.downloadUrl?.takeIf { it.isNotBlank() } ?: return@withContext null
+        val url = resolveBackendDownloadUrl(apiBaseUrl, firmware.downloadUrl) ?: return@withContext null
         firmwareDirectory.mkdirs()
         val suffix = File(url.substringBefore('?')).extension.takeIf { it.isNotBlank() } ?: "bin"
         val fileName = (firmware.firmwareId ?: firmware.versionName.ifBlank { "firmware" }).safeFirmwareFileName()
@@ -124,7 +134,15 @@ class UteSdkFirmwareGateway(
         if (url.startsWith("file://")) {
             File(URI(url)).copyTo(file, overwrite = true)
         } else {
-            val request = Request.Builder().url(url).build()
+            val request = Request.Builder()
+                .url(url)
+                .header("clientid", OkHttpPatrolRestApi.DEFAULT_CLIENT_ID)
+                .apply {
+                    if (shouldAttachBackendAuthorization(apiBaseUrl, url)) {
+                        tokenProvider()?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Bearer $it") }
+                    }
+                }
+                .build()
             httpClient.newCall(request).execute().use { response ->
                 check(response.isSuccessful) { "firmware download failed: HTTP ${response.code}" }
                 val body = response.body ?: error("firmware download body is empty")
@@ -194,4 +212,13 @@ class UteSdkFirmwareGateway(
 
     private fun String.safeFirmwareFileName(): String =
         replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "firmware" }
+}
+
+private fun FirmwareUpgradeState.toBackendTerminalState(): FirmwareUpgradeState = when {
+    status.contains("COMPLETED", ignoreCase = true) || status.equals("SUCCESS", ignoreCase = true) ->
+        copy(status = "SUCCESS", progress = 1f, errorCode = "", errorMessage = "")
+    status.contains("CANCELLED", ignoreCase = true) -> copy(status = "CANCELLED")
+    status.contains("FAILED", ignoreCase = true) || status.contains("ERROR", ignoreCase = true) ->
+        copy(status = "FAILED", progress = 0f)
+    else -> this
 }

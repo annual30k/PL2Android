@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.patrollink.domain.AppUiState
+import com.patrollink.domain.SosPhase
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.SystemBars
 import com.patrollink.service.PatrolForegroundService
@@ -73,8 +74,17 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
         viewModel.activateSos()
     }
 
+    LaunchedEffect(uiState.sosPhase) {
+        if (uiState.sosPhase == SosPhase.Resolved || uiState.sosPhase == SosPhase.Cancelled) {
+            PatrolForegroundService.stop(context)
+            delay(1_500)
+            onClose()
+        }
+    }
+
+    val terminal = activationStarted && (uiState.sosPhase == SosPhase.Resolved || uiState.sosPhase == SosPhase.Cancelled)
     val activated = activationStarted && uiState.sosActive
-    val activating = activationStarted && !activated
+    val activating = activationStarted && !activated && !terminal
     Box(
         Modifier
             .fillMaxSize()
@@ -90,6 +100,10 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
             ) {
                 Text(
                     when {
+                        terminal && uiState.sosPhase == SosPhase.Resolved -> "指挥台已完成处置"
+                        terminal -> "紧急上报已结束"
+                        activated && uiState.sosPhase == SosPhase.BackupEnroute -> "增援警力正在赶来"
+                        activated && uiState.sosPhase == SosPhase.Received -> "指挥台已确认接警"
                         activated -> "紧急上报已激活"
                         activating -> "正在发起紧急上报"
                         else -> "即将发起紧急上报"
@@ -100,7 +114,14 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    if (activated || activating) "您的位置和环境音频正在被实时监控" else "倒计时结束前可右滑取消",
+                    when {
+                        terminal -> uiState.sosStatusMessage.ifBlank { "现场处置结果已同步" }
+                        activated && uiState.sosPhase == SosPhase.BackupEnroute -> uiState.sosBackupEtaMinutes?.let { "预计 $it 分钟到达 · 位置与环境音频持续同步" }
+                            ?: "增援已出发 · 位置与环境音频持续同步"
+                        activated && uiState.sosPhase == SosPhase.Received -> uiState.sosStatusMessage.ifBlank { "指挥台正在组织处置" }
+                        activated || activating -> "您的位置和环境音频正在被实时监控"
+                        else -> "倒计时结束前可右滑取消"
+                    },
                     color = Color(0xFFFFCDD2),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium
@@ -120,20 +141,31 @@ fun SosScreen(uiState: AppUiState, viewModel: PatrolViewModel, onClose: () -> Un
                             .border(9.dp, Color.White.copy(alpha = 0.88f), CircleShape)
                     )
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(if (activated) "SOS" else seconds.toString(), color = Color.White, fontSize = 76.sp, fontWeight = FontWeight.Black)
-                        Text(if (activated) "ACTIVE" else "5秒后自动上报", color = Color.White.copy(alpha = 0.80f), fontSize = 10.sp, fontWeight = FontWeight.Black)
+                        Text(if (terminal) "OK" else if (activated) "SOS" else seconds.toString(), color = Color.White, fontSize = 76.sp, fontWeight = FontWeight.Black)
+                        Text(
+                            if (terminal) "RESOLVED" else if (activated) when (uiState.sosPhase) {
+                                SosPhase.Received -> "RECEIVED"
+                                SosPhase.BackupEnroute -> "BACKUP ENROUTE"
+                                else -> "ACTIVE"
+                            } else "5秒后自动上报",
+                            color = Color.White.copy(alpha = 0.80f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black
+                        )
                     }
                 }
                 Spacer(Modifier.height(38.dp))
-                SlideToCancel(
-                    onCancel = {
-                        onClose()
-                        if (activationStarted || uiState.sosActive) {
-                            viewModel.cancelSos()
+                if (!terminal) {
+                    SlideToCancel(
+                        onCancel = {
+                            onClose()
+                            if (activationStarted || uiState.sosActive) {
+                                viewModel.cancelSos()
+                            }
+                            PatrolForegroundService.stop(context)
                         }
-                        PatrolForegroundService.stop(context)
-                    }
-                )
+                    )
+                }
             }
             Spacer(Modifier.weight(1f))
             Column(

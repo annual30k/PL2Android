@@ -232,11 +232,15 @@ class OkHttpPatrolRestApi(
     override suspend fun cancelSos(): ApiEnvelope<SosEventDto> =
         post("api/v1/sos/cancel", emptyMap<String, String>())
 
-    override suspend fun checkVersion(currentVersionCode: Int): ApiEnvelope<VersionCheckResultDto> =
-        get("api/v1/version/check?currentVersionCode=$currentVersionCode")
+    override suspend fun checkVersion(currentVersionCode: Int): ApiEnvelope<VersionCheckResultDto> {
+        val response = get<ApiEnvelope<VersionCheckResultDto>>("api/v1/version/check?currentVersionCode=$currentVersionCode")
+        return response.copy(data = response.data.copy(downloadUrl = resolveDownloadUrl(response.data.downloadUrl)))
+    }
 
-    override suspend fun checkFirmware(deviceId: String, request: FirmwareCheckRequestDto): ApiEnvelope<FirmwareCheckResultDto> =
-        post("api/v1/devices/${deviceId.pathId()}/firmware/check", request)
+    override suspend fun checkFirmware(deviceId: String, request: FirmwareCheckRequestDto): ApiEnvelope<FirmwareCheckResultDto> {
+        val response = post<ApiEnvelope<FirmwareCheckResultDto>>("api/v1/devices/${deviceId.pathId()}/firmware/check", request)
+        return response.copy(data = response.data.copy(downloadUrl = resolveDownloadUrl(response.data.downloadUrl)))
+    }
 
     override suspend fun createFirmwareUpgradeTask(deviceId: String, request: FirmwareUpgradeTaskCreateDto): ApiEnvelope<FirmwareUpgradeTaskDto> =
         post("api/v1/devices/${deviceId.pathId()}/firmware/upgrade-tasks", request)
@@ -289,6 +293,11 @@ class OkHttpPatrolRestApi(
             .addPathSegments(pathPart)
             .apply { if (queryPart.isNotBlank()) encodedQuery(queryPart) }
             .build()
+    }
+
+    private fun resolveDownloadUrl(value: String?): String? {
+        val candidate = value?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return endpoint.resolve(candidate)?.toString() ?: candidate
     }
 
     private fun String.pathId(): String {

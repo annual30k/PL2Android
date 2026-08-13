@@ -66,6 +66,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.delay
 import com.patrollink.domain.OperationMessage
 import com.patrollink.domain.OperationMessageType
+import com.patrollink.domain.VersionUpdatePhase
 import com.patrollink.presentation.PatrolViewModel
 import com.patrollink.presentation.component.ForceTopBar
 import com.patrollink.presentation.permission.PermissionGate
@@ -81,6 +82,7 @@ import com.patrollink.presentation.screen.ProfileScreen
 import com.patrollink.presentation.screen.SosScreen
 import com.patrollink.presentation.screen.SystemSettingsScreen
 import com.patrollink.presentation.screen.VersionInfoScreen
+import com.patrollink.presentation.screen.VersionUpdateDialog
 import com.patrollink.presentation.theme.PatrolDisplay
 import com.patrollink.presentation.theme.PatrolTheme
 import com.patrollink.presentation.theme.PatrolTextStyle
@@ -230,6 +232,18 @@ fun PatrolApp(
                     }
                     uiState.operationMessage?.let { message ->
                         AppMessage(message = message, onShown = viewModel::clearMessage)
+                    }
+                    if (uiState.versionUpdate.phase in setOf(
+                            VersionUpdatePhase.Available,
+                            VersionUpdatePhase.Downloading,
+                            VersionUpdatePhase.Ready
+                        )
+                    ) {
+                        VersionUpdateDialog(
+                            uiState = uiState,
+                            onUpdate = viewModel::installVersionUpdate,
+                            onLater = viewModel::dismissVersionUpdate
+                        )
                     }
                     if (lowBattery && !dismissedLowBatteryReminder && currentRoute != Route.Sos.path) {
                         EquipmentReminderDialog(

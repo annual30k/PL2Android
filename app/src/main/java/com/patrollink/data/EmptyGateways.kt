@@ -102,6 +102,7 @@ class EmptyMediaGateway : MediaGateway {
 
 class EmptyRealtimeGateway : RealtimeGateway {
     override fun connection(): Flow<RealtimeConnection> = flowOf(RealtimeConnection.Disconnected)
+    override fun events(): Flow<com.patrollink.domain.RealtimeEvent> = kotlinx.coroutines.flow.emptyFlow()
     override suspend fun connect(token: String) = error("平台实时连接未配置")
     override suspend fun disconnect() = Unit
     override suspend fun sendHeartbeat(device: DeviceStatus): HeartbeatAck = HeartbeatAck(false, System.currentTimeMillis())

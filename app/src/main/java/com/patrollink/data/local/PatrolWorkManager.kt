@@ -12,6 +12,8 @@ import androidx.work.WorkerParameters
 import com.patrollink.data.RestMediaGateway
 import com.patrollink.data.RuntimeConfigStore
 import com.patrollink.data.remote.OkHttpPatrolRestApi
+import com.patrollink.data.remote.PatrolRestApi
+import com.patrollink.data.remote.toDomain
 import com.patrollink.domain.BackgroundTaskType
 import com.patrollink.domain.BackgroundTask
 import com.patrollink.domain.BackgroundTaskGateway
@@ -50,14 +52,16 @@ class OfflineCompensationWorker(
     override suspend fun doWork(): Result {
         val database = PatrolDatabase.get(applicationContext)
         val gateway = RoomBackgroundTaskGateway(database.offlineTaskDao())
-        val uploader = createEvidenceUploadProcessor(database)
-        val alertProcessor = createAlertDispositionProcessor()
-        val commandAckProcessor = createDeviceCommandAckProcessor()
-        val heartbeatProcessor = createHeartbeatProcessor()
-        val messageReadProcessor = createMessageReadProcessor()
-        val sosSyncProcessor = createSosSyncProcessor()
-        val sosEvidenceProcessor = createSosEvidenceProcessor()
-        val deviceUnbindProcessor = createDeviceUnbindProcessor()
+        val api = createAuthenticatedApi()
+        val uploader = createEvidenceUploadProcessor(database, api)
+        val alertProcessor = api?.let(::AlertDispositionTaskProcessor)
+        val commandAckProcessor = api?.let(::DeviceCommandAckTaskProcessor)
+        val heartbeatProcessor = api?.let(::HeartbeatTaskProcessor)
+        val messageReadProcessor = api?.let(::MessageReadTaskProcessor)
+        val firmwareUpgradeProcessor = api?.let(::FirmwareUpgradeTaskProcessor)
+        val sosSyncProcessor = api?.let(::SosSyncTaskProcessor)
+        val sosEvidenceProcessor = api?.let(::SosEvidenceUploadTaskProcessor)
+        val deviceUnbindProcessor = api?.let(::DeviceUnbindTaskProcessor)
         val pending = gateway.pending()
         var hasIncompleteTask = false
         val blockedSosIds = mutableSetOf<String>()
@@ -69,6 +73,7 @@ class OfflineCompensationWorker(
                 BackgroundTaskType.SyncDeviceCommandAck -> commandAckProcessor?.process(receipt.task) == true
                 BackgroundTaskType.Heartbeat -> heartbeatProcessor?.process(receipt.task) == true
                 BackgroundTaskType.SyncMessageRead -> messageReadProcessor?.process(receipt.task) == true
+                BackgroundTaskType.SyncFirmwareUpgrade -> firmwareUpgradeProcessor?.process(receipt.task) == true
                 BackgroundTaskType.SyncDeviceUnbind -> deviceUnbindProcessor?.process(receipt.task) == true
                 BackgroundTaskType.SyncSosState -> {
                     val sos = QueuedSosSyncCodec.decode(receipt.task.payloadId)
@@ -90,43 +95,8 @@ class OfflineCompensationWorker(
         return Result.success()
     }
 
-    private suspend fun createAlertDispositionProcessor(): AlertDispositionTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
-        return AlertDispositionTaskProcessor(api)
-    }
-
-    private suspend fun createDeviceCommandAckProcessor(): DeviceCommandAckTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
-        return DeviceCommandAckTaskProcessor(api)
-    }
-
-    private suspend fun createHeartbeatProcessor(): HeartbeatTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
-        return HeartbeatTaskProcessor(api)
-    }
-
-    private suspend fun createMessageReadProcessor(): MessageReadTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
-        return MessageReadTaskProcessor(api)
-    }
-
-    private suspend fun createSosSyncProcessor(): SosSyncTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
-        return SosSyncTaskProcessor(api)
-    }
-
-    private suspend fun createSosEvidenceProcessor(): SosEvidenceUploadTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
-        return SosEvidenceUploadTaskProcessor(api)
-    }
-
-    private suspend fun createDeviceUnbindProcessor(): DeviceUnbindTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
-        return DeviceUnbindTaskProcessor(api)
-    }
-
-    private suspend fun createEvidenceUploadProcessor(database: PatrolDatabase): EvidenceUploadTaskProcessor? {
-        val api = createAuthenticatedApi() ?: return null
+    private fun createEvidenceUploadProcessor(database: PatrolDatabase, api: PatrolRestApi?): EvidenceUploadTaskProcessor? {
+        api ?: return null
         return EvidenceUploadTaskProcessor(
             localMediaStore = RoomLocalMediaStore(RoomMediaIndex(database.mediaFileDao())),
             mediaGateway = RestMediaGateway(api)
@@ -138,10 +108,15 @@ class OfflineCompensationWorker(
         val config = RuntimeConfigStore(applicationContext).read()
         if (config.restBaseUrl.isBlank()) return null
         val secureStore = AndroidKeystoreSecureStore(applicationContext)
-        val accessToken = secureStore.readSession()?.accessToken ?: return null
-        return OkHttpPatrolRestApi(
+        var session = secureStore.readSession() ?: return null
+        var api = OkHttpPatrolRestApi(
             baseUrl = config.restBaseUrl,
-            tokenProvider = { accessToken }
+            tokenProvider = { session.accessToken }
         )
+        if (runCatching { api.currentUser() }.isSuccess) return api
+        session = runCatching { api.refresh(session.refreshToken).data.toDomain() }.getOrNull() ?: return null
+        secureStore.saveSession(session)
+        api = OkHttpPatrolRestApi(config.restBaseUrl, tokenProvider = { session.accessToken })
+        return api
     }
 }

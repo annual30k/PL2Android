@@ -105,13 +105,6 @@ fun VersionInfoScreen(uiState: AppUiState, viewModel: PatrolViewModel, onBack: (
             }
         }
 
-        if (page == VersionInfoPage.AppUpgrade && updateState.phase in setOf(VersionUpdatePhase.Available, VersionUpdatePhase.Downloading, VersionUpdatePhase.Ready, VersionUpdatePhase.UpToDate, VersionUpdatePhase.Failed)) {
-            NewVersionDialog(
-                uiState = uiState,
-                onUpdate = viewModel::installVersionUpdate,
-                onLater = viewModel::dismissVersionUpdate
-            )
-        }
         contentDialog?.let { dialog ->
             VersionContentDialog(content = dialog, update = updateState, onDismiss = { contentDialog = null })
         }
@@ -188,16 +181,16 @@ private fun VersionProductHeader(uiState: AppUiState) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
-                .size(96.dp)
+                .size(76.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(colors.surfaceHigh),
             contentAlignment = Alignment.Center
         ) {
-            VersionIcon("shield", TechBlue, Modifier.size(48.dp))
+            VersionIcon("shield", TechBlue, Modifier.size(38.dp))
         }
-        Spacer(Modifier.height(28.dp))
-        Text("执法链路", color = colors.text, fontSize = 34.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(14.dp))
+        Text("执法链路", color = colors.text, fontSize = 28.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(6.dp))
         Text(
             "版本 v${uiState.versionUpdate.currentVersionName}",
             color = colors.text,
@@ -207,7 +200,7 @@ private fun VersionProductHeader(uiState: AppUiState) {
             modifier = Modifier
                 .clip(RoundedCornerShape(99.dp))
                 .background(colors.control)
-                .padding(horizontal = 20.dp, vertical = 7.dp)
+                .padding(horizontal = 18.dp, vertical = 5.dp)
         )
     }
 }
@@ -216,9 +209,9 @@ private fun VersionProductHeader(uiState: AppUiState) {
 private fun VersionFooter(uiState: AppUiState) {
     val colors = PatrolDisplay.colors
     Column(
-        Modifier.padding(top = 16.dp, bottom = 12.dp),
+        Modifier.padding(top = 4.dp, bottom = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text("战术系统节点：${uiState.user.systemNode}", color = colors.textSubtle, fontSize = 11.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
         Text("© 2024 哨兵核心系统", color = colors.textMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -450,15 +443,15 @@ private fun VersionTile(icon: String, title: String, modifier: Modifier, onClick
     val iconTint = if (colors.dark) Color(0xFFC4D2FF) else TechBlue
     Column(
         modifier
-            .height(156.dp)
+            .height(108.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(colors.surfaceHigh)
             .clickable(onClick = onClick)
-            .padding(22.dp),
+            .padding(16.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        VersionIcon(icon, iconTint, Modifier.size(34.dp))
-        Text(title, color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Black)
+        VersionIcon(icon, iconTint, Modifier.size(30.dp))
+        Text(title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.Black)
     }
 }
 
@@ -477,7 +470,7 @@ private fun MiniSeal(text: String) {
 }
 
 @Composable
-private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater: () -> Unit) {
+fun VersionUpdateDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater: () -> Unit) {
     val colors = PatrolDisplay.colors
     val update = uiState.versionUpdate
     val isDownloading = update.phase == VersionUpdatePhase.Downloading
@@ -490,7 +483,7 @@ private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater:
         Modifier
             .fillMaxSize()
             .background(overlay)
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = 20.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -503,7 +496,7 @@ private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater:
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(136.dp)
+                    .height(104.dp)
                     .background(Brush.linearGradient(listOf(Color(0xFF0084FF), Color(0xFF0057FF)))),
                 contentAlignment = Alignment.Center
             ) {
@@ -511,20 +504,20 @@ private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater:
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
                         Modifier
-                            .size(56.dp)
+                            .size(48.dp)
                             .clip(RoundedCornerShape(6.dp))
                             .background(Color.White.copy(alpha = 0.18f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        VersionIcon("upload", Color.White, Modifier.size(34.dp))
+                        VersionIcon("upload", Color.White, Modifier.size(28.dp))
                     }
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
                     Text("战术升级", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
                 }
             }
             Column(
-                Modifier.padding(horizontal = 24.dp, vertical = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(dialogTitle(update.phase, update.latestVersionName), color = colors.text, fontSize = PatrolTextSize.SectionTitle, fontWeight = FontWeight.Black)
                 Text(
@@ -533,9 +526,12 @@ private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater:
                     fontSize = PatrolTextSize.Body,
                     lineHeight = 21.sp
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    update.changelog.forEachIndexed { index, item ->
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    update.changelog.take(3).forEachIndexed { index, item ->
                         ChangeLog((index + 1).toString().padStart(2, '0'), item)
+                    }
+                    if (update.changelog.size > 3) {
+                        Text("另有 ${update.changelog.size - 3} 项改进，可在版本日志中查看", color = colors.textMuted, fontSize = PatrolTextSize.BodySmall)
                     }
                 }
                 if (isDownloading || isReady) {
@@ -549,20 +545,22 @@ private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater:
                 Spacer(Modifier.height(2.dp))
                 if (hasUpdate) Button(
                     onClick = onUpdate,
-                    enabled = !isDownloading && !isReady,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    enabled = !isDownloading,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = TechBlue)
                 ) {
-                    Text(if (isReady) "已准备安装" else "立即更新", fontSize = PatrolTextSize.CardTitle, fontWeight = FontWeight.Black)
+                    Text(if (isReady) "继续安装" else "立即更新", fontSize = PatrolTextSize.CardTitle, fontWeight = FontWeight.Black)
                 }
-                Button(
-                    onClick = onLater,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = secondaryButton)
-                ) {
-                    Text(if (hasUpdate && !isReady) "稍后再说" else "关闭", color = colors.text, fontSize = PatrolTextSize.CardTitle, fontWeight = FontWeight.Black)
+                if ((!update.forceUpdate || !hasUpdate) && !isDownloading) {
+                    Button(
+                        onClick = onLater,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = secondaryButton)
+                    ) {
+                        Text(if (hasUpdate && !isReady) "稍后再说" else "关闭", color = colors.text, fontSize = PatrolTextSize.CardTitle, fontWeight = FontWeight.Black)
+                    }
                 }
             }
             Row(
@@ -570,15 +568,14 @@ private fun NewVersionDialog(uiState: AppUiState, onUpdate: () -> Unit, onLater:
                     .fillMaxWidth()
                     .background(footer)
                     .border(0.5.dp, colors.border)
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     VersionIcon("smallShield", TechBlue, Modifier.size(18.dp))
-                    Text("签名已验证", color = colors.text, fontSize = PatrolTextSize.BodySmall, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                    Text("下载后自动执行 SHA-256 与安装签名校验", color = colors.text, fontSize = PatrolTextSize.BodySmall, fontWeight = FontWeight.Black)
                 }
-                Text("校验码：0x82A1C", color = colors.textMuted, fontSize = PatrolTextSize.BodySmall)
             }
         }
     }

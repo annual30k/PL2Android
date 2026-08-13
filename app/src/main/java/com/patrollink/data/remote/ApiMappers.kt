@@ -289,6 +289,9 @@ fun FirmwareUpgradeTaskDto.toDomain() = FirmwareUpgradeTask(
 private fun String.toSosPhase() = when (this) {
     "ACTIVATING" -> SosPhase.Activating
     "ACTIVE" -> SosPhase.Active
+    "RECEIVED" -> SosPhase.Received
+    "BACKUP_ENROUTE" -> SosPhase.BackupEnroute
+    "RESOLVED" -> SosPhase.Resolved
     "CANCELLED" -> SosPhase.Cancelled
     else -> SosPhase.Idle
 }

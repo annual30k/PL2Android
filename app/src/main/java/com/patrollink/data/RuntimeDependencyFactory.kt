@@ -5,11 +5,13 @@ import com.patrollink.data.edge.CerebellumApi
 import com.patrollink.data.local.AndroidKeystoreSecureStore
 import com.patrollink.data.local.LocalMediaCacheCleaner
 import com.patrollink.data.local.WorkManagerBackgroundTaskGateway
+import com.patrollink.data.local.QueuedFirmwareUpgradeStatusCodec
 import com.patrollink.data.local.UiSettingsStore
 import com.patrollink.data.remote.OkHttpPatrolRestApi
 import com.patrollink.data.remote.PatrolRestApi
 import com.patrollink.data.ute.UteSdkBridge
 import com.patrollink.data.sourcenex.SourceNexBridge
+import com.patrollink.data.update.AppVersionUpdateScheduler
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.DeviceControlGateway
@@ -46,12 +48,14 @@ data class RuntimeDependencies(
 object RuntimeDependencyFactory {
     fun create(context: Context): RuntimeDependencies {
         val appContext = context.applicationContext
+        AppVersionUpdateScheduler.schedule(appContext)
         val config = RuntimeConfigStore(appContext).read()
         val tokenStore = RuntimeTokenStore(appContext)
         val secureStore = AndroidKeystoreSecureStore(appContext)
         val emptyState = EmptyAppState.create()
         val uteBridge = if (config.useRealBle) UteSdkBridge(appContext) else null
         val sourceNexBridge = if (config.useRealBle) SourceNexBridge(appContext) else null
+        val offlineSyncEngine = OfflineSyncEngine(WorkManagerBackgroundTaskGateway(appContext))
         val coordinator = ServiceFactory.createRuntimeCoordinator(
             context = appContext,
             config = config,
@@ -81,8 +85,21 @@ object RuntimeDependencyFactory {
             sosEvidenceRecorder = ServiceFactory.createSosEvidenceRecorder(appContext),
             notificationGateway = ServiceFactory.createNotificationGateway(appContext),
             versionGateway = ServiceFactory.createVersionGateway(config, tokenStore::token),
-            firmwareGateway = ServiceFactory.createFirmwareGateway(appContext, config, uteBridge, tokenStore::token, tokenStore::pairingAccountId),
-            versionInstaller = ServiceFactory.createVersionInstaller(appContext),
+            firmwareGateway = ServiceFactory.createFirmwareGateway(
+                appContext,
+                config,
+                uteBridge,
+                tokenStore::token,
+                tokenStore::pairingAccountId,
+                onStatusSyncFailed = { taskId, state ->
+                    offlineSyncEngine.enqueueFirmwareUpgradeStatus(
+                        taskId,
+                        QueuedFirmwareUpgradeStatusCodec.encode(taskId, state),
+                        System.currentTimeMillis()
+                    )
+                }
+            ),
+            versionInstaller = ServiceFactory.createVersionInstaller(appContext, tokenStore::token, config.restBaseUrl),
             cerebellumApi = ServiceFactory.createCerebellumApi(config),
             patrolRestApi = config.restBaseUrl.takeIf { it.isNotBlank() }?.let { OkHttpPatrolRestApi(baseUrl = it, tokenProvider = tokenStore::token) },
             tokenStore = tokenStore,
@@ -91,7 +108,7 @@ object RuntimeDependencyFactory {
                 sourceNexBridge?.selectDevice(deviceId)
             },
             configStore = RuntimeConfigStore(appContext),
-            offlineSyncEngine = OfflineSyncEngine(WorkManagerBackgroundTaskGateway(appContext)),
+            offlineSyncEngine = offlineSyncEngine,
             localMediaCacheCleaner = LocalMediaCacheCleaner(appContext),
             config = config
         )

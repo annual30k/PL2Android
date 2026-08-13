@@ -219,12 +219,20 @@ class RestDeviceControlGateway(
     }
 }
 
-class RestVersionGateway(private val api: PatrolRestApi) : VersionGateway {
+class RestVersionGateway(
+    private val api: PatrolRestApi,
+    private val baseUrl: String = ""
+) : VersionGateway {
     override suspend fun check(currentVersionCode: Int): VersionCheckResult =
-        api.checkVersion(currentVersionCode).data.toDomain()
+        api.checkVersion(currentVersionCode).data.toDomain().let { result ->
+            result.copy(downloadUrl = resolveBackendDownloadUrl(baseUrl, result.downloadUrl))
+        }
 }
 
-class RestFirmwareGateway(private val api: PatrolRestApi) : FirmwareGateway {
+class RestFirmwareGateway(
+    private val api: PatrolRestApi,
+    private val baseUrl: String = ""
+) : FirmwareGateway {
     override suspend fun check(device: DeviceStatus, metadata: FirmwareDeviceMetadata): FirmwareCheckResult =
         api.checkFirmware(
             device.id,
@@ -241,13 +249,12 @@ class RestFirmwareGateway(private val api: PatrolRestApi) : FirmwareGateway {
                 hardwareVersion = metadata.hardwareVersion,
                 currentFirmwareVersion = device.firmware
             )
-        ).data.toDomain()
+        ).data.toDomain().let { result ->
+            result.copy(downloadUrl = resolveBackendDownloadUrl(baseUrl, result.downloadUrl))
+        }
 
     override fun install(device: DeviceStatus, firmware: FirmwareCheckResult): Flow<FirmwareUpgradeState> = flow {
-        val task = createUpgradeTask(device, firmware)
-        emit(FirmwareUpgradeState("TASK_CREATED", 0.1f))
-        updateUpgradeTask(task.taskId, FirmwareUpgradeState("PENDING_DEVICE_UPGRADE", 0.2f))
-        emit(FirmwareUpgradeState("PENDING_DEVICE_UPGRADE", 0.2f))
+        error("当前没有可执行固件升级的本地蓝牙通道，未创建虚假升级任务")
     }
 
     override suspend fun createUpgradeTask(device: DeviceStatus, firmware: FirmwareCheckResult, operatorId: String): FirmwareUpgradeTask {
@@ -278,6 +285,8 @@ class RestRealtimeGateway(private val api: PatrolRestApi) : RealtimeGateway {
     private val connection = MutableStateFlow(RealtimeConnection.Disconnected)
 
     override fun connection(): Flow<RealtimeConnection> = connection.asStateFlow()
+
+    override fun events(): Flow<com.patrollink.domain.RealtimeEvent> = kotlinx.coroutines.flow.emptyFlow()
 
     override suspend fun connect(token: String) {
         connection.value = RealtimeConnection.Connected

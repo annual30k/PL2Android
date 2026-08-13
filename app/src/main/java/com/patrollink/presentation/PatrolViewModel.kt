@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.patrollink.BuildConfig
 import com.patrollink.data.EmptyFirmwareGateway
 import com.patrollink.data.EmptyVersionGateway
 import com.patrollink.data.RuntimeConfigStore
@@ -73,6 +74,7 @@ import com.patrollink.domain.OfflineSyncEngine
 import com.patrollink.domain.PatrolCoordinator
 import com.patrollink.domain.PatrolCommandMessage
 import com.patrollink.domain.PatrolNotificationGateway
+import com.patrollink.domain.RealtimeEvent
 import com.patrollink.domain.SecureStore
 import com.patrollink.domain.ScannedDevice
 import com.patrollink.domain.SosEvidenceRecorder
@@ -83,6 +85,7 @@ import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.UserProfile
 import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.VersionInstaller
+import com.patrollink.domain.VersionInstallPackage
 import com.patrollink.domain.VersionUpdatePhase
 import com.patrollink.domain.VersionUpdateUiState
 import java.io.File
@@ -129,6 +132,7 @@ private const val SessionRefreshRetryMillis = 60_000L
 private const val MaxSessionRefreshDelaySeconds = 24L * 60L * 60L
 private const val CloudSyncPollMillis = 5_000L
 private const val HeartbeatEveryPolls = 3
+private const val VersionCheckEveryPolls = 12
 
 class PatrolViewModel(
     private val appContext: Context? = null,
@@ -154,12 +158,15 @@ class PatrolViewModel(
     private val onPairingUsernameChanged: (String?) -> Unit = {},
     private val onSelectedDeviceChanged: (String?) -> Unit = {},
     private val currentLocalAccountProvider: () -> String? = { null },
-    private val clearLocalMediaCache: suspend () -> Unit = {}
+    private val clearLocalMediaCache: suspend () -> Unit = {},
+    private val currentVersionCode: Int = BuildConfig.VERSION_CODE,
+    private val currentVersionName: String = BuildConfig.VERSION_NAME
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
         EmptyAppState.create().copy(
             fontSizeMode = settingsStore?.readFontSizeMode() ?: FontSizeMode.Standard,
-            displayThemeMode = settingsStore?.readDisplayThemeMode() ?: DisplayThemeMode.System
+            displayThemeMode = settingsStore?.readDisplayThemeMode() ?: DisplayThemeMode.System,
+            versionUpdate = VersionUpdateUiState(currentVersionName = currentVersionName)
         )
     )
     val uiState: StateFlow<com.patrollink.domain.AppUiState> = _uiState.asStateFlow()
@@ -175,11 +182,15 @@ class PatrolViewModel(
     private var activeSosActivationQueued: Boolean = false
     private val knownCloudAlertIds = mutableSetOf<String>()
     private val knownCloudMessageIds = mutableSetOf<String>()
+    private var lastNotifiedVersionCode: Int = currentVersionCode
+    private var dismissedVersionName: String? = null
+    private var preparedVersionPackage: VersionInstallPackage? = null
     private val cloudRecognitionSubmittedMediaIds = mutableSetOf<String>()
 
     init {
         observeDeviceEvents()
         observeIntercomState()
+        observeRealtimeEvents()
         viewModelScope.launch {
             restoreSavedSession()
         }
@@ -321,6 +332,7 @@ class PatrolViewModel(
         cloudSyncJob?.cancel()
         cloudSyncJob = null
         onSessionChanged(null)
+        runCatching { coordinator.disconnectRealtime() }
         knownCloudAlertIds.clear()
         knownCloudMessageIds.clear()
         cloudRecognitionSubmittedMediaIds.clear()
@@ -351,6 +363,7 @@ class PatrolViewModel(
         refreshDeviceCapabilities()
         refreshPatrolArea()
         refreshCerebellumSettings()
+        checkVersionUpdate(showChecking = false)
         startCloudSyncLoop()
     }
 
@@ -370,6 +383,9 @@ class PatrolViewModel(
                 }
                 syncCloudAlerts()
                 syncCloudMessages(api)
+                if (pollCount % VersionCheckEveryPolls == 0) {
+                    refreshVersionUpdate(showChecking = false, notify = false)
+                }
                 pollCount += 1
                 delay(CloudSyncPollMillis)
             }
@@ -1324,6 +1340,9 @@ class PatrolViewModel(
         _uiState.update { state ->
             state.copy(
                 sosActive = true,
+                sosPhase = com.patrollink.domain.SosPhase.Active,
+                sosStatusMessage = "SOS 已送达指挥台，等待接警",
+                sosBackupEtaMinutes = null,
                 networkOnline = activation.isSuccess || state.networkOnline,
                 operationMessage = when {
                     activation.isSuccess && recordingStarted -> operationMessage("SOS 已送达平台，现场录音已开始", OperationMessageType.Success)
@@ -1388,6 +1407,9 @@ class PatrolViewModel(
         _uiState.update {
             it.copy(
                 sosActive = false,
+                sosPhase = com.patrollink.domain.SosPhase.Cancelled,
+                sosStatusMessage = "SOS 已取消",
+                sosBackupEtaMinutes = null,
                 operationMessage = when {
                     cancelQueued && recordingQueued -> operationMessage("SOS 取消与现场录音均已进入补传队列", OperationMessageType.Warning)
                     cancelQueued && uploaded != null -> operationMessage("SOS 取消已进入补传队列，现场录音已上传", OperationMessageType.Warning)
@@ -2804,29 +2826,102 @@ class PatrolViewModel(
         }
     }
 
-    fun checkVersionUpdate() = viewModelScope.launch {
-        _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Checking, message = "正在检查更新")) }
-        runCatching { versionGateway.check(currentVersionCode = 1) }
+    private fun observeRealtimeEvents() = viewModelScope.launch {
+        coordinator.realtimeEvents().collect { event ->
+            if (!_uiState.value.isLoggedIn) return@collect
+            when {
+                event.type == "APP_VERSION_PUBLISHED" -> refreshVersionUpdate(showChecking = false, notify = true)
+                event.module == "alerts" -> syncCloudAlerts()
+                event.type == "SOS_UPDATED" && event.payload["sosId"]?.toString() == activeSosId -> applySosRealtimeUpdate(event)
+                event.type == "MESSAGE_SENT" || event.module == "messages" -> patrolRestApi?.let { syncCloudMessages(it) }
+                event.type == "DEVICE_COMMAND" -> {
+                    val device = _uiState.value.device.takeIf { it.id.isNotBlank() && it.online }
+                    if (device != null) patrolRestApi?.let { syncPendingPlatformCommands(it, device) }
+                }
+                event.type == "PATROL_AREA_UPDATED" -> refreshPatrolArea()
+            }
+        }
+    }
+
+    private fun applySosRealtimeUpdate(event: com.patrollink.domain.RealtimeEvent) {
+        val phase = when (event.payload["phase"]?.toString()) {
+            "RECEIVED" -> com.patrollink.domain.SosPhase.Received
+            "BACKUP_ENROUTE" -> com.patrollink.domain.SosPhase.BackupEnroute
+            "RESOLVED" -> com.patrollink.domain.SosPhase.Resolved
+            "CANCELLED" -> com.patrollink.domain.SosPhase.Cancelled
+            else -> com.patrollink.domain.SosPhase.Active
+        }
+        val terminal = phase == com.patrollink.domain.SosPhase.Resolved || phase == com.patrollink.domain.SosPhase.Cancelled
+        val eta = (event.payload["backupEtaMinutes"] as? Number)?.toInt()
+        _uiState.update {
+            it.copy(
+                sosActive = !terminal,
+                sosPhase = phase,
+                sosStatusMessage = event.payload["message"]?.toString() ?: event.summary,
+                sosBackupEtaMinutes = eta ?: it.sosBackupEtaMinutes,
+                operationMessage = operationMessage(event.summary, if (terminal) OperationMessageType.Success else OperationMessageType.Info)
+            )
+        }
+        if (terminal) {
+            activeSosId = null
+            activeSosActivationQueued = false
+        }
+    }
+
+    fun checkVersionUpdate(showChecking: Boolean = true) = viewModelScope.launch {
+        if (showChecking) dismissedVersionName = null
+        refreshVersionUpdate(showChecking = showChecking, notify = false)
+    }
+
+    private suspend fun refreshVersionUpdate(showChecking: Boolean, notify: Boolean) {
+        if (showChecking) {
+            _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Checking, message = "正在检查更新")) }
+        }
+        runCatching { versionGateway.check(currentVersionCode) }
             .onSuccess { result ->
+                val hasUpdate = result.hasUpdate(currentVersionCode)
                 _uiState.update {
                     it.copy(
-                        versionUpdate = if (result.hasUpdate) {
-                            VersionUpdateUiState(
-                                phase = VersionUpdatePhase.Available,
-                                currentVersionName = it.versionUpdate.currentVersionName,
+                        versionUpdate = if (hasUpdate && !result.forceUpdate && !showChecking && dismissedVersionName == result.latestVersionName) {
+                            it.versionUpdate.copy(
+                                phase = VersionUpdatePhase.Idle,
+                                currentVersionName = currentVersionName,
                                 latestVersionName = result.latestVersionName,
+                                forceUpdate = false,
                                 changelog = result.changelog,
                                 downloadUrl = result.downloadUrl,
-                                message = "发现新版本 ${result.latestVersionName}"
+                                message = null
+                            )
+                        } else if (hasUpdate) {
+                            VersionUpdateUiState(
+                                phase = VersionUpdatePhase.Available,
+                                currentVersionName = currentVersionName,
+                                latestVersionName = result.latestVersionName,
+                                forceUpdate = result.forceUpdate,
+                                changelog = result.changelog,
+                                downloadUrl = result.downloadUrl,
+                                message = if (result.forceUpdate) "发现必须安装的新版本 ${result.latestVersionName}" else "发现新版本 ${result.latestVersionName}"
                             )
                         } else {
-                            it.versionUpdate.copy(phase = VersionUpdatePhase.UpToDate, message = "当前已是最新版本")
+                            it.versionUpdate.copy(
+                                phase = VersionUpdatePhase.UpToDate,
+                                currentVersionName = currentVersionName,
+                                latestVersionName = null,
+                                forceUpdate = false,
+                                message = "当前已是最新版本"
+                            )
                         }
                     )
                 }
+                if (notify && hasUpdate && result.latestVersionCode > lastNotifiedVersionCode) {
+                    lastNotifiedVersionCode = result.latestVersionCode
+                    notificationGateway?.notifyVersionUpdate(result.latestVersionName, result.forceUpdate)
+                }
             }
             .onFailure {
-                _uiState.update { state -> state.copy(versionUpdate = state.versionUpdate.copy(phase = VersionUpdatePhase.Failed, message = "检查更新失败")) }
+                if (showChecking) {
+                    _uiState.update { state -> state.copy(versionUpdate = state.versionUpdate.copy(phase = VersionUpdatePhase.Failed, message = "检查更新失败")) }
+                }
             }
     }
 
@@ -2923,8 +3018,10 @@ class PatrolViewModel(
                 )
             )
         }
+        var finalStatus = ""
         runCatching {
             firmwareGateway.install(device, firmware).collect { progress ->
+                finalStatus = progress.status
                 _uiState.update { state ->
                     state.copy(
                         firmwareUpdate = state.firmwareUpdate.copy(
@@ -2937,14 +3034,29 @@ class PatrolViewModel(
             }
         }.onSuccess {
             _uiState.update { state ->
-                state.copy(
-                    firmwareUpdate = state.firmwareUpdate.copy(
-                        phase = FirmwareUpdatePhase.Succeeded,
-                        progress = 1f,
-                        message = "固件升级已启动，请保持设备连接并等待设备完成重启"
-                    ),
-                    operationMessage = operationMessage("固件升级已启动", OperationMessageType.Success)
-                )
+                if (finalStatus.equals("SUCCESS", ignoreCase = true)) {
+                    state.copy(
+                        device = state.device.copy(firmware = firmware.versionName),
+                        connectedDevices = state.connectedDevices.map {
+                            if (it.id == device.id) it.copy(firmware = firmware.versionName) else it
+                        },
+                        firmwareUpdate = state.firmwareUpdate.copy(
+                            phase = FirmwareUpdatePhase.Succeeded,
+                            currentVersionName = firmware.versionName,
+                            progress = 1f,
+                            message = "固件升级完成，后台任务与设备版本已同步"
+                        ),
+                        operationMessage = operationMessage("固件升级完成", OperationMessageType.Success)
+                    )
+                } else {
+                    state.copy(
+                        firmwareUpdate = state.firmwareUpdate.copy(
+                            phase = FirmwareUpdatePhase.Upgrading,
+                            message = "升级流程已交给设备，收到完成回执前不会标记成功"
+                        ),
+                        operationMessage = operationMessage("设备正在完成固件升级", OperationMessageType.Warning)
+                    )
+                }
             }
         }.onFailure {
             _uiState.update { state ->
@@ -2962,6 +3074,14 @@ class PatrolViewModel(
     fun installVersionUpdate() = viewModelScope.launch {
         val latest = _uiState.value.versionUpdate.latestVersionName ?: return@launch
         val updateState = _uiState.value.versionUpdate
+        if (updateState.phase == VersionUpdatePhase.Ready) {
+            val prepared = preparedVersionPackage
+            if (prepared != null && versionInstaller?.launchInstall(prepared) == true) {
+                showOperationMessage("已重新打开系统安装确认", OperationMessageType.Info)
+                return@launch
+            }
+        }
+        preparedVersionPackage = null
         _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Downloading, progress = 0f, message = "正在下载更新")) }
         if (versionInstaller == null || updateState.downloadUrl?.contains("example.test") == true) {
             for (step in 1..10) {
@@ -2972,7 +3092,7 @@ class PatrolViewModel(
                 it.copy(
                     versionUpdate = it.versionUpdate.copy(
                         phase = VersionUpdatePhase.Ready,
-                        currentVersionName = latest,
+                        currentVersionName = currentVersionName,
                         progress = 1f,
                         message = "更新包已准备完成"
                     ),
@@ -2982,17 +3102,19 @@ class PatrolViewModel(
             return@launch
         }
         val result = runCatching {
-            val check = versionGateway.check(currentVersionCode = 1)
+            val check = versionGateway.check(currentVersionCode)
+            check(check.hasUpdate(currentVersionCode)) { "update is no longer available" }
             versionInstaller.prepare(check, check.sha256)
         }
         if (result.isSuccess && result.getOrNull() != null) {
+            preparedVersionPackage = result.getOrNull()
             _uiState.update { it.copy(versionUpdate = it.versionUpdate.copy(progress = 0.92f, message = "更新包已校验，等待系统安装")) }
             val launched = versionInstaller?.launchInstall(result.getOrNull()!!) == true
             _uiState.update {
                 it.copy(
                     versionUpdate = it.versionUpdate.copy(
                         phase = VersionUpdatePhase.Ready,
-                        currentVersionName = latest,
+                        currentVersionName = currentVersionName,
                         progress = 1f,
                         message = if (launched) "已打开系统安装确认" else "更新包已准备完成"
                     ),
@@ -3014,7 +3136,11 @@ class PatrolViewModel(
     }
 
     fun dismissVersionUpdate() = _uiState.update {
-        it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Idle, progress = 0f, message = null))
+        if (it.versionUpdate.forceUpdate && it.versionUpdate.phase == VersionUpdatePhase.Available) it
+        else {
+            dismissedVersionName = it.versionUpdate.latestVersionName
+            it.copy(versionUpdate = it.versionUpdate.copy(phase = VersionUpdatePhase.Idle, progress = 0f, message = null))
+        }
     }
 
     private fun operationMessage(text: String, type: OperationMessageType): OperationMessage {
@@ -3384,6 +3510,7 @@ private fun FirmwareUpdateUiState.toFirmwareCheckResult(device: DeviceStatus): F
     )
 
 private fun String.toFirmwarePhase(): FirmwareUpdatePhase = when {
+    equals("SUCCESS", ignoreCase = true) || contains("COMPLETED", ignoreCase = true) -> FirmwareUpdatePhase.Succeeded
     contains("DOWNLOADING", ignoreCase = true) -> FirmwareUpdatePhase.Downloading
     contains("PREPARING", ignoreCase = true) ||
         contains("STARTED", ignoreCase = true) ||
@@ -3397,6 +3524,7 @@ private fun String.toFirmwarePhase(): FirmwareUpdatePhase = when {
 
 private fun String.toFirmwareMessage(errorMessage: String): String = when {
     errorMessage.isNotBlank() -> errorMessage
+    equals("SUCCESS", ignoreCase = true) || contains("COMPLETED", ignoreCase = true) -> "固件升级完成"
     contains("DOWNLOADING", ignoreCase = true) -> "正在下载固件包"
     contains("PREPARING", ignoreCase = true) -> "正在让设备进入升级准备状态"
     contains("STARTED", ignoreCase = true) -> "设备固件升级已开始"

@@ -120,8 +120,9 @@ enum class VersionUpdatePhase { Idle, Checking, Available, Downloading, Ready, U
 
 data class VersionUpdateUiState(
     val phase: VersionUpdatePhase = VersionUpdatePhase.Idle,
-    val currentVersionName: String = "1.2.4",
+    val currentVersionName: String = "",
     val latestVersionName: String? = null,
+    val forceUpdate: Boolean = false,
     val changelog: List<String> = emptyList(),
     val downloadUrl: String? = null,
     val progress: Float = 0f,
@@ -193,6 +194,9 @@ data class AppUiState(
     val deviceCommandInProgress: Boolean = false,
     val deviceCommandMessage: String = "",
     val sosActive: Boolean = false,
+    val sosPhase: SosPhase = SosPhase.Idle,
+    val sosStatusMessage: String = "",
+    val sosBackupEtaMinutes: Int? = null,
     val fontSizeMode: FontSizeMode = FontSizeMode.Standard,
     val displayThemeMode: DisplayThemeMode = DisplayThemeMode.System,
     val versionUpdate: VersionUpdateUiState = VersionUpdateUiState(),

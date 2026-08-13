@@ -10,7 +10,7 @@ class MockVersionGatewayTest {
     fun versionCheckReturnsOptionalUpdateMetadata() = runTest {
         val result = MockVersionGateway().check(currentVersionCode = 1)
 
-        assertTrue(result.hasUpdate)
+        assertTrue(result.hasUpdate(currentVersionCode = 1))
         assertFalse(result.forceUpdate)
         assertTrue(result.changelog.isNotEmpty())
         assertTrue(result.downloadUrl?.endsWith(".apk") == true)

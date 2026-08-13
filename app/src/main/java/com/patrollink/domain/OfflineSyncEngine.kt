@@ -62,6 +62,18 @@ class OfflineSyncEngine(
         )
     }
 
+    suspend fun enqueueFirmwareUpgradeStatus(taskId: String, payloadJson: String, createdAt: Long): BackgroundTaskReceipt {
+        require(taskId.isNotBlank()) { "firmware taskId required" }
+        return backgroundTaskGateway.enqueue(
+            BackgroundTask(
+                id = "sync-firmware-upgrade-$taskId",
+                type = BackgroundTaskType.SyncFirmwareUpgrade,
+                payloadId = payloadJson,
+                createdAt = createdAt
+            )
+        )
+    }
+
     suspend fun enqueueDeviceUnbind(deviceId: String, createdAt: Long): BackgroundTaskReceipt {
         require(deviceId.isNotBlank()) { "deviceId required" }
         return backgroundTaskGateway.enqueue(

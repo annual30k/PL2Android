@@ -1,5 +1,6 @@
 package com.patrollink.presentation
 
+import com.patrollink.BuildConfig
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -35,6 +36,8 @@ import com.patrollink.data.edge.CerebellumVideoSummaryResponseDto
 import com.patrollink.domain.DeviceType
 import com.patrollink.domain.TransferTarget
 import com.patrollink.domain.TransferStatus
+import com.patrollink.domain.VersionCheckResult
+import com.patrollink.domain.VersionGateway
 import com.patrollink.domain.VersionUpdatePhase
 import com.google.gson.JsonParser
 import com.patrollink.domain.BackgroundTaskType
@@ -1383,6 +1386,59 @@ class PatrolViewModelTest {
     }
 
     @Test
+    fun sosCommandCenterUpdatesAreReflectedAndTerminalStateEndsEmergency() = runTest {
+        val realtimeGateway = com.patrollink.data.MockRealtimeGateway()
+        val viewModel = testViewModel(coordinator = coordinatorWithRealtime(realtimeGateway))
+        loginForTest(viewModel)
+        viewModel.activateSos()
+        advanceUntilIdle()
+
+        realtimeGateway.emitEvent(
+            com.patrollink.domain.RealtimeEvent(
+                namespace = "patrol",
+                type = "SOS_UPDATED",
+                module = "sos",
+                title = "SOS增援已出发",
+                summary = "增援警员 · ETA 6分钟",
+                resourceId = "SOS-1715832000",
+                payload = mapOf(
+                    "sosId" to "SOS-1715832000",
+                    "phase" to "BACKUP_ENROUTE",
+                    "backupEtaMinutes" to 6,
+                    "message" to "增援已出发"
+                )
+            )
+        )
+        runCurrent()
+
+        assertTrue(viewModel.uiState.value.sosActive)
+        assertEquals(com.patrollink.domain.SosPhase.BackupEnroute, viewModel.uiState.value.sosPhase)
+        assertEquals(6, viewModel.uiState.value.sosBackupEtaMinutes)
+        assertEquals("增援已出发", viewModel.uiState.value.sosStatusMessage)
+
+        realtimeGateway.emitEvent(
+            com.patrollink.domain.RealtimeEvent(
+                namespace = "patrol",
+                type = "SOS_UPDATED",
+                module = "sos",
+                title = "SOS处置已完成",
+                summary = "现场已安全",
+                resourceId = "SOS-1715832000",
+                payload = mapOf(
+                    "sosId" to "SOS-1715832000",
+                    "phase" to "RESOLVED",
+                    "message" to "现场已安全"
+                )
+            )
+        )
+        runCurrent()
+
+        assertFalse(viewModel.uiState.value.sosActive)
+        assertEquals(com.patrollink.domain.SosPhase.Resolved, viewModel.uiState.value.sosPhase)
+        assertEquals("现场已安全", viewModel.uiState.value.sosStatusMessage)
+    }
+
+    @Test
     fun activeSosPreventsLogoutUntilCancellationIsRecorded() = runTest {
         val viewModel = testViewModel()
         loginForTest(viewModel)
@@ -1407,7 +1463,41 @@ class PatrolViewModelTest {
         advanceUntilIdle()
 
         assertEquals(VersionUpdatePhase.Ready, viewModel.uiState.value.versionUpdate.phase)
-        assertEquals("1.3.0", viewModel.uiState.value.versionUpdate.currentVersionName)
+        assertEquals(BuildConfig.VERSION_NAME, viewModel.uiState.value.versionUpdate.currentVersionName)
+        assertEquals("1.3.0", viewModel.uiState.value.versionUpdate.latestVersionName)
+    }
+
+    @Test
+    fun optionalVersionUpdateCanBeDismissed() = runTest {
+        val viewModel = testViewModel()
+
+        viewModel.checkVersionUpdate()
+        advanceUntilIdle()
+        viewModel.dismissVersionUpdate()
+
+        assertEquals(VersionUpdatePhase.Idle, viewModel.uiState.value.versionUpdate.phase)
+    }
+
+    @Test
+    fun forcedVersionUpdateCannotBeDismissed() = runTest {
+        val viewModel = testViewModel(
+            versionGateway = object : VersionGateway {
+                override suspend fun check(currentVersionCode: Int) = VersionCheckResult(
+                    latestVersionCode = currentVersionCode + 1,
+                    latestVersionName = "forced-update",
+                    forceUpdate = true,
+                    changelog = listOf("必须升级"),
+                    downloadUrl = "https://backend.example.test/app/forced.apk"
+                )
+            }
+        )
+
+        viewModel.checkVersionUpdate()
+        advanceUntilIdle()
+        viewModel.dismissVersionUpdate()
+
+        assertEquals(VersionUpdatePhase.Available, viewModel.uiState.value.versionUpdate.phase)
+        assertTrue(viewModel.uiState.value.versionUpdate.forceUpdate)
     }
 
     @Test
@@ -1507,6 +1597,7 @@ class PatrolViewModelTest {
 private fun testViewModel(
     cerebellumApi: CerebellumApi? = null,
     coordinator: PatrolCoordinator = MockPatrolCoordinatorFactory.create(),
+    versionGateway: VersionGateway = MockVersionGateway(),
     offlineSyncEngine: OfflineSyncEngine? = null,
     deviceControlGateway: DeviceControlGateway? = null,
     runtimeConfigStore: RuntimeConfigGateway? = null,
@@ -1516,7 +1607,7 @@ private fun testViewModel(
 ) = PatrolViewModel(
     coordinator = coordinator,
     deviceControlGateway = deviceControlGateway,
-    versionGateway = MockVersionGateway(),
+    versionGateway = versionGateway,
     cerebellumApi = cerebellumApi,
     cerebellumApiFactory = cerebellumApiFactory,
     runtimeConfigStore = runtimeConfigStore,
@@ -1553,6 +1644,17 @@ private fun coordinatorWithMedia(mediaGateway: MediaGateway) = PatrolCoordinator
     alertGateway = com.patrollink.data.MockAlertGateway(),
     mediaGateway = mediaGateway,
     realtimeGateway = com.patrollink.data.MockRealtimeGateway(),
+    streamRelayGateway = com.patrollink.data.MockStreamRelayGateway(),
+    sosGateway = com.patrollink.data.MockSosGateway(),
+    patrolAreaGateway = com.patrollink.data.MockPatrolAreaGateway()
+)
+
+private fun coordinatorWithRealtime(realtimeGateway: com.patrollink.data.MockRealtimeGateway) = PatrolCoordinator(
+    authGateway = com.patrollink.data.MockAuthGateway(),
+    deviceGateway = com.patrollink.data.MockDeviceGateway(),
+    alertGateway = com.patrollink.data.MockAlertGateway(),
+    mediaGateway = com.patrollink.data.MockMediaGateway(),
+    realtimeGateway = realtimeGateway,
     streamRelayGateway = com.patrollink.data.MockStreamRelayGateway(),
     sosGateway = com.patrollink.data.MockSosGateway(),
     patrolAreaGateway = com.patrollink.data.MockPatrolAreaGateway()

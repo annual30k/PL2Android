@@ -35,6 +35,15 @@ class AndroidPatrolNotificationGateway(
         notify(id = 2002, title = title, body = body)
     }
 
+    override fun notifyVersionUpdate(versionName: String, forceUpdate: Boolean) {
+        ensureChannel()
+        notify(
+            id = 2100 + versionName.hashCode().absoluteValue % 500,
+            title = if (forceUpdate) "PatrolLink 必须更新" else "PatrolLink 新版本可用",
+            body = "版本 $versionName 已发布，点击进入应用完成校验和安装"
+        )
+    }
+
     private fun notify(id: Int, title: String, body: String) {
         manager.notify(id, buildNotification(title, body))
     }
@@ -75,3 +84,6 @@ class AndroidPatrolNotificationGateway(
         const val CHANNEL_ID = "patrol_events"
     }
 }
+
+private val Int.absoluteValue: Int
+    get() = if (this == Int.MIN_VALUE) 0 else kotlin.math.abs(this)

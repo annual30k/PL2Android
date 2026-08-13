@@ -32,6 +32,7 @@ interface MediaGateway {
 
 interface RealtimeGateway {
     fun connection(): Flow<RealtimeConnection>
+    fun events(): Flow<RealtimeEvent>
     suspend fun connect(token: String)
     suspend fun disconnect()
     suspend fun sendHeartbeat(device: DeviceStatus): HeartbeatAck
@@ -128,4 +129,5 @@ interface VersionInstaller {
 interface PatrolNotificationGateway {
     fun notifySosActive(location: GpsLocation)
     fun notifyAlert(title: String, body: String)
+    fun notifyVersionUpdate(versionName: String, forceUpdate: Boolean)
 }

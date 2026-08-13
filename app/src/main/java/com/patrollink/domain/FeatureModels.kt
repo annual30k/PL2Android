@@ -7,7 +7,7 @@ enum class RealtimeConnection { Disconnected, Connecting, Connected, Reconnectin
 enum class StreamMode { LowLatency, Balanced, EvidenceQuality }
 enum class StreamRelayState { Idle, Connecting, Relaying, Failed }
 enum class IntercomState { Idle, WaitingApp, Signaling, Active, Closed, Failed }
-enum class SosPhase { Idle, Activating, Active, Cancelled }
+enum class SosPhase { Idle, Activating, Active, Received, BackupEnroute, Resolved, Cancelled }
 enum class AppPermission { Internet, NetworkState, FineLocation, NearbyWifiDevices, BluetoothScan, BluetoothConnect, BluetoothAdvertise, Camera, RecordAudio, PostNotifications, ForegroundService }
 enum class BackgroundTaskType {
     Heartbeat,
@@ -16,6 +16,7 @@ enum class BackgroundTaskType {
     SyncAlertDisposition,
     SyncDeviceCommandAck,
     SyncMessageRead,
+    SyncFirmwareUpgrade,
     SyncSosState,
     SyncDeviceUnbind
 }
@@ -128,8 +129,19 @@ data class VersionCheckResult(
     val downloadUrl: String?,
     val sha256: String? = null
 ) {
-    val hasUpdate: Boolean get() = latestVersionCode > 1
+    fun hasUpdate(currentVersionCode: Int): Boolean = latestVersionCode > currentVersionCode
 }
+
+data class RealtimeEvent(
+    val namespace: String,
+    val type: String,
+    val module: String,
+    val title: String,
+    val summary: String,
+    val resourceId: String,
+    val payload: Map<String, Any?> = emptyMap(),
+    val occurredAt: String = ""
+)
 
 data class SosRecording(
     val sessionId: String,

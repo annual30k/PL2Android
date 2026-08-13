@@ -95,6 +95,26 @@ class OkHttpPatrolRestApiTest {
     }
 
     @Test
+    fun versionCheckResolvesBackendRelativeDownloadUrl() = runTest {
+        val server = MockWebServer()
+        server.use {
+            server.enqueue(
+                MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(
+                    envelope(
+                        """{"latestVersionCode":3,"latestVersionName":"1.2.0","forceUpdate":true,"changelog":["fix"],"downloadUrl":"/files/FILE-3/download","sha256":"abc"}"""
+                    )
+                )
+            )
+            val api = OkHttpPatrolRestApi(server.url("/gateway/").toString(), tokenProvider = { "access-token" })
+
+            val result = api.checkVersion(1).data
+
+            assertEquals(server.url("/files/FILE-3/download").toString(), result.downloadUrl)
+            assertEquals("/gateway/api/v1/version/check?currentVersionCode=1", server.takeRequest().path)
+        }
+    }
+
+    @Test
     fun resumableUploadCreatesTaskSkipsUploadedChunksAndCompletes() = runTest {
         val server = MockWebServer()
         val media = File.createTempFile("patrol-media", ".bin").apply {

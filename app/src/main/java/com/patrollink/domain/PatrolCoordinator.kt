@@ -25,6 +25,10 @@ class PatrolCoordinator(
         realtimeGateway.connect(accessToken)
     }
 
+    suspend fun disconnectRealtime() {
+        realtimeGateway.disconnect()
+    }
+
     suspend fun refreshSession(refreshToken: String): AuthSession = authGateway.refresh(refreshToken)
 
     suspend fun currentUser(): UserProfile = authGateway.currentUser()
@@ -94,6 +98,8 @@ class PatrolCoordinator(
     suspend fun sendHeartbeat(device: DeviceStatus): HeartbeatAck = realtimeGateway.sendHeartbeat(device)
 
     fun realtimeConnection(): Flow<RealtimeConnection> = realtimeGateway.connection()
+
+    fun realtimeEvents(): Flow<RealtimeEvent> = realtimeGateway.events()
 
     suspend fun startStream(device: DeviceStatus, mode: StreamMode = StreamMode.LowLatency) {
         streamRelayGateway.start(device.id, mode)

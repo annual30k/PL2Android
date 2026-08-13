@@ -200,8 +200,15 @@ class MockMediaGateway(private val api: MockRestApi = MockRestApi()) : MediaGate
 
 class MockRealtimeGateway(private val api: MockRestApi = MockRestApi()) : RealtimeGateway {
     private val state = MutableStateFlow(RealtimeConnection.Disconnected)
+    private val realtimeEvents = kotlinx.coroutines.flow.MutableSharedFlow<com.patrollink.domain.RealtimeEvent>(extraBufferCapacity = 8)
 
     override fun connection(): Flow<RealtimeConnection> = state.asStateFlow()
+
+    override fun events(): Flow<com.patrollink.domain.RealtimeEvent> = realtimeEvents
+
+    fun emitEvent(event: com.patrollink.domain.RealtimeEvent) {
+        realtimeEvents.tryEmit(event)
+    }
 
     override suspend fun connect(token: String) {
         require(token.isNotBlank()) { "token required" }

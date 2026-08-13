@@ -1,6 +1,6 @@
 {
-  "restBaseUrl": "http://172.20.10.4:8080",
-  "webSocketUrl": "ws://172.20.10.4:8080/resource/websocket",
+  "restBaseUrl": "http://192.168.1.8:18080",
+  "webSocketUrl": "ws://192.168.1.8:18080/resource/websocket",
   "wifiFileBaseUrl": "",
   "cerebellumBaseUrl": "http://172.20.10.4:8088",
   "cerebellumApiKey": "dev-cerebellum-key",

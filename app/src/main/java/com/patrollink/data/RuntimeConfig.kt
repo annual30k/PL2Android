@@ -59,9 +59,13 @@ class RuntimeConfigStore(context: Context) : RuntimeConfigGateway {
     fun read(): RuntimeConfig {
         migrateLegacyBackendSettings()
         migrateLegacyCerebellumBaseUrl()
-        return RuntimeConfig(
+        val backendSettings = normalizeBackendSettings(
             restBaseUrl = configString(KEY_REST_BASE_URL, packagedConfig?.restBaseUrl, BuildConfig.REST_BASE_URL),
-            webSocketUrl = configString(KEY_WEBSOCKET_URL, packagedConfig?.webSocketUrl, BuildConfig.WEBSOCKET_URL),
+            webSocketUrl = configString(KEY_WEBSOCKET_URL, packagedConfig?.webSocketUrl, BuildConfig.WEBSOCKET_URL)
+        )
+        return RuntimeConfig(
+            restBaseUrl = backendSettings.restBaseUrl,
+            webSocketUrl = backendSettings.webSocketUrl,
             wifiFileBaseUrl = configString(KEY_WIFI_FILE_BASE_URL, packagedConfig?.wifiFileBaseUrl, BuildConfig.WIFI_FILE_BASE_URL),
             cerebellumBaseUrl = configString(KEY_CEREBELLUM_BASE_URL, packagedConfig?.cerebellumBaseUrl, BuildConfig.CEREBELLUM_BASE_URL),
             cerebellumApiKey = configString(KEY_CEREBELLUM_API_KEY, packagedConfig?.cerebellumApiKey, BuildConfig.CEREBELLUM_API_KEY),
@@ -196,6 +200,7 @@ class RuntimeConfigStore(context: Context) : RuntimeConfigGateway {
             "http://127.0.0.1:8080",
             "http://localhost:8080",
             "http://192.168.1.3:8080",
+            "http://172.20.10.4:8080",
             "https://api.patrollink.example.com"
         )
         private val LEGACY_WEBSOCKET_URLS = setOf(
@@ -203,6 +208,7 @@ class RuntimeConfigStore(context: Context) : RuntimeConfigGateway {
             "ws://127.0.0.1:8080/resource/websocket",
             "ws://localhost:8080/resource/websocket",
             "ws://192.168.1.3:8080/resource/websocket",
+            "ws://172.20.10.4:8080/resource/websocket",
             "wss://api.patrollink.example.com/resource/websocket"
         )
         private val LEGACY_CEREBELLUM_BASE_URLS = setOf(
